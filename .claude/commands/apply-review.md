@@ -6,7 +6,7 @@ PR Number or URL: $ARGUMENTS
 
 ## Step 0: Usage Guide
 
-Before starting, ALWAYS display the usage guide from `.claude/templates/apply-review/templates.md` > `usage_guide` 템플릿.
+Before starting, ALWAYS display the usage guide from `~/.claude/templates/apply-review/templates.md` > `usage_guide` 템플릿.
 
 **Argument Parsing:**
 
@@ -19,7 +19,7 @@ Before starting, ALWAYS display the usage guide from `.claude/templates/apply-re
 
 **Help Mode (`--help` 또는 인자 없음):**
 
-`.claude/templates/apply-review/templates.md` > `usage_guide` 템플릿을 출력하고 종료합니다. 다른 작업은 수행하지 않습니다.
+`~/.claude/templates/apply-review/templates.md` > `usage_guide` 템플릿을 출력하고 종료합니다. 다른 작업은 수행하지 않습니다.
 
 ## Mandatory User Interaction Policy
 
@@ -33,7 +33,7 @@ Before starting, ALWAYS display the usage guide from `.claude/templates/apply-re
 - Step 5: 반영할 코멘트 선택 (전체 진행/전체 취소/개별 선택/DISAGREE 포함)
 - Step 6: 대규모 변경 시 브랜치 분리 여부
 - Step 9: 커밋, Push, PR 생성 여부
-- Step 10: PR 피드백 코멘트 작성 여부
+- Step 10: 리뷰 코멘트 답글 작성 여부 (답글 초안 확인 포함)
 
 이 정책은 모든 옵션에 우선합니다. 사용자 선택 없이 다음 Step으로 진행하는 것은 허용되지 않습니다.
 
@@ -53,6 +53,10 @@ Before starting, ALWAYS display the usage guide from `.claude/templates/apply-re
 
 **코멘트 0개**:
 - "반영할 리뷰 코멘트가 없습니다." 출력 후 종료
+
+**`gh` CLI 미설치 또는 미인증 (Step 10 답글 게시 시)**:
+- `gh auth status` 실패 시 "답글 게시에 `gh` CLI 인증이 필요합니다. `gh auth login` 후 다시 시도하세요." 출력
+- 답글만 건너뛰고 Step 11은 그대로 진행
 
 **git remote 없음 (bare number 사용 시)**:
 - "현재 디렉토리에 git remote가 없습니다. 전체 PR URL을 입력하세요." 출력 후 중단
@@ -80,7 +84,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 `git remote -v`로 현재 로컬 레포의 `owner/repo`를 추출하고, PR의 `owner/repo`와 비교합니다.
 
-- **일치하지 않을 경우** `.claude/templates/apply-review/templates.md` > `repo_mismatch` 템플릿으로 경고 출력 후 즉시 종료
+- **일치하지 않을 경우** `~/.claude/templates/apply-review/templates.md` > `repo_mismatch` 템플릿으로 경고 출력 후 즉시 종료
 - fork 레포인 경우도 검증: `git remote -v`의 `origin`과 `upstream` 모두 확인하여 PR의 `owner/repo`와 하나라도 일치하면 통과
 
 **상태 검증:**
@@ -107,15 +111,15 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **1.5 PR 요약 출력:**
 
-`.claude/templates/apply-review/templates.md` > `pr_summary` 템플릿으로 출력.
+`~/.claude/templates/apply-review/templates.md` > `pr_summary` 템플릿으로 출력.
 
 ### Step 2: Previous Apply History Check
 
 **2.1 이전 반영 기록 확인:**
 
-로컬 레포인 경우 `.claude/review-history/apply-review-pr-{number}.json`, 외부 레포인 경우 `.claude/repo-cache/{owner}/{repo}/apply-review-pr-{number}.json` 파일이 존재하는지 확인합니다.
+`~/.claude/review-history/{owner}/{repo}/apply-review-pr-{number}.json` 파일이 존재하는지 확인합니다. `{owner}/{repo}`는 PR URL 또는 `git remote -v`에서 추출합니다.
 
-**기록 파일이 존재하면** `.claude/templates/apply-review/templates.md` > `previous_apply_history` 템플릿으로 이전 반영 정보를 출력하고 `AskUserQuestion`으로 옵션을 제시합니다:
+**기록 파일이 존재하면** `~/.claude/templates/apply-review/templates.md` > `previous_apply_history` 템플릿으로 이전 반영 정보를 출력하고 `AskUserQuestion`으로 옵션을 제시합니다:
 
 **옵션:**
 
@@ -157,11 +161,11 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **3.4 코멘트 요약 출력:**
 
-`.claude/templates/apply-review/templates.md` > `comment_collection_summary` 템플릿으로 출력.
+`~/.claude/templates/apply-review/templates.md` > `comment_collection_summary` 템플릿으로 출력.
 
 ### Step 4: AI Validity Assessment
 
-각 코멘트에 대해 AI가 합당성을 판단합니다. 프로젝트의 CLAUDE.md, conventions.md, `.claude/templates/review/` 디렉토리의 플랫폼별 리뷰 기준을 참조합니다.
+각 코멘트에 대해 AI가 합당성을 판단합니다. 프로젝트의 CLAUDE.md, conventions.md, `~/.claude/templates/review-criteria/` 디렉토리의 플랫폼별 리뷰 기준을 참조합니다.
 
 **4.1 판단 기준:**
 
@@ -195,12 +199,12 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **4.2 판단 시 참조:**
 - 해당 파일의 현재 상태를 로컬에서 `Read`하여 컨텍스트 확인
-- 프로젝트의 `.claude/templates/review-criteria/` 디렉토리의 해당 플랫폼 파일 우선순위 기준 참조
+- `~/.claude/templates/review-criteria/` 디렉토리의 해당 플랫폼 파일 우선순위 기준 참조
 - 캐시된 conventions.md가 있으면 프로젝트 컨벤션 참조
 
 **4.3 판단 결과 출력:**
 
-`.claude/templates/apply-review/templates.md` > `ai_verdict` 템플릿으로 출력.
+`~/.claude/templates/apply-review/templates.md` > `ai_verdict` 템플릿으로 출력.
 
 ### Step 5: User Confirmation (Interactive Selection)
 
@@ -258,7 +262,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **7.3 진행 상황 출력:**
 
-`.claude/templates/apply-review/templates.md` > `apply_progress` 템플릿으로 출력.
+`~/.claude/templates/apply-review/templates.md` > `apply_progress` 템플릿으로 출력.
 
 ### Step 8: Verification
 
@@ -268,7 +272,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **8.2 검증 결과 출력:**
 
-`.claude/templates/apply-review/templates.md` > `verification_result` 템플릿으로 출력.
+`~/.claude/templates/apply-review/templates.md` > `verification_result` 템플릿으로 출력.
 
 ### Step 9: Commit, Push & PR Options
 
@@ -280,7 +284,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 - **커밋 메시지 직접 입력**: 사용자가 메시지를 입력
 - **커밋하지 않음**: unstaged 상태로 유지
 
-자동 커밋 메시지 형식: `.claude/templates/apply-review/templates.md` > `commit_message` 템플릿 (프로젝트의 커밋 컨벤션을 따름).
+자동 커밋 메시지 형식: `~/.claude/templates/apply-review/templates.md` > `commit_message` 템플릿 (프로젝트의 커밋 컨벤션을 따름).
 
 **9.2 Push 여부** (커밋한 경우에만):
 
@@ -294,20 +298,44 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 PR 생성 시:
 1. `.github/PULL_REQUEST_TEMPLATE.md`가 있으면 해당 템플릿 기반으로 body 작성
-2. 없으면 `.claude/templates/apply-review/templates.md` > `pr_body` 템플릿 사용
+2. 없으면 `~/.claude/templates/apply-review/templates.md` > `pr_body` 템플릿 사용
 
 ### Step 10: Post Feedback Comment to PR
 
-`AskUserQuestion`으로 코멘트 작성 여부를 확인합니다:
+`AskUserQuestion`으로 답글 작성 여부를 확인합니다:
 
-- **코멘트 작성**: PR에 반영 완료 코멘트 게시
-- **코멘트 작성하지 않음**: 건너뜀
+- **답글 작성**: 각 리뷰 코멘트 스레드에 답글 게시
+- **답글 작성하지 않음**: 건너뜀
 
-코멘트 작성 시 `mcp__github__add_issue_comment`를 사용하여 `.claude/templates/apply-review/templates.md` > `feedback_comment` 템플릿으로 PR에 코멘트를 게시합니다.
+게시 전 코멘트별 답글 초안(QUESTION 답변 포함)을 표로 보여주고 `AskUserQuestion`으로 확인받습니다.
 
-**QUESTION 유형 코멘트:**
-- AI가 코드 컨텍스트를 분석하여 질문에 대한 답변을 자동 생성
-- 답변 내용은 사용자 확인 후 게시 (Step 5에서 미리 확인)
+**답글 대상:**
+
+- 대상: 반영한 코멘트, DISAGREE·PARTIAL·사용자 제외로 반영하지 않은 코드 변경 요청, QUESTION
+- 제외: INFO 유형과 칭찬·감사 등 답할 내용이 없는 SKIP 코멘트 (초안 표에 "답글 없음"으로 표시)
+
+**10.1 답글 방식 (필수):**
+
+PR 전체 코멘트 하나로 모아 쓰지 않고, **원래 리뷰 코멘트에 답글로** 작성합니다.
+
+- 인라인 리뷰 코멘트: `gh api -X POST repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies -f body=...`
+  - 답글에 대한 답글은 불가하므로 스레드의 최상위 코멘트 ID(`in_reply_to_id`가 없으면 자기 ID)를 사용
+- 리뷰 본문·일반 PR 코멘트처럼 답글 스레드가 없는 경우에만 `mcp__github__add_issue_comment`로 게시하고, 첫 줄에 원 코멘트 링크와 인용(`> ...`)을 붙여 어떤 코멘트에 대한 답인지 표시
+
+**10.2 답글 내용:**
+
+판정과 실제 반영 여부에 따라 `~/.claude/templates/apply-review/templates.md`의 템플릿을 사용합니다.
+
+| 경우 | 템플릿 | 내용 |
+|------|--------|------|
+| 반영함 (AGREE·PARTIAL 반영) | `reply_applied` | 반영 내용 1~2줄 요약 + 커밋 첨부 |
+| 반영하지 않음 (DISAGREE·SKIP·사용자 제외) | `reply_not_applied` | 반영하지 않은 이유를 1~2줄로 간략히 |
+| QUESTION | `reply_answer` | 코드 컨텍스트 기반 답변 (위 답글 초안 확인에서 함께 확인) |
+
+- 커밋은 Push된 커밋의 전체 URL(`https://github.com/{owner}/{repo}/commit/{hash}`) 또는 해시로 첨부. Push하지 않았다면 답글 작성 전에 그 사실을 알리고 확인받음
+- Step 9에서 커밋하지 않았다면 `reply_applied` 답글을 게시하지 않고, 커밋 후 다시 실행하도록 안내 (`reply_not_applied`·`reply_answer`는 게시 가능)
+- PARTIAL로 일부만 반영했다면 반영하지 않은 부분과 이유도 한 줄 덧붙임
+- 빌드 확인·실기기 미확인 등 검증 상태는 답글에 쓰지 않음 (반영 내용·사유·답변만 작성)
 
 ### Step 11: Save Apply History
 
@@ -315,12 +343,12 @@ PR 생성 시:
 
 **11.1 기록 파일 경로:**
 
-- 로컬 레포: `.claude/review-history/apply-review-pr-{number}.json`
-- 외부 레포: `.claude/repo-cache/{owner}/{repo}/apply-review-pr-{number}.json`
+- 모든 레포 공통: `~/.claude/review-history/{owner}/{repo}/apply-review-pr-{number}.json`
+- `{owner}/{repo}`는 PR URL 또는 `git remote -v`에서 추출
 
 **11.2 기록 파일 형식:**
 
-`.claude/templates/apply-review/templates.md` > `history_record` 템플릿의 JSON 스키마를 따름.
+`~/.claude/templates/apply-review/templates.md` > `history_record` 템플릿의 JSON 스키마를 따름.
 
 **11.3 기록 규칙:**
 

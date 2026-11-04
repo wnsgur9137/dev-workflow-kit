@@ -72,7 +72,7 @@ Claude Code에서 사용할 수 있는 PR 리뷰 자동화 글로벌 커맨드 �
 >
 > 현재 구현 기준 GitHub MCP 의존도는 커맨드마다 다릅니다:
 > - **`/create-pr`**: GitHub MCP 우선, 실패 시 `gh pr create`로 폴백 (MCP 없이도 동작 가능)
-> - **`/apply-review`**: 코멘트 조회·게시에 `mcp__github__*` 도구만 사용 (현재 `gh` 폴백 없음 → **MCP 필수**)
+> - **`/apply-review`**: 코멘트 조회는 `mcp__github__*` 도구 사용 (**MCP 필수**). 리뷰 코멘트 스레드 답글은 MCP에 대응 도구가 없어 `gh api .../comments/{id}/replies`로 게시 (**`gh` CLI 필요**)
 > - **`/pr-review`**: pending review 워크플로우와 보안 스캔에 GitHub MCP 전용 도구 사용 (**MCP 필수**)
 
 ---
@@ -434,8 +434,22 @@ PR에 달린 리뷰 코멘트를 분석하여 로컬 코드에 자동으로 반�
 7. 코멘트 반영 (병렬 agent 활용)
 8. 반영 결과 검증
 9. 커밋 / Push / PR 생성 옵션
-10. 반영 완료 코멘트 작성 옵션
+10. 리뷰 코멘트별 답글 작성 옵션 (초안 확인 후 게시)
 11. 반영 기록 저장
+
+### 리뷰 코멘트 답글
+
+반영 결과를 PR 전체 코멘트 하나로 모으지 않고, **원래 리뷰 코멘트 스레드에 답글**로 남깁니다.
+
+| 경우 | 답글 내용 |
+|------|----------|
+| 반영함 | ✅ 반영 내용 1~2줄 + 커밋 링크 |
+| 반영하지 않음 | ⏭️ 이유 1~2줄 |
+| 질문 | 💬 코드 컨텍스트 기반 답변 |
+
+- 게시 전 답글 초안을 표로 보여주고 확인받습니다. INFO·칭찬 코멘트에는 답글을 달지 않습니다.
+- 인라인 코멘트는 `gh api`로 스레드 답글을 게시하고, 답글 스레드가 없는 리뷰 본문·일반 코멘트는 원문 인용과 함께 PR 코멘트로 게시합니다.
+- 반영 기록은 `~/.claude/review-history/{owner}/{repo}/apply-review-pr-{number}.json`에 저장됩니다.
 
 ### AI 판정
 
@@ -583,7 +597,7 @@ CI 가 Draft PR 을 건너뛰는 설정이면, Ready 전환 후의 모든 push �
 |------|----------|------|
 | **GitHub MCP 서버** | `/pr-review`·`/apply-review` 필수 / `/create-pr` 선택 | PR 정보 수집·코멘트 게시에 사용. 프로젝트 `.mcp.json`에 설정. `/create-pr`은 미설정·실패 시 `gh` CLI로 폴백 |
 | **`GITHUB_PERSONAL_ACCESS_TOKEN`** | GitHub MCP 사용 시 필수 | GitHub API 인증용 환경변수 |
-| **`gh` CLI** | `/create-pr` 폴백 시 필요 | GitHub MCP 불가 시 `/create-pr`의 PR 생성 폴백 경로. `gh auth login` 인증 필요 |
+| **`gh` CLI** | `/apply-review` 답글 게시 시 필요 / `/create-pr` 폴백 시 필요 | `/apply-review`의 리뷰 코멘트 스레드 답글 게시, GitHub MCP 불가 시 `/create-pr`의 PR 생성 폴백 경로. `gh auth login` 인증 필요 |
 | **`~/.claude/commands/`** | 필수 | 글로벌 커맨드 정의 파일 (`commit.md`, `create-pr.md`, `pr-review.md`, `apply-review.md`, `ship.md`) |
 | **`/commit`·`/create-pr`·`/pr-review`·`/apply-review`** | `/ship` 필수 | `/ship`은 2~5단계에서 이 커맨드들을 재구현하지 않고 그대로 호출한다 |
 | **`~/.claude/templates/`** | 필수 | 출력 템플릿 및 플랫폼별 리뷰 기준 |

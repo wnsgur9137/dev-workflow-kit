@@ -30,7 +30,7 @@ Example: /apply-review 32
 7. 코멘트 반영 (병렬 agent 활용)
 8. 반영 결과 검증
 9. 커밋 / Push / PR 생성 옵션
-10. 반영 완료 코멘트 작성 옵션
+10. 리뷰 코멘트별 답글 작성 옵션 (gh CLI 필요)
 11. 반영 기록 저장
 
 -- AI Verdict --
@@ -209,32 +209,46 @@ PR #{original_pr_number} 리뷰 피드백 반영
 
 ---
 
-## feedback_comment
+## reply_applied
 
 ```markdown
-## 리뷰 피드백 반영 완료 ✅
+✅ 반영했습니다.
 
-@{reviewer} 님의 리뷰 피드백을 반영하였습니다.
+{반영 내용 1~2줄 요약}
+{PARTIAL인 경우: 반영하지 않은 부분과 이유 1줄}
 
-### 반영된 항목
-
-{번호}. **[{severity_emoji} {severity}] {issue_title}** ✅
-   - 문제: {brief_description}
-   - 해결: {resolution}
-   - 파일: `{file_path}`
-
-### 반영하지 않은 항목
-
-{번호}. **[{severity_emoji} {severity}] {issue_title}** ⏭️
-   - 사유: {reason}
-
-### 답변
-
-{번호}. **[❓ QUESTION] {question_title}**
-   - 답변: {answer}
+커밋: {commit_url_or_hash}
+```
 
 ---
-커밋: {commit_hash}
+
+## reply_not_applied
+
+```markdown
+⏭️ 이번에는 반영하지 않았습니다.
+
+사유: {이유 1~2줄}
+```
+
+---
+
+## reply_answer
+
+```markdown
+💬 {질문에 대한 답변}
+```
+
+---
+
+## feedback_comment
+
+답글 스레드가 없는 코멘트(리뷰 본문, 일반 PR 코멘트)에 대한 답에만 사용합니다.
+
+```markdown
+> {원 코멘트 인용 1줄} ({원 코멘트 링크})
+
+{reply_applied / reply_not_applied / reply_answer 본문}
+
 *Applied with [Claude Code](https://claude.com/claude-code) `/apply-review` command*
 ```
 
