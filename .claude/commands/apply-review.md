@@ -335,7 +335,7 @@ PR 전체 코멘트 하나로 모아 쓰지 않고, **원래 리뷰 코멘트에
 - 커밋은 Push된 커밋의 전체 URL(`https://github.com/{owner}/{repo}/commit/{hash}`) 또는 해시로 첨부. Push하지 않았다면 답글 작성 전에 그 사실을 알리고 확인받음
 - Step 9에서 커밋하지 않았다면 `reply_applied` 답글을 게시하지 않고, 커밋 후 다시 실행하도록 안내 (`reply_not_applied`·`reply_answer`는 게시 가능)
 - PARTIAL로 일부만 반영했다면 반영하지 않은 부분과 이유도 한 줄 덧붙임
-- 빌드·실기기 검증 등 확인하지 않은 항목이 있으면 답글 끝에 명시
+- 빌드 확인·실기기 미확인 등 검증 상태는 답글에 쓰지 않음 (반영 내용·사유·답변만 작성)
 
 ### Step 11: Save Apply History
 

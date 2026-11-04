@@ -218,7 +218,6 @@ PR #{original_pr_number} 리뷰 피드백 반영
 {PARTIAL인 경우: 반영하지 않은 부분과 이유 1줄}
 
 커밋: {commit_url_or_hash}
-{미검증 항목이 있으면: 빌드 확인, 실기기 미확인 등}
 ```
 
 ---
