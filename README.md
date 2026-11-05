@@ -87,6 +87,8 @@ colima start --cpu 4 --memory 8      # security 플러그인의 MobSF까지 쓰�
 docker info && docker compose version
 ```
 
+`docker compose`를 찾을 수 없다고 나오면 Homebrew의 compose 플러그인 경로를 등록하세요: `~/.docker/config.json`에 `"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]` 추가 (Intel Mac은 `/usr/local/lib/docker/cli-plugins`).
+
 Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple Silicon 주의사항: [Docker 런타임](docs/security/01%20개요/Docker%20런타임.md)
 
 자세한 설정·의존성: [docs/workflow/설정.md](docs/workflow/설정.md) · 왜 GitHub MCP인가: [docs/workflow/GitHub MCP.md](docs/workflow/GitHub%20MCP.md)

@@ -42,7 +42,7 @@ colima start --cpu 4 --memory 8 --disk 60
 docker context use colima
 docker info && docker compose version   # 둘 다 성공해야 함
 ```
-- `docker-compose`를 Homebrew로 설치하면 `docker compose` 플러그인으로 쓰려면 `~/.docker/config.json`에 `"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]`가 필요할 수 있다.
+- `docker-compose`를 Homebrew로 설치하면 `docker compose` 플러그인으로 쓰려면 `~/.docker/config.json`에 `"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]`(Intel Mac은 `/usr/local/lib/docker/cli-plugins`)가 필요할 수 있다.
 - 재부팅 후에는 `colima start`를 다시 실행한다 (자동 시작: `brew services start colima`).
 
 ## 권장 리소스
