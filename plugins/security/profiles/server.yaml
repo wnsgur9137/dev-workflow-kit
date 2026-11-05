@@ -1,0 +1,31 @@
+# Server (Python / Go / Java·Kotlin / Node) — docs/security/07 스택별 설계/Server.md
+name: server
+description: Python / Go / Java·Kotlin / Node 서버
+detect:
+  - "**/pyproject.toml"
+  - "**/requirements*.txt"
+  - "**/Pipfile"
+  - "**/go.mod"
+  - "**/pom.xml"
+  # Spring 설정 파일은 모듈 루트(빌드 파일이 있는 가장 가까운 폴더)로 올려 잡는다
+  - { glob: "**/src/main/resources/application*", root_markers: [pom.xml, build.gradle, build.gradle.kts] }
+  - { file: "**/package.json", has_dependency: [express, fastify, "@nestjs/core", koa, hono] }
+exclude_if: [android]        # 같은 하위 프로젝트가 Android 이면 server 는 적용하지 않는다
+exclude_paths: ["**/node_modules/**", "**/.venv/**", "**/venv/**", "**/target/**", "**/build/**", "**/dist/**", "**/__pycache__/**"]
+semgrep:
+  rulesets: [python, go, java, kotlin, javascript, typescript]
+sca:
+  lockfiles:
+    - "**/poetry.lock"
+    - "**/uv.lock"
+    - "**/Pipfile.lock"
+    - "**/requirements*.txt"
+    - "**/go.sum"
+    - "**/go.mod"
+    - "**/pom.xml"
+    - "**/gradle.lockfile"
+    - "**/package-lock.json"
+    - "**/yarn.lock"
+    - "**/pnpm-lock.yaml"
+  missing_lockfile_hint: "poetry.lock / uv.lock / go.sum / package-lock.json 등 lockfile 을 커밋하세요"
+checklist: server

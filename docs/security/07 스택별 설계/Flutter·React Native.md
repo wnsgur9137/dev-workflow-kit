@@ -25,7 +25,8 @@ profile: [flutter, react-native]
 
 ## Flutter (`profiles/flutter.yaml`)
 ```yaml
-detect: ["**/pubspec.yaml"]
+detect:
+  - { file: "**/pubspec.yaml", has_dependency: [flutter] }   # 순수 Dart 패키지·서버는 제외 (P0 구현 시 변경)
 exclude_paths: ["**/.dart_tool/**", "**/build/**", "**/*.g.dart", "**/*.freezed.dart"]
 ```
 

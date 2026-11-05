@@ -1,0 +1,16 @@
+# Flutter (Dart) — docs/security/07 스택별 설계/Flutter·React Native.md
+name: flutter
+description: Flutter (Dart) 앱. 하위 ios/·android/ 는 네이티브 프로파일이 따로 적용된다
+detect:
+  # 순수 Dart 패키지·서버는 제외하고 flutter SDK 의존성이 있는 pubspec 만 Flutter 앱으로 본다
+  - { file: "**/pubspec.yaml", has_dependency: [flutter] }
+exclude_paths: ["**/.dart_tool/**", "**/build/**", "**/*.g.dart", "**/*.freezed.dart"]
+semgrep:
+  rulesets: [dart]
+sca:
+  lockfiles: ["**/pubspec.lock"]
+  missing_lockfile_hint: "앱 저장소는 pubspec.lock 을 커밋하세요"
+artifact:
+  types: [apk, aab, ipa]
+  analyzer: mobsf
+checklist: flutter

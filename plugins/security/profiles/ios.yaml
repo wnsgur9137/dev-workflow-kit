@@ -1,0 +1,15 @@
+# iOS (Swift / Objective-C) — docs/security/07 스택별 설계/iOS.md
+name: ios
+description: Swift / Objective-C iOS 앱
+detect: ["**/*.xcodeproj", "**/*.xcworkspace", "**/Package.swift", "**/Podfile"]
+# Flutter 의 macos/ 데스크톱 러너는 iOS 앱이 아니다
+exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**", "**/macos/**"]
+semgrep:
+  rulesets: [swift]
+sca:
+  lockfiles: ["**/Package.resolved", "**/Podfile.lock"]
+  missing_lockfile_hint: "Package.resolved / Podfile.lock 을 커밋하세요"
+artifact:
+  types: [ipa]
+  analyzer: mobsf
+checklist: ios

@@ -34,7 +34,7 @@ updated: 2026-11-05
       "Write(~/.config/dev-workflow-kit/security/targets.allowlist)",
       "Edit(~/.claude/plugins/cache/dev-workflow-kit/**)",
       "Write(~/.claude/plugins/cache/dev-workflow-kit/**)",
-      "Bash(*/security/scripts/update.sh:*)",
+      "Bash(*/security/*/scripts/update.sh:*)",
       "Bash(docker run:*)",
       "Bash(docker compose:*)"
     ]
@@ -61,7 +61,7 @@ updated: 2026-11-05
 - 추가 옵션: Claude Code의 sandbox 기능 → [[미결정 사항]]
 
 > [!warning] 검증 필요
-> - permission 규칙에서 `~`·`*`(버전 폴더) glob 지원 여부 — 설치 경로 자체는 `~/.claude/plugins/cache/<마켓플레이스>/<플러그인>/<버전>/`로 확인됨
+> - permission 규칙에서 `~`·`*`(버전 폴더) glob 지원 여부, 그리고 스킬이 `${CLAUDE_PLUGIN_ROOT}`(절대 경로)로 호출할 때 `~/...` 규칙과 매칭되는지 (PR #18 리뷰 — P1에서 실제 호출 형태로 확인) — 설치 경로 자체는 `~/.claude/plugins/cache/<마켓플레이스>/<플러그인>/<버전>/`로 확인됨
 > - `disable-model-invocation` frontmatter 이름과 플러그인 스킬에서의 동작
 > - 스킬 `allowed-tools`에 `${CLAUDE_PLUGIN_ROOT}` 경로 사용 가능 여부 → 가능하면 settings 병합 불필요
 > - 툴킷 개발 시(레포에서 직접 수정)에는 플러그인 경로 deny와 무관 — 개발용은 레포 폴더에서 작업

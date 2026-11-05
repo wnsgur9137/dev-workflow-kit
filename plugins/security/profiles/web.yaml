@@ -1,0 +1,15 @@
+# Web (JS/TS — React, Next.js, Vue, Svelte, Angular) — docs/security/07 스택별 설계/Web.md
+name: web
+description: JS/TS 웹 프론트엔드 (React, Next.js, Vue, Svelte, Angular)
+detect:
+  - "**/next.config.*"
+  - "**/vite.config.*"
+  - { file: "**/package.json", has_dependency: [next, react, react-dom, vue, svelte, "@angular/core", vite] }
+exclude_if: [react-native]   # RN 앱의 react 의존성은 web 으로 보지 않는다
+exclude_paths: ["**/node_modules/**", "**/.next/**", "**/dist/**", "**/build/**", "**/coverage/**"]
+semgrep:
+  rulesets: [javascript, typescript]
+sca:
+  lockfiles: ["**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml"]
+  missing_lockfile_hint: "package-lock.json / yarn.lock / pnpm-lock.yaml 을 커밋하세요"
+checklist: web

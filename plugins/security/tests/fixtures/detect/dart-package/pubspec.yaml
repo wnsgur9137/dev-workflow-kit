@@ -1,0 +1,3 @@
+name: util
+dependencies:
+  collection: ^1.18.0

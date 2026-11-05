@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.claude/plugins/cache/dev-workflow-kit/security/*/scripts/scan-code.sh:*)",
+      "Bash(~/.claude/plugins/cache/dev-workflow-kit/security/*/scripts/scan-app.sh:*)",
+      "Bash(~/.claude/plugins/cache/dev-workflow-kit/security/*/scripts/scan-web.sh:*)",
+      "Read(~/.local/share/dev-workflow-kit/security/reports/**)"
+    ],
+    "deny": [
+      "Read(~/.config/dev-workflow-kit/**/.env)",
+      "Edit(~/.config/dev-workflow-kit/security/targets.allowlist)",
+      "Write(~/.config/dev-workflow-kit/security/targets.allowlist)",
+      "Edit(~/.claude/plugins/cache/dev-workflow-kit/**)",
+      "Write(~/.claude/plugins/cache/dev-workflow-kit/**)",
+      "Bash(*/security/*/scripts/update.sh:*)",
+      "Bash(docker run:*)",
+      "Bash(docker compose:*)"
+    ]
+  }
+}

@@ -22,7 +22,7 @@ profile: server
 |---|---|---|
 | Python | `pyproject.toml`, `requirements*.txt`, `Pipfile` | `poetry.lock`, `requirements*.txt`, `Pipfile.lock`, `uv.lock` |
 | Go | `go.mod` | `go.mod`/`go.sum` |
-| Java/Kotlin | `pom.xml`, `build.gradle*` + `src/main/resources/application*` | `pom.xml`, `gradle.lockfile` |
+| Java/Kotlin | `pom.xml`, `{ glob: "**/src/main/resources/application*", root_markers: [pom.xml, build.gradle, build.gradle.kts] }` (모듈 루트로 올려 잡음) | `pom.xml`, `gradle.lockfile` |
 | Node | `{ file: "**/package.json", has_dependency: [express, fastify, "@nestjs/core", koa, hono] }` | `package-lock.json` 등 |
 
 - Java/Kotlin은 `build.gradle*`가 Android와 겹치므로 `exclude_if: [android]` — 같은 하위 프로젝트에 `AndroidManifest.xml`이 있으면 그 경로는 Android만 적용 ([[스택 프로파일 개요#감지 규칙]] 4번)

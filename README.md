@@ -9,7 +9,7 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 | 플러그인 | 상태 | 커맨드 | 설명 |
 |---|---|---|---|
 | `workflow` | ✅ 사용 가능 | `/workflow:commit` `/workflow:create-pr` `/workflow:pr-review` `/workflow:apply-review` `/workflow:pipeline` | 커밋부터 병합까지 |
-| `security` | 🚧 설계 단계 | `/security:scan-code` `/security:scan-app` `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
+| `security` | 🚧 구현 중 (P0 기반) | `/security:scan-code` `/security:scan-app` `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
 
 ## 목차
 
@@ -19,6 +19,10 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 - [요구사항](#요구사항)
   - [Docker 런타임](#docker-런타임)
 - [커맨드](#커맨드)
+- [security 플러그인](#security-플러그인)
+  - [설치와 준비](#설치와-준비)
+  - [권한 설정](#권한-설정)
+  - [데이터 위치](#데이터-위치)
 - [커스터마이징](#커스터마이징)
 - [문서](#문서)
 - [라이선스](#라이선스)
@@ -108,6 +112,53 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 | `/workflow:pipeline [이슈번호]` | 작업 파악부터 병합까지 14단계 (`--no-issue`로 구현~병합만, 이전 `/ship`) | [pipeline](docs/workflow/pipeline.md) |
 
 모든 커맨드는 `--help`로 옵션을 볼 수 있습니다.
+
+---
+
+## security 플러그인
+
+> 🚧 **구현 중** — 현재는 기반(경로 검증, Docker 사전 점검, 스택 감지)만 들어 있고 `/security:scan-*` 커맨드는 아직 없습니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
+
+개인 앱·웹 프로젝트를 **Claude Code 안에서, 외부 전송 없이** 점검합니다. 모든 도구는 네트워크가 차단된 컨테이너에서 실행되고, Claude는 정규화된 요약 리포트만 읽습니다. 설계: [보안 툴킷](docs/security/보안%20툴킷.md)
+
+### 설치와 준비
+
+```
+/plugin install security@dev-workflow-kit
+```
+
+1. **Docker 호환 런타임** — 필수입니다. 위 [Docker 런타임](#docker-런타임)을 따라 Colima 등을 준비하세요. 스캔 전에 매번 다음을 점검하고, 하나라도 실패하면 컨테이너를 띄우지 않고 해결 방법을 안내합니다.
+
+   | # | 점검 | 실패 시 |
+   |---|---|---|
+   | D1 | `docker` CLI 존재 | 런타임 설치 안내 |
+   | D2 | 엔진 실행 중 | `colima start` 안내 |
+   | D3 | Compose v2 이상 | compose 플러그인 안내 |
+   | D4 | dockerd(moby) 엔진 | Podman 미지원 안내 |
+   | D5 | VM 메모리 권장치 이상 | 경고만 |
+   | D6 | 고정 digest 이미지 존재 | `update.sh` 실행 안내 (스캔은 다운로드하지 않음) |
+
+2. **python3 3.8 이상** — 스택 감지·리포트 정규화에 씁니다 (표준 라이브러리만 사용).
+
+### 권한 설정
+
+플러그인은 권한을 스스로 설정할 수 없습니다. [`plugins/security/examples/settings.permissions.json`](plugins/security/examples/settings.permissions.json)의 `allow`·`deny`를 `~/.claude/settings.json`에 **직접 병합**하세요.
+
+- 스캔 스크립트만 승인 없이 실행되고, `update.sh`·`docker run`·허용목록 수정·`.env` 열람은 Claude 권한 밖에 둡니다.
+- 이 툴킷을 쓰는 세션에서는 **bypass permissions 모드를 쓰지 마세요.** deny 규칙은 실수 방지용이고, 실제 경계는 네트워크 격리와 권한 프롬프트입니다. ([Claude Code 권한 정책](docs/security/04%20보안/Claude%20Code%20권한%20정책.md))
+
+### 데이터 위치
+
+리포트·DB·설정은 플러그인 폴더 밖에 두므로 플러그인을 업데이트해도 사라지지 않고, 점검 대상 저장소에 커밋될 수도 없습니다.
+
+| 경로 | 내용 | 권한 |
+|---|---|---|
+| `~/.local/share/dev-workflow-kit/security/` | 리포트(`reports/<run-id>/`), OSV DB, 규칙 | 폴더 700 |
+| `~/.config/dev-workflow-kit/security/` | `.env`(MobSF 키), `targets.allowlist` | 폴더 700 / 파일 600 |
+
+점검 대상으로 홈 디렉터리 자체·그 상위, `~/.ssh` 같은 자격증명 폴더, 시스템 폴더, 위 데이터 폴더는 거부합니다.
+
+> **개발자**: `plugins/security/tests/run.sh`(단위·통합 테스트), `plugins/security/tests/lint.sh`(shellcheck)가 게이트입니다.
 
 ---
 
