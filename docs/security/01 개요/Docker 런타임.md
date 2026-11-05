@@ -80,8 +80,13 @@ docker info && docker compose version   # 둘 다 성공해야 함
 
 허용목록에는 실제로 쓰는 주소를 **포트까지** 적는다 → [[scan-web]]
 
+> [!check] 확인됨 (P0, Colima 0.x · Docker 29 · Compose v5)
+> - 엔진 판별: `docker version --format '{{range .Server.Components}}{{.Name}} {{end}}'` → `Engine containerd runc docker-init` (Podman은 `Podman Engine`)
+> - VM 메모리: `docker info --format '{{.MemTotal}}'` (바이트, 설정값보다 약간 작게 보고됨 → 90% 기준)
+> - Compose 버전은 v5까지 올라와 있으므로 "v2 이상"으로 판정
+> - `~/.docker/config.json`에 `"credsStore": "desktop"`이 남아 있으면(Docker Desktop을 지운 뒤 Colima 사용) `docker pull`이 `docker-credential-desktop` 없음으로 실패한다 → 해당 줄 삭제 안내 (`update.sh`에서 감지)
+
 > [!warning] 검증 필요
 > - Colima에서 `host.docker.internal` 지원 여부(버전별)와 `internal: true` 네트워크 동작
 > - MobSF·ZAP·Semgrep·Gitleaks·OSV-Scanner 공식 이미지의 arm64 지원 여부
-> - `docker info`로 엔진 종류(moby) 판별 방법, VM 메모리 조회 방법(`docker info --format '{{.MemTotal}}'`)
 > - 각 이미지의 실제 크기 (리소스 표 갱신)

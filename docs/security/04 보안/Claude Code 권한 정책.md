@@ -34,7 +34,7 @@ updated: 2026-11-05
       "Write(~/.config/dev-workflow-kit/security/targets.allowlist)",
       "Edit(~/.claude/plugins/cache/dev-workflow-kit/**)",
       "Write(~/.claude/plugins/cache/dev-workflow-kit/**)",
-      "Bash(*/security/scripts/update.sh:*)",
+      "Bash(*/security/*/scripts/update.sh:*)",
       "Bash(docker run:*)",
       "Bash(docker compose:*)"
     ]
