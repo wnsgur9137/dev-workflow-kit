@@ -6,7 +6,7 @@ PR Number or URL: $ARGUMENTS
 
 ## Step 0: Usage Guide
 
-Before starting, ALWAYS display the usage guide from `~/.claude/templates/apply-review/templates.md` > `usage_guide` 템플릿.
+Before starting, ALWAYS display the usage guide from `${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `usage_guide` 템플릿.
 
 **Argument Parsing:**
 
@@ -19,7 +19,7 @@ Before starting, ALWAYS display the usage guide from `~/.claude/templates/apply-
 
 **Help Mode (`--help` 또는 인자 없음):**
 
-`~/.claude/templates/apply-review/templates.md` > `usage_guide` 템플릿을 출력하고 종료합니다. 다른 작업은 수행하지 않습니다.
+`${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `usage_guide` 템플릿을 출력하고 종료합니다. 다른 작업은 수행하지 않습니다.
 
 ## Mandatory User Interaction Policy
 
@@ -84,7 +84,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 `git remote -v`로 현재 로컬 레포의 `owner/repo`를 추출하고, PR의 `owner/repo`와 비교합니다.
 
-- **일치하지 않을 경우** `~/.claude/templates/apply-review/templates.md` > `repo_mismatch` 템플릿으로 경고 출력 후 즉시 종료
+- **일치하지 않을 경우** `${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `repo_mismatch` 템플릿으로 경고 출력 후 즉시 종료
 - fork 레포인 경우도 검증: `git remote -v`의 `origin`과 `upstream` 모두 확인하여 PR의 `owner/repo`와 하나라도 일치하면 통과
 
 **상태 검증:**
@@ -111,7 +111,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **1.5 PR 요약 출력:**
 
-`~/.claude/templates/apply-review/templates.md` > `pr_summary` 템플릿으로 출력.
+`${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `pr_summary` 템플릿으로 출력.
 
 ### Step 2: Previous Apply History Check
 
@@ -119,7 +119,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 `~/.claude/review-history/{owner}/{repo}/apply-review-pr-{number}.json` 파일이 존재하는지 확인합니다. `{owner}/{repo}`는 PR URL 또는 `git remote -v`에서 추출합니다.
 
-**기록 파일이 존재하면** `~/.claude/templates/apply-review/templates.md` > `previous_apply_history` 템플릿으로 이전 반영 정보를 출력하고 `AskUserQuestion`으로 옵션을 제시합니다:
+**기록 파일이 존재하면** `${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `previous_apply_history` 템플릿으로 이전 반영 정보를 출력하고 `AskUserQuestion`으로 옵션을 제시합니다:
 
 **옵션:**
 
@@ -161,11 +161,11 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **3.4 코멘트 요약 출력:**
 
-`~/.claude/templates/apply-review/templates.md` > `comment_collection_summary` 템플릿으로 출력.
+`${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `comment_collection_summary` 템플릿으로 출력.
 
 ### Step 4: AI Validity Assessment
 
-각 코멘트에 대해 AI가 합당성을 판단합니다. 프로젝트의 CLAUDE.md, conventions.md, `~/.claude/templates/review-criteria/` 디렉토리의 플랫폼별 리뷰 기준을 참조합니다.
+각 코멘트에 대해 AI가 합당성을 판단합니다. 프로젝트의 CLAUDE.md, conventions.md, `${CLAUDE_PLUGIN_ROOT}/templates/review-criteria/` 디렉토리의 플랫폼별 리뷰 기준을 참조합니다.
 
 **4.1 판단 기준:**
 
@@ -199,12 +199,12 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **4.2 판단 시 참조:**
 - 해당 파일의 현재 상태를 로컬에서 `Read`하여 컨텍스트 확인
-- `~/.claude/templates/review-criteria/` 디렉토리의 해당 플랫폼 파일 우선순위 기준 참조
+- `${CLAUDE_PLUGIN_ROOT}/templates/review-criteria/` 디렉토리의 해당 플랫폼 파일 우선순위 기준 참조
 - 캐시된 conventions.md가 있으면 프로젝트 컨벤션 참조
 
 **4.3 판단 결과 출력:**
 
-`~/.claude/templates/apply-review/templates.md` > `ai_verdict` 템플릿으로 출력.
+`${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `ai_verdict` 템플릿으로 출력.
 
 ### Step 5: User Confirmation (Interactive Selection)
 
@@ -262,7 +262,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **7.3 진행 상황 출력:**
 
-`~/.claude/templates/apply-review/templates.md` > `apply_progress` 템플릿으로 출력.
+`${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `apply_progress` 템플릿으로 출력.
 
 ### Step 8: Verification
 
@@ -272,7 +272,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **8.2 검증 결과 출력:**
 
-`~/.claude/templates/apply-review/templates.md` > `verification_result` 템플릿으로 출력.
+`${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `verification_result` 템플릿으로 출력.
 
 ### Step 9: Commit, Push & PR Options
 
@@ -284,7 +284,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 - **커밋 메시지 직접 입력**: 사용자가 메시지를 입력
 - **커밋하지 않음**: unstaged 상태로 유지
 
-자동 커밋 메시지 형식: `~/.claude/templates/apply-review/templates.md` > `commit_message` 템플릿 (프로젝트의 커밋 컨벤션을 따름).
+자동 커밋 메시지 형식: `${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `commit_message` 템플릿 (프로젝트의 커밋 컨벤션을 따름).
 
 **9.2 Push 여부** (커밋한 경우에만):
 
@@ -298,7 +298,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 PR 생성 시:
 1. `.github/PULL_REQUEST_TEMPLATE.md`가 있으면 해당 템플릿 기반으로 body 작성
-2. 없으면 `~/.claude/templates/apply-review/templates.md` > `pr_body` 템플릿 사용
+2. 없으면 `${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `pr_body` 템플릿 사용
 
 ### Step 10: Post Feedback Comment to PR
 
@@ -324,7 +324,7 @@ PR 전체 코멘트 하나로 모아 쓰지 않고, **원래 리뷰 코멘트에
 
 **10.2 답글 내용:**
 
-판정과 실제 반영 여부에 따라 `~/.claude/templates/apply-review/templates.md`의 템플릿을 사용합니다.
+판정과 실제 반영 여부에 따라 `${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md`의 템플릿을 사용합니다.
 
 | 경우 | 템플릿 | 내용 |
 |------|--------|------|
@@ -348,7 +348,7 @@ PR 전체 코멘트 하나로 모아 쓰지 않고, **원래 리뷰 코멘트에
 
 **11.2 기록 파일 형식:**
 
-`~/.claude/templates/apply-review/templates.md` > `history_record` 템플릿의 JSON 스키마를 따름.
+`${CLAUDE_PLUGIN_ROOT}/templates/apply-review/templates.md` > `history_record` 템플릿의 JSON 스키마를 따름.
 
 **11.3 기록 규칙:**
 

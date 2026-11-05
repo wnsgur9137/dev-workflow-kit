@@ -4,7 +4,7 @@ PR URL: $ARGUMENTS
 
 ## Step 0: Usage Guide
 
-Before starting, ALWAYS display the usage guide from `.claude/templates/review/templates.md` > `usage_guide` 템플릿.
+Before starting, ALWAYS display the usage guide from `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `usage_guide` 템플릿.
 
 **Argument Parsing:**
 
@@ -211,7 +211,7 @@ PR description (body)에서 이슈 참조 패턴을 파싱합니다:
 
 Step 2의 정보 수집이 완료되면, CLI에 PR 요약을 출력합니다:
 
-`.claude/templates/review/templates.md` > `pr_summary` 템플릿으로 출력.
+`${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `pr_summary` 템플릿으로 출력.
 
 이 요약은 사용자가 리뷰 대상 PR을 빠르게 파악할 수 있도록 합니다. 요약 출력 후 나머지 Step을 계속 진행합니다.
 
@@ -351,7 +351,7 @@ If a file matches multiple types, assign the most specific one. If no type is de
 
 ### Step 4: Apply Review Priorities by Type
 
-Read the review templates from `.claude/templates/review-criteria/` directory — load the matching platform file(s) based on detected PR type (e.g., `ios.md`, `frontend.md`). If no type is detected, use `general.md`. Apply the review criteria following the priority order defined in each template.
+Read the review templates from `${CLAUDE_PLUGIN_ROOT}/templates/review-criteria/` directory — load the matching platform file(s) based on detected PR type (e.g., `ios.md`, `frontend.md`). If no type is detected, use `general.md`. Apply the review criteria following the priority order defined in each template.
 
 ### Step 4.5: Impact Analysis (로컬 레포 일치 시 또는 원격 레포)
 
@@ -394,7 +394,7 @@ Evaluate whether to recommend Gemini code review based on these criteria:
 
 발견된 이슈를 severity 순서대로 (🚨 CRITICAL → ⚠️ WARNING → 💡 SUGGESTION → ❓ QUESTION → 🔹 NITPICK) 출력합니다:
 
-`.claude/templates/review/templates.md` > `review_result` 템플릿으로 출력.
+`${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `review_result` 템플릿으로 출력.
 
 **6.2 PR 코멘트 게시 여부 확인:**
 
@@ -446,7 +446,7 @@ Evaluate whether to recommend Gemini code review based on these criteria:
 
 ### Comment Format
 
-Each comment should follow `.claude/templates/review/templates.md` > `comment_format` 템플릿.
+Each comment should follow `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `comment_format` 템플릿.
 
 **Severity Emoji Map:**
 - 🚨 CRITICAL
@@ -457,7 +457,7 @@ Each comment should follow `.claude/templates/review/templates.md` > `comment_fo
 
 **GitHub Suggestion Block (수정 제안 시 필수 사용):**
 
-CRITICAL 또는 WARNING 이슈에서 구체적인 코드 수정을 제안할 때는 반드시 `.claude/templates/review/templates.md` > `suggestion_block` 형식을 사용합니다.
+CRITICAL 또는 WARNING 이슈에서 구체적인 코드 수정을 제안할 때는 반드시 `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `suggestion_block` 형식을 사용합니다.
 
 **Suggestion 규칙:**
 - suggestion 블록 안에는 해당 라인을 대체할 완전한 코드만 작성
@@ -465,7 +465,7 @@ CRITICAL 또는 WARNING 이슈에서 구체적인 코드 수정을 제안할 때
 - 여러 줄 수정 시 `start_line`과 `line` 파라미터를 활용하여 범위 지정
 - suggestion 블록은 하나의 코멘트에 하나만 사용 (GitHub 제한)
 
-**예시:** `.claude/templates/review/templates.md` > `comment_example` 참조.
+**예시:** `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `comment_example` 참조.
 
 **Severity Levels:**
 - 🚨 `CRITICAL`: Must fix before merge (bugs, security issues, data loss risks)
@@ -476,11 +476,11 @@ CRITICAL 또는 WARNING 이슈에서 구체적인 코드 수정을 제안할 때
 
 **Categories (by PR Type):**
 
-Refer to `.claude/templates/review-criteria/` directory for type-specific categories (e.g., `ios.md`, `android.md`, `frontend.md`, `backend.md`, `general.md`).
+Refer to `${CLAUDE_PLUGIN_ROOT}/templates/review-criteria/` directory for type-specific categories (e.g., `ios.md`, `android.md`, `frontend.md`, `backend.md`, `general.md`).
 
 ### Step 7: Review Summary
 
-After posting all comments, provide a summary in the review body using `.claude/templates/review/templates.md` > `review_summary` 템플릿.
+After posting all comments, provide a summary in the review body using `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `review_summary` 템플릿.
 
 ### Step 8: Review Pattern Recording
 
