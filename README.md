@@ -595,7 +595,7 @@ CI 가 Draft PR 을 건너뛰는 설정이면, Ready 전환 후의 모든 push �
 
 | 항목 | 필수 여부 | 설명 |
 |------|----------|------|
-| **GitHub MCP 서버** | `/pr-review`·`/apply-review` 필수 / `/create-pr` 선택 | PR 정보 수집·코멘트 게시에 사용. 프로젝트 `.mcp.json`에 설정. `/create-pr`은 미설정·실패 시 `gh` CLI로 폴백 |
+| **GitHub MCP 서버** | `/pr-review`·`/apply-review` 필수 / `/create-pr` 선택 | PR 정보 수집·코멘트 게시에 사용. 프로젝트 `.mcp.json`에 설정(`examples/mcp.json.example` 복사). `/create-pr`은 미설정·실패 시 `gh` CLI로 폴백 |
 | **`GITHUB_PERSONAL_ACCESS_TOKEN`** | GitHub MCP 사용 시 필수 | GitHub API 인증용 환경변수 |
 | **`gh` CLI** | `/apply-review` 답글 게시 시 필요 / `/create-pr` 폴백 시 필요 | `/apply-review`의 리뷰 코멘트 스레드 답글 게시, GitHub MCP 불가 시 `/create-pr`의 PR 생성 폴백 경로. `gh auth login` 인증 필요 |
 | **`~/.claude/commands/`** | 필수 | 글로벌 커맨드 정의 파일 (`commit.md`, `create-pr.md`, `pr-review.md`, `apply-review.md`, `ship.md`) |
@@ -616,14 +616,29 @@ CI 가 Draft PR 을 건너뛰는 설정이면, Ready 전환 후의 모든 push �
 
 1. **GitHub MCP 서버**가 `.mcp.json`에 설정되어 있어야 합니다 (`/pr-review`·`/apply-review` 필수, `/create-pr`은 없으면 `gh` CLI로 폴백)
 2. `GITHUB_PERSONAL_ACCESS_TOKEN` 환경 변수에 PR 접근 권한이 있는 토큰이 필요합니다
+3. GitHub MCP 서버를 Docker 이미지로 실행하므로 **Docker**가 필요합니다
 
-`.mcp.json` 예시:
+`.mcp.json`은 개인 설정이라 저장소에 커밋하지 않습니다(`.gitignore` 대상). 예시 파일을 복사해 사용하세요.
+
+```bash
+cp examples/mcp.json.example .mcp.json
+```
+
+[`examples/mcp.json.example`](examples/mcp.json.example) 내용:
 ```json
 {
   "mcpServers": {
     "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "ghcr.io/github/github-mcp-server"
+      ],
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
       }
@@ -631,6 +646,8 @@ CI 가 Draft PR 을 건너뛰는 설정이면, Ready 전환 후의 모든 push �
   }
 }
 ```
+
+> 토큰은 파일에 직접 적지 말고 환경 변수로만 주입하세요. 다른 MCP 서버를 추가하는 것은 자유이며, `.mcp.json`이 커밋되지 않으므로 개인 경로를 넣어도 저장소에 노출되지 않습니다.
 
 ### 글로벌 디렉토리 구조
 
