@@ -15,7 +15,9 @@
 # ---------------------------------------------------------------------------
 # 경로
 # ---------------------------------------------------------------------------
-SEC_PLUGIN="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+# CDPATH 가 export 돼 있으면 cd 가 다른 폴더로 이동하며 경로를 stdout 에 찍는다 — 정규화 결과가 오염된다
+unset CDPATH
+SEC_PLUGIN="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 SEC_DATA="${DWK_SECURITY_DATA_DIR:-$HOME/.local/share/dev-workflow-kit/security}"
 SEC_CONF="${DWK_SECURITY_CONF_DIR:-$HOME/.config/dev-workflow-kit/security}"
 SEC_IMAGES_LOCK="${SEC_IMAGES_LOCK:-$SEC_PLUGIN/docker/images.lock}"
@@ -74,12 +76,14 @@ sec_new_run() {
   sec_init_dirs || return 1
   base="$(date '+%Y%m%d-%H%M%S')-$kind"
   SEC_RUN_ID=$base
-  while [ -e "$SEC_DATA/reports/$SEC_RUN_ID" ]; do
+  # mkdir(-p 없이)의 성공 여부로 선점한다 — 동시 실행해도 두 스캔이 같은 폴더를 쓰지 않는다
+  while ! mkdir "$SEC_DATA/reports/$SEC_RUN_ID" 2>/dev/null; do
     n=$((n + 1))
+    [ "$n" -le 1000 ] || return 1
     SEC_RUN_ID="$base-$n"
   done
   SEC_RUN_DIR="$SEC_DATA/reports/$SEC_RUN_ID"
-  mkdir -p "$SEC_RUN_DIR/raw" || return 1
+  mkdir "$SEC_RUN_DIR/raw" || return 1
   chmod 700 "$SEC_RUN_DIR" "$SEC_RUN_DIR/raw"
   SEC_LOG_FILE="$SEC_RUN_DIR/run.log"
   : >"$SEC_LOG_FILE"
@@ -92,39 +96,66 @@ sec_new_run() {
 # ---------------------------------------------------------------------------
 
 # sec_realpath <path> — 심볼릭 링크를 모두 풀어 절대 경로 출력. 없으면 실패.
+#   realpath(1) 가 있으면 우선 쓴다 — macOS 의 /bin/realpath 는 대소문자를 디스크의 실제 이름으로 바로잡는다
+#   (대소문자를 구분하지 않는 APFS 에서 '/users/me' 로 금지 경로 비교를 우회하지 못하게).
 sec_realpath() {
-  local p=$1 link dir out i=0
+  local p=$1 link dir out="" i=0
   [ -n "$p" ] || return 1
-  if [ -d "$p" ]; then
-    # 디렉터리는 cd -P 가 경로 전체의 심볼릭 링크를 푼다
-    out=$(cd -P "$p" 2>/dev/null && pwd -P) || return 1
-  else
-    while [ -L "$p" ]; do
-      i=$((i + 1))
-      [ "$i" -le 40 ] || return 1
-      link=$(readlink "$p") || return 1
-      case "$link" in
-        /*) p=$link ;;
-        *) p="$(dirname "$p")/$link" ;;
-      esac
-    done
+  case "$p" in
+    /*) ;;
+    *) p="./$p" ;; # '-' 같은 이름이 cd 옵션으로 해석되지 않게
+  esac
+  [ -e "$p" ] || return 1
+  if command -v realpath >/dev/null 2>&1; then
+    out=$(realpath "$p" 2>/dev/null) || out=""
+  fi
+  if [ -z "$out" ]; then
     if [ -d "$p" ]; then
-      out=$(cd -P "$p" 2>/dev/null && pwd -P) || return 1
+      out=$(cd -P -- "$p" 2>/dev/null && pwd -P) || return 1
     else
-      [ -e "$p" ] || return 1
-      dir=$(cd -P "$(dirname "$p")" 2>/dev/null && pwd -P) || return 1
-      out="${dir%/}/$(basename "$p")"
+      while [ -L "$p" ]; do
+        i=$((i + 1))
+        [ "$i" -le 40 ] || return 1
+        link=$(readlink "$p") || return 1
+        case "$link" in
+          /*) p=$link ;;
+          *) p="$(dirname -- "$p")/$link" ;;
+        esac
+      done
+      if [ -d "$p" ]; then
+        out=$(cd -P -- "$p" 2>/dev/null && pwd -P) || return 1
+      else
+        [ -e "$p" ] || return 1
+        dir=$(cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P) || return 1
+        out="${dir%/}/$(basename -- "$p")"
+      fi
     fi
   fi
   # '//x' 같은 중복 슬래시를 하나로 — 금지 경로 비교가 우회되지 않게 한다
   printf '%s\n' "$out" | sed -e 's#//*#/#g'
 }
 
-# _sec_is_within <path> <dir> — path 가 dir 자신이거나 그 하위이면 참
+# _sec_fold <path> — 비교용 정규형: 소문자 + (비ASCII 면) 유니코드 NFC.
+#   realpath 가 없거나 대소문자를 바로잡지 못하는 환경에서도 금지 경로 비교가 우회되지 않게 하는 이중 장치.
+#   대소문자를 구분하는 파일시스템에서는 더 보수적으로(더 많이) 거부할 뿐이다.
+_sec_fold() {
+  if printf '%s' "$1" | LC_ALL=C grep -q '[^ -~]' && command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import sys, unicodedata; print(unicodedata.normalize("NFC", sys.argv[1]).casefold())' "$1"
+  else
+    printf '%s\n' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]'
+  fi
+}
+
+# _sec_is_within <path> <dir> — path 가 dir 자신이거나 그 하위이면 참 (대소문자·정규화 무시)
 _sec_is_within() {
-  [ "$1" = "$2" ] && return 0
-  case "$1" in
-    "${2%/}"/*) return 0 ;;
+  local a b
+  a=$(_sec_fold "$1")
+  b=$(_sec_fold "${2%/}")
+  [ -n "$b" ] || b=/
+  [ "$a" = "$b" ] && return 0
+  [ "$b" = "/" ] && return 0
+  case "$a" in
+    "$b"/*) return 0 ;;
   esac
   return 1
 }
@@ -134,12 +165,21 @@ _sec_resolved_or_raw() {
   sec_realpath "$1" 2>/dev/null || printf '%s\n' "$1"
 }
 
+# 자격증명·개인 설정 폴더 (홈 기준). 대상이 이 안이거나, 이것을 포함하면 거부한다.
+SEC_HOME_DENY=".ssh .aws .azure .gnupg .kube .docker .config .claude .netrc .gradle .android
+  .m2 .cargo .npmrc .pypirc .git-credentials .password-store .terraform.d .oci .gcloud
+  .local/share/keyrings Library"
+SEC_SYSTEM_DENY="/etc /private/etc /System /usr /bin /sbin /Library /private/var/root"
+# scan-app 이 받는 산출물 확장자 (file 종류)
+SEC_ARTIFACT_EXTS="apk aab ipa"
+
 # sec_validate_target <path> <dir|file>
 #   검증에 통과하면 정규화된 절대 경로를 stdout 으로 출력한다.
-#   금지: 루트·홈 디렉터리 자체와 그 상위, 최상위 폴더, 자격증명·시스템 폴더,
-#         툴킷 데이터·설정 폴더를 포함하는 경로, docker 마운트 문법을 깨는 문자.
+#   금지: 루트·홈 디렉터리 자체와 그 상위, 최상위 폴더, 자격증명·시스템 폴더(심볼릭 링크를 푼 실제 위치 포함),
+#         툴킷 데이터·설정 폴더와 겹치는 경로, docker 마운트 문법을 깨는 문자.
+#   file 종류는 앱 산출물 확장자(apk·aab·ipa)만 허용한다.
 sec_validate_target() {
-  local raw=$1 kind=${2:-dir} resolved home depth d
+  local raw=$1 kind=${2:-dir} resolved home depth d dr ext
   if [ -z "$raw" ]; then
     sec_err "점검 대상 경로가 비어 있습니다."
     return 1
@@ -157,10 +197,24 @@ sec_validate_target() {
       sec_err "디렉터리가 아닙니다: $resolved"
       return 1
     } ;;
-    file) [ -f "$resolved" ] || {
-      sec_err "일반 파일이 아닙니다: $resolved"
+    file)
+      [ -f "$resolved" ] || {
+        sec_err "일반 파일이 아닙니다: $resolved"
+        return 1
+      }
+      ext=$(printf '%s' "${resolved##*.}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+      case " $SEC_ARTIFACT_EXTS " in
+        *" $ext "*) ;;
+        *)
+          sec_err "앱 산출물(${SEC_ARTIFACT_EXTS// /, })만 점검할 수 있습니다: $resolved"
+          return 1
+          ;;
+      esac
+      ;;
+    *)
+      sec_err "알 수 없는 대상 종류: $kind"
       return 1
-    } ;;
+      ;;
   esac
 
   # docker -v / --mount 문법을 깨거나 로그를 오염시키는 문자
@@ -175,7 +229,7 @@ sec_validate_target() {
   home=$(_sec_resolved_or_raw "$HOME")
 
   # 루트, 홈 자체, 홈의 상위 경로 (홈 전체가 마운트된다)
-  if [ "$resolved" = "/" ] || _sec_is_within "$home" "$resolved"; then
+  if [ "$resolved" = "/" ] || _sec_is_within "$home" "$resolved" || _sec_is_within "$HOME" "$resolved"; then
     sec_err "홈 디렉터리 전체 또는 그 상위 경로는 점검할 수 없습니다: $resolved"
     return 1
   fi
@@ -187,21 +241,29 @@ sec_validate_target() {
     return 1
   fi
   for d in /private/var /private/tmp /private/var/folders /private/etc; do
-    if [ "$resolved" = "$d" ]; then
+    if [ "$(_sec_fold "$resolved")" = "$(_sec_fold "$d")" ]; then
       sec_err "시스템 공용 폴더는 점검할 수 없습니다: $resolved"
       return 1
     fi
   done
 
-  # 자격증명·시스템 폴더 자체와 그 하위
-  for d in \
-    "$home/.ssh" "$home/.aws" "$home/.gnupg" "$home/.kube" "$home/.docker" \
-    "$home/.config" "$home/.claude" "$home/.netrc" "$home/Library" \
-    /etc /private/etc /System /usr /bin /sbin /Library; do
-    if _sec_is_within "$resolved" "$d"; then
-      sec_err "자격증명·시스템 폴더는 점검할 수 없습니다: $resolved"
-      return 1
-    fi
+  # 자격증명·시스템 폴더: 그 안이거나, 그것(심볼릭 링크를 푼 실제 위치 포함)을 포함하면 거부
+  #   예) ~/.aws -> ~/dotfiles/aws 이면 ~/dotfiles/aws 와 ~/dotfiles 도 거부
+  for d in $SEC_HOME_DENY; do
+    for dr in "$home/$d" "$(_sec_resolved_or_raw "$home/$d")"; do
+      if _sec_is_within "$resolved" "$dr" || { [ -e "$dr" ] && _sec_is_within "$dr" "$resolved"; }; then
+        sec_err "자격증명·개인 설정 폴더와 겹치는 경로는 점검할 수 없습니다: $resolved (${d})"
+        return 1
+      fi
+    done
+  done
+  for d in $SEC_SYSTEM_DENY; do
+    for dr in "$d" "$(_sec_resolved_or_raw "$d")"; do
+      if _sec_is_within "$resolved" "$dr"; then
+        sec_err "시스템 폴더는 점검할 수 없습니다: $resolved"
+        return 1
+      fi
+    done
   done
 
   # 툴킷 데이터·설정 폴더(리포트, MobSF 키)를 포함하거나 그 안인 경로
@@ -259,7 +321,7 @@ sec_validate_images_lock() {
     /^[[:space:]]*(#|$)/ { next }
     {
       if (NF != 5) { printf "images.lock:%d: 열이 5개가 아닙니다\n", NR; bad=1; next }
-      if ($4 !~ /^sha256:[0-9a-f]{64}$/) { printf "images.lock:%d: digest 형식 오류: %s\n", NR, $4; bad=1 }
+      if ($4 !~ /^sha256:[0-9a-f]+$/ || length($4) != 71) { printf "images.lock:%d: digest 형식 오류: %s\n", NR, $4; bad=1 }
       if ($5 !~ /^linux\/[a-z0-9]+(,linux\/[a-z0-9]+)*$/) { printf "images.lock:%d: platforms 형식 오류: %s\n", NR, $5; bad=1 }
       if (seen[$1]++) { printf "images.lock:%d: 이름 중복: %s\n", NR, $1; bad=1 }
     }
@@ -279,7 +341,7 @@ sec_validate_rules_lock() {
     {
       if (NF != 4) { printf "rules.lock:%d: 열이 4개가 아닙니다\n", NR; bad=1; next }
       if ($2 !~ /^https:\/\//) { printf "rules.lock:%d: https URL 이 아닙니다: %s\n", NR, $2; bad=1 }
-      if ($3 !~ /^[0-9a-f]{40}$/) { printf "rules.lock:%d: 커밋 해시 형식 오류: %s\n", NR, $3; bad=1 }
+      if ($3 !~ /^[0-9a-f]+$/ || length($3) != 40) { printf "rules.lock:%d: 커밋 해시 형식 오류: %s\n", NR, $3; bad=1 }
       if (seen[$1]++) { printf "rules.lock:%d: 이름 중복: %s\n", NR, $1; bad=1 }
     }
     END { exit bad }
