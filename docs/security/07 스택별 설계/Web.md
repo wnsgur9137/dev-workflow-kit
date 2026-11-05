@@ -27,7 +27,7 @@ exclude_if: [react-native]                      # RN 앱의 react 의존성은 w
 exclude_paths: ["**/node_modules/**", "**/.next/**", "**/dist/**", "**/build/**", "**/coverage/**"]
 ```
 
-## 점검 항목 — 정적 (`/scan-code`)
+## 점검 항목 — 정적 (`/security:scan-code`)
 
 | # | 점검 | 방법 | 대상 | 심각도 |
 |---|---|---|---|---|
@@ -40,7 +40,7 @@ exclude_paths: ["**/node_modules/**", "**/.next/**", "**/dist/**", "**/build/**"
 | W7 | 취약 의존성 | OSV-Scanner | `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml` | CVSS 기준 |
 | W8 | `postinstall` 등 설치 스크립트가 있는 의존성 목록 | 스크립트 검사 (lockfile 메타데이터) | lockfile | info |
 
-## 점검 항목 — 동적 (`/scan-web`, [[OWASP ZAP]] baseline)
+## 점검 항목 — 동적 (`/security:scan-web`, [[OWASP ZAP]] baseline)
 - 보안 헤더(CSP, HSTS, X-Frame-Options, X-Content-Type-Options), 쿠키 속성, 정보 노출(서버 버전, 스택트레이스, 소스맵 공개)
 - Next.js 특화: `/_next/static/**/*.map` 공개 여부를 확인 항목에 추가 (프로덕션 소스맵 노출)
 - 대상은 로컬 `next start`(프로덕션 모드) 권장 — `next dev`는 헤더·에러 페이지가 달라 오탐

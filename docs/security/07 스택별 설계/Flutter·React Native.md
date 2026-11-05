@@ -19,7 +19,7 @@ profile: [flutter, react-native]
 | React Native | `src/`, `App.tsx` 등 (JS/TS) | `ios/` → [[iOS]], `android/` → [[Android]] |
 
 - 네이티브 프로파일은 **해당 하위 경로에만** 적용 (루트 전체에 Swift·Kotlin 규칙을 돌리지 않음)
-- Expo managed 프로젝트처럼 `ios/`·`android/`가 없으면 네이티브 소스 점검은 생략하고 `/scan-app` 산출물 점검으로 대신함
+- Expo managed 프로젝트처럼 `ios/`·`android/`가 없으면 네이티브 소스 점검은 생략하고 `/security:scan-app` 산출물 점검으로 대신함
 
 ---
 

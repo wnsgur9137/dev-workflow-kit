@@ -9,7 +9,7 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 | 플러그인 | 상태 | 커맨드 | 설명 |
 |---|---|---|---|
 | `workflow` | ✅ 사용 가능 | `/workflow:commit` `/workflow:create-pr` `/workflow:pr-review` `/workflow:apply-review` `/workflow:pipeline` | 커밋부터 병합까지 |
-| `security` | 🚧 설계 단계 | `/scan-code` `/scan-app` `/scan-web` (예정) | 로컬·네트워크 격리 보안 점검 ([설계 문서](docs/security/보안%20툴킷.md)) |
+| `security` | 🚧 설계 단계 | `/security:scan-code` `/security:scan-app` `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검 ([설계 문서](docs/security/보안%20툴킷.md)) |
 
 ## 목차
 

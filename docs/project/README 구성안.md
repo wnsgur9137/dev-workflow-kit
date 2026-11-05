@@ -34,7 +34,7 @@ Claude Code에서 쓰는 개발 워크플로·보안 점검 플러그인 모음.
 | 플러그인 | 커맨드 | 설명 |
 |---|---|---|
 | workflow | /commit /create-pr /pr-review /apply-review /pipeline | 커밋부터 병합까지 |
-| security | /scan-code /scan-app /scan-web | 로컬·네트워크 격리 보안 점검 |
+| security | /security:scan-code /security:scan-app /security:scan-web | 로컬·네트워크 격리 보안 점검 |
 
 ## 빠른 시작
 /plugin marketplace add wnsgur9137/dev-workflow-kit
@@ -68,6 +68,6 @@ docs/는 Obsidian vault. docs/00 Home/Home.md에서 시작
 | 의존성, 설정 | README 요약 + `docs/workflow/설정.md` |
 | 커스터마이징 | README 요약 + `docs/workflow/커스터마이징.md` |
 
-> [!warning] 검증 필요
-> - 플러그인 설치 명령 문법(`/plugin marketplace add <owner>/<repo>`, `/plugin install <plugin>@<marketplace>`)을 현재 Claude Code 문서로 확인
-> - 레포에 라이선스 파일이 없음 → 추가 여부 [[미결정 사항]]
+> [!check] 확인됨 (2026-11-05)
+> - 설치 명령 `/plugin marketplace add wnsgur9137/dev-workflow-kit`, `/plugin install workflow@dev-workflow-kit`로 실제 설치 (PR #9)
+> - 라이선스 MIT 추가 (PR #14)

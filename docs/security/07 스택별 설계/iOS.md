@@ -34,13 +34,13 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 | I5 | 취약 의존성 | OSV-Scanner | `Package.resolved`, `Podfile.lock` | CVSS 기준 |
 | I6 | 약한 암호화 (`CC_MD5`, `kCCAlgorithmDES`, `CommonCrypto` ECB) | Semgrep 커스텀 `ios/weak-crypto` | `*.swift`, `*.m` | medium |
 | I7 | WebView JS 브리지·`allowFileAccessFromFileURLs` | Semgrep 커스텀 `ios/webview` | `*.swift` | medium |
-| I8 | 바이너리 점검 (ATS, PIE·스택 보호, 임베디드 URL·키) | [[MobSF]] (`/scan-app` IPA) | `.ipa` | MobSF 기준 |
+| I8 | 바이너리 점검 (ATS, PIE·스택 보호, 임베디드 URL·키) | [[MobSF]] (`/security:scan-app` IPA) | `.ipa` | MobSF 기준 |
 
 ## Semgrep 규칙
 - 공식: `semgrep-rules/swift` (규칙 수가 적음), `generic`
 - 커스텀: `$PLUGIN/rules/custom/ios/` — I3, I4, I6, I7
 
-## /scan-app (IPA)
+## /security:scan-app (IPA)
 - **직접 빌드한 IPA**(Xcode Archive → Export)는 암호화되지 않아 MobSF 정적분석 가능
 - App Store에서 받은 IPA는 FairPlay 암호화로 분석 불가 → 범위 밖
 - MobSF 결과의 ATS 항목은 I2와 중복될 수 있음 → 정규화에서 같은 위치면 병합

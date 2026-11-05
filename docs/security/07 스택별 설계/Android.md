@@ -35,7 +35,7 @@ exclude_paths: ["**/build/**", "**/.gradle/**", "**/generated/**"]
 | A6 | WebView `setJavaScriptEnabled` + `addJavascriptInterface`, `setAllowFileAccess` | Semgrep `java`/`kotlin` 공식 + 커스텀 | `*.kt`, `*.java` | medium |
 | A7 | 약한 암호화·`SecureRandom` 시드 고정·`MODE_WORLD_READABLE` | Semgrep 공식 `java`/`kotlin` | 소스 | medium |
 | A8 | 취약 의존성 | OSV-Scanner | `gradle.lockfile`, `verification-metadata.xml` | CVSS 기준 |
-| A9 | 바이너리 점검 (권한, 인증서, 임베디드 키, 난독화) | [[MobSF]] (`/scan-app` APK·AAB) | `.apk`, `.aab` | MobSF 기준 |
+| A9 | 바이너리 점검 (권한, 인증서, 임베디드 키, 난독화) | [[MobSF]] (`/security:scan-app` APK·AAB) | `.apk`, `.aab` | MobSF 기준 |
 
 ## Semgrep 규칙
 - 공식: `semgrep-rules/kotlin`, `semgrep-rules/java`(Android 관련 포함), `generic`
@@ -45,7 +45,7 @@ exclude_paths: ["**/build/**", "**/.gradle/**", "**/generated/**"]
 - Gradle 프로젝트 대부분은 lockfile이 없음 → OSV 정확도 낮음
 - 대응: lockfile이 없으면 summary에 **`dependencyLocking` 활성화 방법**을 안내 (Gradle `--write-locks`)
 
-## /scan-app (APK·AAB)
+## /security:scan-app (APK·AAB)
 - 릴리스 빌드(`assembleRelease`/`bundleRelease`) 기준으로 판단, 디버그 빌드의 `debuggable`은 별도 표시
 - A2·A4는 소스 점검과 MobSF가 중복될 수 있음 → 정규화에서 병합
 

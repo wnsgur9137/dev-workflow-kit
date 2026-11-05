@@ -21,7 +21,7 @@ tags: [moc]
 
 ## 🛡️ security 플러그인 (설계 단계)
 
-로컬·네트워크 격리 상태로 동작하는 무료 보안 점검(`/scan-code`, `/scan-app`, `/scan-web`) 설계 문서입니다.
+로컬·네트워크 격리 상태로 동작하는 무료 보안 점검(`/security:scan-code`, `/security:scan-app`, `/security:scan-web`) 설계 문서입니다.
 
 - 시작: [[보안 툴킷]] — 요구사항, 아키텍처, 도구, 위협 모델, 결정 기록(ADR-001~005, 008)
 - 스택별 설계: [[스택 프로파일 개요]] → [[iOS]] · [[Android]] · [[Flutter·React Native]] · [[Web]] · [[Server]]
