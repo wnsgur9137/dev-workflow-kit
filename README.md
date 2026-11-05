@@ -1,6 +1,8 @@
-# Review Command for Claude Code
+# Dev Workflow Kit
 
-Claude Code에서 사용할 수 있는 PR 리뷰 자동화 글로벌 커맨드 모음입니다.
+Claude Code에서 사용할 수 있는 개발 워크플로 커맨드 모음입니다. 커밋 → PR 생성 → 리뷰 → 반영 → 병합까지의 흐름을 자동화합니다.
+
+> 저장소 이름이 `pr-review-command`에서 `dev-workflow-kit`으로 바뀌었습니다. 이전 주소는 새 주소로 자동 연결되지만, 로컬 clone의 remote는 `git remote set-url origin <새 주소>`로 갱신하는 것을 권장합니다.
 
 > **글로벌 커맨드**: 이 커맨드들은 `~/.claude/commands/`에 설치되어 **모든 프로젝트에서 사용 가능**합니다. 프로젝트별 오버라이드도 지원됩니다.
 >
@@ -19,12 +21,14 @@ Claude Code에서 사용할 수 있는 PR 리뷰 자동화 글로벌 커맨드 �
   - [code-review-graph 통합](#code-review-graph-통합)
   - [토큰 최적화](#토큰-최적화)
 - [/apply-review](#apply-review)
-- [/ship](#ship)
+- [/pipeline](#pipeline)
+  - [이슈 모드와 규약 문서](#이슈-모드와-규약-문서)
   - [단계와 정지 조건](#단계와-정지-조건)
   - [Draft 유지 순서](#draft-유지-순서)
   - [진행 상태 판정](#진행-상태-판정)
   - [게이트 자동 감지](#게이트-자동-감지)
   - [보호 브랜치에서 시작할 때](#보호-브랜치에서-시작할-때)
+  - [/ship에서 옮겨오기](#ship에서-옮겨오기)
 - [의존성](#의존성)
 - [설정](#설정)
   - [필수 요구사항](#필수-요구사항)
@@ -88,8 +92,9 @@ Claude Code에서 사용할 수 있는 PR 리뷰 자동화 글로벌 커맨드 �
 | `/pr-review --help` | `/pr-review` 도움말 표시 |
 | `/apply-review <PR>` | PR 리뷰 코멘트를 로컬 코드에 반영 |
 | `/apply-review --help` | `/apply-review` 도움말 표시 |
-| `/ship [설명] [옵션]` | 구현부터 병합까지 7단계 파이프라인을 순서대로 수행 (위 커맨드들을 조합) |
-| `/ship --help` | `/ship` 도움말 표시 |
+| `/pipeline [이슈번호] [옵션]` | 작업 파악부터 병합까지 14단계 파이프라인 수행 (위 커맨드들을 조합) |
+| `/pipeline --no-issue "설명"` | 이슈 없이 구현~병합만 수행 (이전 `/ship`) |
+| `/pipeline --help` | `/pipeline` 도움말 표시 |
 
 ---
 
@@ -196,8 +201,10 @@ Claude Code에서 사용할 수 있는 PR 리뷰 자동화 글로벌 커맨드 �
 4. 원격 푸시 확인 및 필요 시 `git push -u` (사용자 확인 후, force push는 금지)
 5. PR 템플릿 로드 (`.github/PULL_REQUEST_TEMPLATE.md` 등 여러 경로 순차 탐색, 없으면 기본 본문)
 6. 본문 작성: 커밋 prefix(`feat:`/`fix:`/`refactor:`/`update:`) 기반 분류, HTML 주석 유지, 데모 자리 비움
-7. PR 생성 (`mcp__github__create_pull_request` 우선, 실패 시 사용자 승인 후 `gh pr create` 폴백)
-8. URL / Draft·Open 상태 / base ← head / 커밋 수 / 변경 파일 / 다음 단계 보고
+   - **라벨**: 저장소에 이미 있는 라벨 중 커밋 prefix·diff에 맞는 것을 모두 고른다 (새 라벨은 만들지 않음, 맞는 라벨이 없으면 생략하고 보고)
+   - **연결 이슈·마일스톤**: 브랜치의 이슈 번호·작업 ID로 연결 이슈를 찾아 `Closes #N`, PR 마일스톤은 연결 이슈의 것을 사용 (임의 생성 금지)
+7. PR 생성 (`mcp__github__create_pull_request` 우선, 실패 시 사용자 승인 후 `gh pr create` 폴백). MCP는 라벨·마일스톤을 받지 않으므로 생성 직후 붙이고 확인
+8. URL / Draft·Open 상태 / base ← head / 커밋 수 / 변경 파일 / 라벨 / 마일스톤·연결 이슈 / 다음 단계 보고
 
 ### Base 브랜치 자동 추론
 
@@ -470,122 +477,146 @@ PR에 달린 리뷰 코멘트를 분석하여 로컬 코드에 자동으로 반�
 
 ---
 
-## /ship
+## /pipeline
 
-작업을 **구현부터 병합까지** 한 번에 흘려보냅니다. 2~5단계는 위 커맨드들을 재구현하지 않고 그대로 호출합니다.
+작업 파악부터 병합까지 **14단계**를 순서대로 수행합니다. 9~12단계는 위 커맨드들을 재구현하지 않고 그대로 호출합니다. 이전 `/ship`의 역할은 `--no-issue` 모드가 대신합니다.
 
 ```
-1. 구현        2. /commit      3. /create-pr(Draft)   4. /pr-review
-5. /apply-review   6. Ready 전환(CI)   7. 병합
+ 0 저장소·규약 확인
+ 1 현재 작업 파악   2 예정 작업 파악   3 진행 작업 확정
+ 4 레퍼런스(조건부) 5 기존 설계 파악   6 기획서(조건부)   7 디자인(조건부)
+ 8 개발·게이트
+ 9 /commit   10 Draft PR   11 /pr-review   12 /apply-review   13 Ready + CI   14 병합
 ```
 
 ### 사용법
 
 ```
-/ship [작업 설명] [--loop=N] [--from=N] [--stop-at=N] [--base=<branch>] [--branch=<name>] [--no-cleanup] [--post] [-y|--yes] [-h|--help]
+/pipeline [이슈번호] [--from=N] [--stop-at=N] [--merge=critical|auto|confirm] [--type=<라벨>] [--area=<라벨>] [--base=<branch>] [--branch=<name>] [--no-cleanup] [--post] [-h|--help]
+/pipeline --no-issue "작업 설명" [options]
 ```
 
-인자 없이 호출하면 현재 브랜치 상태를 판정해 **다음에 해야 할 단계부터** 이어서 진행합니다.
+인자 없이 호출하면 실물 상태를 판정해 **다음에 해야 할 단계부터** 이어서 진행합니다.
 
 ### 예시
 
 ```
-/ship                        # 현재 상태 판정 → 다음 단계부터 끝까지
-/ship "W6 App 조립"          # 작업 설명을 주고 1단계부터
-/ship --from=4               # 리뷰 단계부터 재개 (실패 후 이어받기)
-/ship --stop-at=6            # Ready 전환까지만, 병합은 하지 않음
-/ship --loop=10              # 구현을 지속 반복 모드로 최대 10회
-/ship --post                 # 병합 후 진행 문서 갱신·실기기 체크리스트까지
+/pipeline                                   # 상태 판정 → 다음 단계부터
+/pipeline 12                                # 이슈 #12로 바로 진행
+/pipeline --from=11 --merge=confirm         # 리뷰부터 재개, 병합 직전 항상 확인
+/pipeline --no-issue "README 오타 수정" --stop-at=13   # 이슈 없이, 병합은 하지 않음
 ```
 
 ### 옵션
 
-| 옵션 | 짧은 별칭 | 설명 |
-|------|------|------|
-| `--loop=N` | | 1단계(구현)를 지속 반복 모드로, 최대 N회. **미지정이 기본**(직접 구현) |
-| `--from=N` | | N단계부터 재개 |
-| `--stop-at=N` | | N단계까지만 수행 |
-| `--base=<branch>` | | base 브랜치 지정 (기본: 자동 추론) |
-| `--branch=<name>` | | 작업 브랜치 이름 지정 (기본: 기존 병합 이력에서 패턴을 뽑아 제안) |
-| `--no-cleanup` | | 병합 후 브랜치 삭제 생략 |
-| `--post` | | 병합 후 진행 문서 갱신·실기기 체크리스트 출력 |
-| `--yes` | `-y` | 병합 직전 확인 생략 |
-| `--help` | `-h` | 도움말을 출력하고 종료 (아무것도 실행하지 않음) |
+| 옵션 | 설명 |
+|------|------|
+| `<이슈번호>` | 해당 이슈로 바로 진행 (1~3단계의 선택 부분 생략) |
+| `--no-issue "설명"` | 이슈 없이 0 → 8 → 9~14만 수행 (이전 `/ship`). 규약 문서 불필요 |
+| `--from=N` / `--stop-at=N` | N단계부터 재개 / N단계까지만 |
+| `--merge=` | 14단계 병합 처리: `critical`(기본) · `auto` · `confirm` |
+| `--type=` / `--area=` | 라벨 강제 지정 (규약의 라벨 목록에 있는 이름) |
+| `--base=<branch>` | base 브랜치 지정 (기본: 자동 추론) |
+| `--branch=<name>` | 작업 브랜치 이름 지정 (기본: 규약 → 기존 병합 이력 패턴) |
+| `--no-cleanup` | 병합 후 브랜치 삭제 생략 |
+| `--post` | 병합 후 진행 문서 갱신·실기기 체크리스트 출력 |
+| `-h`, `--help` | 도움말을 출력하고 종료 |
+
+### 이슈 모드와 규약 문서
+
+이슈 모드는 저장소의 **파이프라인 규약 문서**를 따릅니다. 라벨 체계·실행 매트릭스(4·6·7·8단계 실행 여부)·게이트·문서 경로는 이 커맨드가 아니라 규약 문서가 정본입니다.
+
+- 탐색 순서: `CLAUDE.md`·`AGENTS.md`에 적힌 경로 → `docs/**/PIPELINE.md`
+- 이슈 모드에서 규약 문서가 없으면 **중단**하고 `--no-issue`를 안내합니다. 라벨·경로를 지어내지 않습니다.
+- 기획서(6단계)는 코드와 같은 PR에 싣지 않고 **선행 PR로 먼저 병합**합니다.
 
 ### 단계와 정지 조건
 
-| # | 단계 | 게이트 | 실패 시 |
-|---|------|--------|---------|
-| 0 | 사전 점검 | 보호 브랜치 아님 | 중단 |
-| 1 | 구현 | 빌드·테스트·린트 통과 | **중단** |
-| 2 | `/commit` | 관심사·계층별 분리 | — |
-| 3 | `/create-pr` | **항상 Draft 로 생성** | 중단 |
-| 4 | `/pr-review` | — | — |
-| 5 | `/apply-review` | 반영 후 게이트 재통과 | **중단** |
-| 6 | Ready 전환 | CI green | **중단** + 실패 로그 |
-| 7 | 병합 | CI green 재확인 | 중단 |
+| 정지 조건 | 단계 |
+|-----------|------|
+| 규약 문서 없음(이슈 모드) | 0 |
+| 설계와 어긋나는 작업 | 5 |
+| 게이트 실패, 수정 20회 초과 | 8, 12 |
+| 리뷰 CRITICAL 미해소 | 12 → 13 |
+| CI red | 13 |
+| merge conflict | 14 |
 
-게이트 실패·CI red·리뷰 CRITICAL·merge conflict 중 하나라도 있으면 **그 단계에서 멈추고** 다음으로 넘어가지 않습니다. 중단 시 `--from=N` 재개 방법을 함께 알립니다.
+정지하면 **그 단계에서 멈추고** 원인과 `--from=N` 재개 방법을 알립니다.
 
-**병합(7단계)은 `--yes` 가 없으면 직전에 확인**합니다. 되돌리기 비용이 가장 큰 단계이기 때문입니다.
+**병합(14단계) 처리 (`--merge`)**
+
+| 값 | 동작 |
+|----|------|
+| `critical` (기본) | CRITICAL 0건(또는 모두 반영)·미반영 WARNING 없음·CI 통과면 확인 없이 병합, 하나라도 걸리면 확인 |
+| `confirm` | 항상 병합 직전에 확인 |
+| `auto` | 정지 조건에 걸리지 않으면 확인 없이 병합 |
 
 ### Draft 유지 순서
 
-`/ship` 이 PR 을 **항상 Draft 로 만드는** 이유입니다.
+PR을 **항상 Draft로 만드는** 이유입니다.
 
-CI 가 Draft PR 을 건너뛰는 설정이면, Ready 전환 후의 모든 push 가 CI 를 재실행시킵니다(`synchronize`).
+CI가 Draft PR을 건너뛰는 설정이면, Ready 전환 후의 모든 push가 CI를 재실행시킵니다(`synchronize`).
 
 ```
 잘못된 순서: 생성 → Ready → 리뷰 → 반영(push) → CI 2회
-/ship 의 순서: 생성(Draft) → 리뷰 → 반영 → Ready → CI 1회
+/pipeline 순서: 생성(Draft) → 리뷰 → 반영 → Ready → CI 1회
 ```
 
-3~5단계를 Draft 에서 끝내고 6단계에서 한 번만 Ready 로 올리므로 CI 가 1회로 끝납니다. CI 1회가 10분을 넘는 프로젝트에서 차이가 큽니다.
+10~12단계를 Draft에서 끝내고 13단계에서 한 번만 Ready로 올리므로 CI가 1회로 끝납니다.
 
 ### 진행 상태 판정
 
-상태 파일을 만들지 않습니다. 매 단계 시작 전 **git·GitHub 에 직접 물어** 어디까지 됐는지 판정합니다.
+상태 파일을 만들지 않습니다. 매 실행 시작 시 **git·GitHub에 직접 물어** 어디까지 됐는지 판정합니다.
 
 | 판정 | 근거 |
 |------|------|
-| 구현·커밋 완료 | 워킹트리 clean **그리고** `<base>..HEAD` 에 커밋 존재 |
+| 진행 작업 확정 | 이슈에 "진행 중" 라벨 + 이슈 번호가 든 작업 브랜치 |
+| 기획서 병합됨 | base에 기획서 파일 존재 |
+| 개발·커밋 완료 | 워킹트리 clean **그리고** `<base>..HEAD`에 커밋 존재 |
 | PR 생성됨 | `list_pull_requests(head: 현재 브랜치, state: open)` |
-| 리뷰 완료 | 그 PR 에 자체 리뷰 결과 코멘트 존재 |
-| Ready 상태 | PR 의 `draft` 필드 |
-| CI 결과 | `list_workflow_jobs(run_id)` 의 `conclusion` |
+| 리뷰 완료 / 반영 완료 | 그 PR에 자체 리뷰 코멘트 / 이후 반영 내역 코멘트 존재 |
+| Ready 상태 | PR의 `draft` 필드 |
+| CI 결과 | `list_workflow_jobs(run_id)`의 `conclusion` |
 
-상태 파일은 반드시 실제 진행과 어긋나므로 쓰지 않습니다. 사람이 중간에 손댄 것도 그대로 인식됩니다.
-
-**인자와 실물이 어긋나면 실물을 신뢰합니다.** `--from=N` 으로 지정한 단계의 선행 조건이 충족되지 않으면 중단하고 무엇이 빠졌는지 알립니다(예: `--from=4` 인데 열린 PR 이 없음 → "3단계가 먼저 필요하다").
+**인자와 실물이 어긋나면 실물을 신뢰합니다.** `--from=N`의 선행 조건이 없으면 중단하고 무엇이 빠졌는지 알립니다(예: `--from=11`인데 열린 PR이 없음 → "10단계가 먼저 필요하다").
 
 ### 게이트 자동 감지
 
-`.github/workflows/*.yml` 에서 **CI 가 실제로 실행하는 명령**을 추출해 로컬 게이트로 씁니다. CI 와 같은 것을 먼저 돌리므로 6단계 CI 실패를 앞당겨 잡습니다.
+규약에 area별 게이트 표가 있으면 그것을, 없으면 `.github/workflows/*.yml`에서 **CI가 실제로 실행하는 명령**을 추출해 로컬 게이트로 씁니다.
 
-추출한 명령은 **준비**(checkout·툴체인 선택·의존성 설치·프로젝트 생성·캐시)와 **검증**(lint·format·build·test)으로 나눕니다. 준비는 로컬에 이미 갖춰져 있으면 건너뛰고, 검증은 항상 실행합니다. `|| true` 가 붙은 명령은 실패해도 통과하므로 게이트에서 제외합니다.
+추출한 명령은 **준비**(checkout·툴체인·의존성 설치·캐시)와 **검증**(lint·format·typecheck·build·test)으로 나눕니다. 준비는 로컬에 갖춰져 있으면 건너뛰고, 검증은 항상 실행합니다. `|| true`가 붙은 명령은 게이트에서 제외합니다.
 
-**docs-only 변경이면 빌드·테스트를 돌리지 않습니다.** CI 조차 건너뛰는 변경에 로컬 빌드를 돌릴 이유가 없습니다. 대신 **문서 게이트**를 씁니다 — HTML 태그 균형·목차 앵커 정합, Markdown 상대 링크의 대상 존재 여부. 문서도 깨집니다.
+**docs-only 변경이면** 빌드·테스트 대신 **문서 게이트**(목차 앵커 정합, 상대 링크 대상 존재, HTML 태그 균형)를 씁니다. 그래도 게이트가 없으면 `package.json`·`Makefile`·`CLAUDE.md`를 찾고, 끝내 없으면 **게이트 없이 진행하되 PR 본문에 명시**합니다.
 
-감지 실패 시 `package.json` scripts·`Makefile`·`CLAUDE.md` 순으로 찾고, 그래도 없으면 사용자에게 묻습니다. 끝내 없으면 **게이트 없이 진행하되 그 사실을 명시**합니다.
+### 인증
+
+- 환경 변수 `<OWNER>_GITHUB_TOKEN`(owner 대문자, `-`는 `_`)이 있으면 그 토큰을 `gh` 호출마다 붙여 씁니다. 예: owner `octo-org` → `OCTO_ORG_GITHUB_TOKEN`. 회사 계정 `GITHUB_TOKEN`이 개인 저장소 권한을 가로막는 경우를 위한 장치입니다.
+- GitHub MCP가 연결되지 않았으면 같은 일을 `gh` CLI로 합니다.
 
 ### 보호 브랜치에서 시작할 때
 
-작업은 늘 `main` 에서 시작하므로, 보호 브랜치라고 무조건 멈추면 커맨드를 쓸 수 없습니다. **시작 단계에 따라 갈립니다.**
-
 | 시작 단계 | 의미 | 동작 |
 |-----------|------|------|
-| 1~2 (구현·커밋) | 정상 | **작업 브랜치를 만든다** |
-| 3 이상 | 이상 — PR 브랜치가 체크아웃돼 있어야 한다 | **중단** |
+| 0~8 | 정상 | **작업 브랜치를 만든다** |
+| 9 이상 | 이상 — PR 브랜치가 체크아웃돼 있어야 한다 | **중단** |
 
-브랜치 이름은 `--branch` → 없으면 `git log --merges` 의 기존 브랜치명에서 패턴을 뽑아 제안하고 확인받습니다(`--yes` 면 제안값 사용). 병합된 브랜치는 삭제돼 `git branch -r` 에 없지만 **병합 커밋 메시지에는 남아 있습니다.**
-
-보호 브랜치에 커밋하지 않는 것이 목적이지, 멈추는 것이 목적이 아닙니다.
+브랜치 이름은 `--branch` → 규약 → `git log --merges`의 기존 브랜치명 패턴 → 기본 `<type>/<이슈번호>-<slug>` 순으로 정합니다. 보호 브랜치에 커밋하지 않는 것이 목적이지, 멈추는 것이 목적이 아닙니다.
 
 ### 보고 규칙
 
 - 리뷰 단계에서 **작성자와 리뷰어가 동일**하다는 사실을 리뷰 결과와 PR 코멘트에 명시합니다. 변경 500줄 초과면 외부 리뷰어를 권고합니다.
-- 스크린샷·실기기 검증처럼 자동으로 확인할 수 없는 것은 **미수행이라고 적습니다**. 비워두고 넘어가지 않습니다.
+- 스크린샷·실기기 검증처럼 자동으로 확인할 수 없는 것은 **미수행이라고 적습니다**.
 - 게이트 실패를 우회하려고 테스트를 지우거나 약화시키지 않습니다.
+
+### /ship에서 옮겨오기
+
+| 이전 | 이후 |
+|------|------|
+| `/ship "작업 설명"` | `/pipeline --no-issue "작업 설명"` |
+| `/ship --from=4` (리뷰부터) | `/pipeline --from=11` |
+| `/ship --stop-at=6` (Ready까지) | `/pipeline --stop-at=13` |
+| `/ship --yes` | `/pipeline --merge=auto` |
+| `/ship --loop=N` | 제거됨 — 8단계는 직접 구현하고 게이트 통과까지 고칩니다 |
 
 ---
 
@@ -598,8 +629,9 @@ CI 가 Draft PR 을 건너뛰는 설정이면, Ready 전환 후의 모든 push �
 | **GitHub MCP 서버** | `/pr-review`·`/apply-review` 필수 / `/create-pr` 선택 | PR 정보 수집·코멘트 게시에 사용. 프로젝트 `.mcp.json`에 설정(`examples/mcp.json.example` 복사). `/create-pr`은 미설정·실패 시 `gh` CLI로 폴백 |
 | **`GITHUB_PERSONAL_ACCESS_TOKEN`** | GitHub MCP 사용 시 필수 | GitHub API 인증용 환경변수 |
 | **`gh` CLI** | `/apply-review` 답글 게시 시 필요 / `/create-pr` 폴백 시 필요 | `/apply-review`의 리뷰 코멘트 스레드 답글 게시, GitHub MCP 불가 시 `/create-pr`의 PR 생성 폴백 경로. `gh auth login` 인증 필요 |
-| **`~/.claude/commands/`** | 필수 | 글로벌 커맨드 정의 파일 (`commit.md`, `create-pr.md`, `pr-review.md`, `apply-review.md`, `ship.md`) |
-| **`/commit`·`/create-pr`·`/pr-review`·`/apply-review`** | `/ship` 필수 | `/ship`은 2~5단계에서 이 커맨드들을 재구현하지 않고 그대로 호출한다 |
+| **`~/.claude/commands/`** | 필수 | 글로벌 커맨드 정의 파일 (`commit.md`, `create-pr.md`, `pr-review.md`, `apply-review.md`, `pipeline.md`) |
+| **`/commit`·`/create-pr`·`/pr-review`·`/apply-review`** | `/pipeline` 필수 | `/pipeline`은 9~12단계에서 이 커맨드들을 재구현하지 않고 그대로 호출한다 |
+| **파이프라인 규약 문서** | `/pipeline` 이슈 모드 필수 | 대상 저장소의 `docs/**/PIPELINE.md` 등. `--no-issue` 모드는 불필요 |
 | **`~/.claude/templates/`** | 필수 | 출력 템플릿 및 플랫폼별 리뷰 기준 |
 | **oh-my-claudecode (OMC)** | 불필요 | `/pr-review`, `/apply-review`는 OMC와 독립적으로 동작. OMC 설치 여부와 무관하게 사용 가능 |
 | **code-review-graph** | 선택 | 설치+그래프 빌드 시 AST 기반 정밀 분석 자동 활용. 미설치 시 기존 Grep/Glob 방식으로 폴백 |
@@ -656,9 +688,11 @@ cp examples/mcp.json.example .mcp.json
 ```
 ~/.claude/
 ├── commands/                        # 글로벌 커맨드 정의
+│   ├── commit.md
 │   ├── create-pr.md
 │   ├── pr-review.md
-│   └── apply-review.md
+│   ├── apply-review.md
+│   └── pipeline.md
 ├── templates/
 │   ├── review-criteria/             # 리뷰 기준 (커스터마이징 권장)
 │   │   ├── ios.md
