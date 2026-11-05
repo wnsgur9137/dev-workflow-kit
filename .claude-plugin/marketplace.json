@@ -4,7 +4,7 @@
     "name": "wnsgur9137"
   },
   "metadata": {
-    "description": "Claude Code 개발 워크플로 플러그인 모음 — 커밋, PR 생성, 리뷰, 리뷰 반영, 작업~병합 파이프라인",
+    "description": "Claude Code 개발 워크플로·보안 점검 플러그인 모음 — 커밋~병합 파이프라인(workflow), 로컬·네트워크 격리 보안 점검(security)",
     "version": "1.0.0"
   },
   "plugins": [
@@ -16,6 +16,16 @@
         "name": "wnsgur9137"
       },
       "source": "./plugins/workflow",
+      "license": "MIT"
+    },
+    {
+      "name": "security",
+      "description": "로컬·네트워크 격리 보안 점검 (/scan-code, /scan-app, /scan-web). Docker 호환 런타임 필수",
+      "version": "0.1.0",
+      "author": {
+        "name": "wnsgur9137"
+      },
+      "source": "./plugins/security",
       "license": "MIT"
     }
   ]
