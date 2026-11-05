@@ -40,7 +40,7 @@ profile: server
 | S6 | `docker-compose`의 `privileged: true`, 호스트 포트 `0.0.0.0` 바인딩 DB | 커스텀 검사 (YAML 파싱) | `docker-compose*.yml` | medium |
 | S7 | 취약 의존성 | OSV-Scanner | 위 lockfile | CVSS 기준 |
 
-## 동적 점검 (`/scan-web`)
+## 동적 점검 (`/security:scan-web`)
 - API 서버도 [[OWASP ZAP]] **baseline**만 사용 (passive). OpenAPI 기반 `zap-api-scan`은 기본이 active라 사용하지 않음 → [[ADR-005 Active Scan 금지]]
 - 확인 항목: 에러 응답의 스택트레이스 노출, 보안 헤더, CORS 와일드카드, 서버 버전 헤더
 
