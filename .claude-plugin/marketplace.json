@@ -1,0 +1,21 @@
+{
+  "name": "dev-workflow-kit",
+  "owner": {
+    "name": "wnsgur9137"
+  },
+  "metadata": {
+    "description": "Claude Code development workflow plugins: commit, PR creation, review, review application, and an end-to-end pipeline.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "workflow",
+      "description": "커밋 → Draft PR → 리뷰 → 반영 → 병합까지의 개발 워크플로 커맨드 (/commit, /create-pr, /pr-review, /apply-review, /pipeline)",
+      "version": "1.0.0",
+      "author": {
+        "name": "wnsgur9137"
+      },
+      "source": "./plugins/workflow"
+    }
+  ]
+}

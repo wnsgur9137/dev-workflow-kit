@@ -317,7 +317,7 @@ git add <기획서 경로>
 
 ## 9단계: /commit
 
-`~/.claude/commands/commit.md`의 절차를 따른다. 재구현하지 마라.
+`${CLAUDE_PLUGIN_ROOT}/commands/commit.md`의 절차를 따른다. 재구현하지 마라.
 
 - **관심사·계층별로 커밋을 나눈다.** 도메인/데이터/화면/테스트/문서를 한 덩어리로 묶지 않는다.
 - **순수 파일 이동은 독립 커밋**으로 둔다. `git mv`만 하고 내용을 고치지 않는다.
@@ -327,7 +327,7 @@ git add <기획서 경로>
 
 ## 10단계: Draft PR
 
-`~/.claude/commands/create-pr.md`의 절차를 따르되, **PR은 항상 Draft로 생성한다**(`draft: true`, `--open` 금지). Ready 전환은 13단계의 일이다(원칙 A).
+`${CLAUDE_PLUGIN_ROOT}/commands/create-pr.md`의 절차를 따르되, **PR은 항상 Draft로 생성한다**(`draft: true`, `--open` 금지). Ready 전환은 13단계의 일이다(원칙 A).
 
 본문에 다음을 반드시 포함한다.
 
@@ -349,7 +349,7 @@ git add <기획서 경로>
 
 ## 11단계: /pr-review
 
-`~/.claude/commands/pr-review.md`의 절차를 따른다. 대상은 10단계에서 만든 PR 번호.
+`${CLAUDE_PLUGIN_ROOT}/commands/pr-review.md`의 절차를 따른다. 대상은 10단계에서 만든 PR 번호.
 
 - 이 파이프라인에서는 **작성자와 리뷰어가 동일**하다. 리뷰 결과와 PR 코멘트에 그 사실을 명시한다. 구조적 사각이 남는다는 점을 숨기지 마라.
 - 변경 500줄 초과면 외부 리뷰어를 권고하는 문장을 넣는다.
@@ -360,7 +360,7 @@ git add <기획서 경로>
 
 ## 12단계: /apply-review
 
-`~/.claude/commands/apply-review.md`의 절차를 따른다.
+`${CLAUDE_PLUGIN_ROOT}/commands/apply-review.md`의 절차를 따른다.
 
 - CRITICAL·WARNING은 반영한다. SUGGESTION은 판단하되 **미반영 사유를 남긴다**.
 - 반영 후 **게이트를 다시 통과**해야 한다(8단계와 동일한 검증 명령).
