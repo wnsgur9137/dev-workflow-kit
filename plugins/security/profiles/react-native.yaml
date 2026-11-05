@@ -1,0 +1,15 @@
+# React Native (JS/TS) — docs/security/07 스택별 설계/Flutter·React Native.md
+name: react-native
+description: React Native / Expo 앱. 하위 ios/·android/ 는 네이티브 프로파일이 따로 적용된다
+detect:
+  - { file: "**/package.json", has_dependency: [react-native, expo] }
+exclude_paths: ["**/node_modules/**", "**/ios/Pods/**", "**/android/build/**"]
+semgrep:
+  rulesets: [javascript, typescript]
+sca:
+  lockfiles: ["**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml"]
+  missing_lockfile_hint: "package-lock.json / yarn.lock / pnpm-lock.yaml 을 커밋하세요"
+artifact:
+  types: [apk, aab, ipa]
+  analyzer: mobsf
+checklist: react-native
