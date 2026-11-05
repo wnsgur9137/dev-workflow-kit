@@ -1,3 +1,8 @@
+---
+description: PR 리뷰 코멘트를 코드에 반영하고, 리뷰 코멘트 스레드마다 반영 결과를 답글로 남깁니다.
+argument-hint: "<PR_NUMBER_OR_URL> [--reviewer=username] [--auto-commit] [--branch=name] [--help]"
+---
+
 # Apply Review Command
 
 PR 리뷰 코멘트를 코드에 반영합니다.

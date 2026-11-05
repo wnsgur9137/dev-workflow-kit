@@ -1,6 +1,6 @@
 {
   "name": "workflow",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "커밋 → Draft PR → 리뷰 → 반영 → 병합까지의 개발 워크플로 커맨드 (/commit, /create-pr, /pr-review, /apply-review, /pipeline)",
   "author": {
     "name": "wnsgur9137"

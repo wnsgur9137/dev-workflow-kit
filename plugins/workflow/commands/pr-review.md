@@ -1,3 +1,8 @@
+---
+description: PR을 플랫폼별 기준으로 코드 리뷰하고, 확인 후 GitHub 인라인 코멘트로 게시합니다.
+argument-hint: "<PR_URL> [--mode=strict|normal|relaxed] [--focus=항목,...] [--skip=항목,...] [--help]"
+---
+
 # PR Review Command
 
 PR URL: $ARGUMENTS
