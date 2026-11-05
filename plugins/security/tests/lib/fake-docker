@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# 테스트용 가짜 docker — 환경 변수로 동작을 바꾼다.
+#   FAKE_INFO_FAIL=1         docker info 실패 (엔진 꺼짐)
+#   FAKE_COMPOSE=<버전>       docker compose version --short 출력 (빈 값이면 실패)
+#   FAKE_COMPONENTS=<문자열>  docker version 의 서버 구성요소
+#   FAKE_MEM=<bytes>          docker info MemTotal
+#   FAKE_IMAGES=<ref ...>     docker image inspect 가 성공하는 이미지
+#   FAKE_LOG=<파일>           호출 기록
+[ -n "${FAKE_LOG:-}" ] && echo "docker $*" >>"$FAKE_LOG"
+case "$1" in
+  info)
+    [ "${FAKE_INFO_FAIL:-0}" = 1 ] && exit 1
+    case "$*" in *MemTotal*) echo "${FAKE_MEM-8589934592}" ;; *) echo ok ;; esac
+    ;;
+  compose)
+    [ -n "${FAKE_COMPOSE-2.29.0}" ] || exit 1
+    echo "${FAKE_COMPOSE-2.29.0}"
+    ;;
+  version) echo "${FAKE_COMPONENTS-Engine containerd runc docker-init }" ;;
+  context) echo "fake" ;;
+  image)
+    for r in ${FAKE_IMAGES:-}; do [ "$r" = "$3" ] && exit 0; done
+    exit 1
+    ;;
+  run | pull) echo "가짜 docker 로 $1 을 실행하면 안 됩니다" >&2; exit 99 ;;
+  *) exit 0 ;;
+esac
