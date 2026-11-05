@@ -17,7 +17,7 @@ created: 2026-11-05
 ## 허용목록 (`$CONF/targets.allowlist`)
 ```text
 # 한 줄에 하나. 내가 소유·운영 권한을 가진 대상만.
-http://host.docker.internal:3000
+http://host.docker.internal:3000      # Docker Desktop·OrbStack (Colima는 host.lima.internal → [[Docker 런타임]])
 https://staging.my-app.example
 ```
 - 허용목록 수정은 **사용자가 직접**. Claude가 이 파일을 수정하지 못하게 권한으로 막는다. → [[Claude Code 권한 정책]]
