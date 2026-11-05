@@ -4,7 +4,7 @@
     "name": "wnsgur9137"
   },
   "metadata": {
-    "description": "Claude Code development workflow plugins: commit, PR creation, review, review application, and an end-to-end pipeline.",
+    "description": "Claude Code 개발 워크플로 플러그인 모음 — 커밋, PR 생성, 리뷰, 리뷰 반영, 작업~병합 파이프라인",
     "version": "1.0.0"
   },
   "plugins": [
