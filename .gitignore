@@ -27,4 +27,4 @@
 .mcp.json
 
 # Obsidian per-user UI state
-.obsidian/workspace*.json
+**/.obsidian/workspace*.json
