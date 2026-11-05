@@ -2,12 +2,11 @@
 name: android
 description: Kotlin / Java Android 앱
 detect:
-  - "**/AndroidManifest.xml"
+  # 근거 파일(app/src/main/AndroidManifest.xml)에서 위로 올라가 가장 가까운 Gradle 루트를 하위 프로젝트로 잡는다
+  - { glob: "**/AndroidManifest.xml", root_markers: [settings.gradle, settings.gradle.kts] }
   # build.gradle 만으로는 일반 JVM 서버와 구분되지 않으므로 Android Gradle 플러그인 사용 여부로 판정
   - { file: "**/build.gradle", has_dependency: [com.android.application, com.android.library] }
   - { file: "**/build.gradle.kts", has_dependency: [com.android.application, com.android.library] }
-# 감지 근거 파일에서 위로 올라가며 가장 가까운 Gradle 루트를 하위 프로젝트 경로로 쓴다
-root_markers: [settings.gradle, settings.gradle.kts]
 exclude_paths: ["**/build/**", "**/.gradle/**", "**/generated/**"]
 semgrep:
   rulesets: [kotlin, java]

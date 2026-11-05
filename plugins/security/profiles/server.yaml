@@ -7,10 +7,9 @@ detect:
   - "**/Pipfile"
   - "**/go.mod"
   - "**/pom.xml"
-  - "**/src/main/resources/application*"
+  # Spring 설정 파일은 모듈 루트(빌드 파일이 있는 가장 가까운 폴더)로 올려 잡는다
+  - { glob: "**/src/main/resources/application*", root_markers: [pom.xml, build.gradle, build.gradle.kts] }
   - { file: "**/package.json", has_dependency: [express, fastify, "@nestjs/core", koa, hono] }
-# src/main/resources/application* 는 모듈 루트(빌드 파일이 있는 폴더)로 올려 잡는다
-root_markers: [pom.xml, build.gradle, build.gradle.kts, settings.gradle, settings.gradle.kts]
 exclude_if: [android]        # 같은 하위 프로젝트가 Android 이면 server 는 적용하지 않는다
 exclude_paths: ["**/node_modules/**", "**/.venv/**", "**/venv/**", "**/target/**", "**/build/**", "**/dist/**", "**/__pycache__/**"]
 semgrep:

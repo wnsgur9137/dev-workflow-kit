@@ -2,7 +2,8 @@
 name: ios
 description: Swift / Objective-C iOS 앱
 detect: ["**/*.xcodeproj", "**/*.xcworkspace", "**/Package.swift", "**/Podfile"]
-exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**"]
+# Flutter 의 macos/ 데스크톱 러너는 iOS 앱이 아니다
+exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**", "**/macos/**"]
 semgrep:
   rulesets: [swift]
 sca:

@@ -51,7 +51,8 @@ def _strip_comment(line: str) -> str:
             out.append(ch)
             if ch == quote:
                 quote = None
-        elif ch in ("'", '"'):
+        elif ch in ("'", '"') and (i == 0 or line[i - 1] in " \t[{,:-"):
+            # 따옴표는 토큰 시작에서만 문자열을 연다 (Flutter's 같은 값 중간의 ' 는 문자)
             quote = ch
             out.append(ch)
         elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
@@ -184,7 +185,7 @@ def _parse_map(lines, idx, indent):
         if rest == "":
             if idx < len(lines) and lines[idx][1] > indent:
                 out[key], idx = _parse_block(lines, idx, lines[idx][1])
-            elif idx < len(lines) and lines[idx][1] == indent and lines[idx][2].startswith("- "):
+            elif idx < len(lines) and lines[idx][1] == indent and (lines[idx][2].startswith("- ") or lines[idx][2] == "-"):
                 # 들여쓰기 없이 바로 이어지는 리스트 (key:\n- a)
                 out[key], idx = _parse_list(lines, idx, indent)
             else:
@@ -249,7 +250,7 @@ def validate_profile(p, fname: str) -> list[str]:
     errs = []
     if not isinstance(p, dict):
         return [f"{fname}: 최상위가 매핑이 아닙니다"]
-    allowed = {"name", "description", "detect", "root_markers", "exclude_if", "exclude_paths",
+    allowed = {"name", "description", "detect", "exclude_if", "exclude_paths",
                "semgrep", "sca", "artifact", "checklist", "checks"}
     for k in p:
         if k not in allowed:
@@ -271,6 +272,14 @@ def validate_profile(p, fname: str) -> list[str]:
             if isinstance(d, str):
                 if not d:
                     errs.append(f"{fname}: detect[{i}] 가 비었습니다")
+            elif isinstance(d, dict) and "glob" in d:
+                # 형식 3: { glob, root_markers } — 깊은 근거 파일을 모듈 루트로 올려 잡는다
+                if set(d) != {"glob", "root_markers"}:
+                    errs.append(f"{fname}: detect[{i}] 는 glob·root_markers 두 키만 가집니다")
+                elif not isinstance(d["glob"], str) or not d["glob"]:
+                    errs.append(f"{fname}: detect[{i}].glob 은 문자열이어야 합니다")
+                elif not _is_str_list(d["root_markers"]) or not d["root_markers"]:
+                    errs.append(f"{fname}: detect[{i}].root_markers 는 비어 있지 않은 문자열 리스트여야 합니다")
             elif isinstance(d, dict):
                 if set(d) != {"file", "has_dependency"}:
                     errs.append(f"{fname}: detect[{i}] 는 file·has_dependency 두 키만 가집니다")
@@ -280,9 +289,9 @@ def validate_profile(p, fname: str) -> list[str]:
                 if not _is_str_list(d["has_dependency"]) or not d["has_dependency"]:
                     errs.append(f"{fname}: detect[{i}].has_dependency 는 문자열 리스트여야 합니다")
             else:
-                errs.append(f"{fname}: detect[{i}] 는 glob 문자열 또는 {{file, has_dependency}} 여야 합니다")
+                errs.append(f"{fname}: detect[{i}] 는 glob 문자열, {{file, has_dependency}}, {{glob, root_markers}} 중 하나여야 합니다")
 
-    for key in ("root_markers", "exclude_if", "exclude_paths"):
+    for key in ("exclude_if", "exclude_paths"):
         if key in p and not (p[key] == [] or _is_str_list(p[key])):
             errs.append(f"{fname}: {key} 는 문자열 리스트여야 합니다")
 
@@ -336,7 +345,7 @@ def load_profiles(profile_dir: str) -> dict:
             continue
         path = os.path.join(profile_dir, fn)
         try:
-            with open(path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8-sig") as f:
                 data = parse_yaml(f.read())
         except YamlError as e:
             errs.append(f"{fn}: {e}")
@@ -498,15 +507,21 @@ def dependency_names(path: str) -> set:
                 if isinstance(d, dict):
                     names.update(d.keys())
     elif base == "pubspec.yaml":
-        section = None
+        section, child_indent = None, None
         for line in text.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
             if re.match(r"^\S", line):
                 m = re.match(r"^(dependencies|dev_dependencies|dependency_overrides)\s*:", line)
-                section = m.group(1) if m else None
+                section, child_indent = (m.group(1) if m else None), None
             elif section:
-                m = re.match(r"^ {2}([A-Za-z0-9_]+)\s*:", line)
-                if m:
-                    names.add(m.group(1))
+                indent = len(line) - len(line.lstrip(" "))
+                if child_indent is None:
+                    child_indent = indent  # 섹션의 첫 하위 줄 들여쓰기를 기준으로 (2칸·4칸 모두)
+                if indent == child_indent:
+                    m = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+                    if m:
+                        names.add(m.group(1))
     elif base == "requirements.txt":
         for line in text.splitlines():
             m = _PEP508_NAME.match(line.strip())
@@ -596,28 +611,49 @@ def _is_under(child: str, parent: str) -> bool:
 
 
 def detect(target: str, profiles: dict, forced=None):
+    """[(프로파일, 하위 경로)] — 하위 경로 안에서 제외할 더 깊은 경로는 detect_full 참고."""
+    return [(n, r) for n, r, _ in detect_full(target, profiles, forced)]
+
+
+def detect_full(target: str, profiles: dict, forced=None):
+    """[(프로파일, 하위 경로, [제외 하위 경로])]
+
+    제외 하위 경로: 상위 경로로 합쳐진 프로파일 안에 exclude_if 대상 프로파일이 더 깊은 경로에서
+    감지된 경우 그 경로. 예) 루트 package.json 에 react 가 있는 모노레포의 web(.) 은
+    RN 앱 apps/mobile 을 제외 경로로 가진다 (감지 규칙 4항: 하위 프로젝트 단위 적용).
+    """
     target = os.path.realpath(target)
     if forced:
         unknown = [f for f in forced if f not in profiles]
         if unknown:
             raise SystemExit(f"알 수 없는 프로파일: {', '.join(unknown)} (사용 가능: {', '.join(sorted(profiles))})")
-        return [(f, ".") for f in forced]
+        seen, out = set(), []
+        for f in forced:
+            if f not in seen:
+                seen.add(f)
+                out.append((f, ".", []))
+        return out
 
     entries = walk_target(target)
     dep_cache: dict = {}
-    hits: dict = {}  # profile -> set(root)
+    raw_hits: dict = {}  # profile -> set(root)  (병합 전)
     for name, p in profiles.items():
         roots = set()
         excludes = p.get("exclude_paths") or []
         for item in p["detect"]:
-            pattern = item if isinstance(item, str) else item["file"]
+            if isinstance(item, str):
+                pattern, markers = item, None
+            elif "glob" in item:
+                pattern, markers = item["glob"], item["root_markers"]
+            else:
+                pattern, markers = item["file"], None
             for rel in entries:
                 if not glob_match(pattern, rel):
                     continue
                 if any(glob_match(x, rel) or glob_match(x, rel + "/") for x in excludes):
                     continue
-                if isinstance(item, dict):
-                    full = os.path.join(target, rel)
+                full = os.path.join(target, rel)
+                if isinstance(item, dict) and "has_dependency" in item:
                     if not os.path.isfile(full):
                         continue
                     if full not in dep_cache:
@@ -626,25 +662,35 @@ def detect(target: str, profiles: dict, forced=None):
                         continue
                     root = _parent(rel)
                 else:
-                    full = os.path.join(target, rel)
                     # 번들형 디렉터리(.xcodeproj 등)·파일 모두 그 부모가 하위 프로젝트
                     root = _parent(rel)
                     if os.path.isdir(full) and not rel.endswith(WALK_BUNDLE_SUFFIXES):
                         root = rel
-                roots.add(_resolve_root(target, root, p.get("root_markers")))
+                    if markers:
+                        root = _resolve_root(target, root, markers)
+                roots.add(root)
         if roots:
-            # 상위 경로가 이미 있으면 하위 경로는 합친다
-            collapsed = {r for r in roots if not any(o != r and _is_under(r, o) for o in roots)}
-            hits[name] = collapsed
+            raw_hits[name] = roots
 
-    # exclude_if — 같은 하위 프로젝트 경로에서 다른 프로파일이 감지되면 제외
+    # exclude_if (1차) — 같은 하위 프로젝트 경로에서 다른 프로파일이 감지되면 그 경로는 제외
+    hits: dict = {}
+    for name, roots in raw_hits.items():
+        excl = profiles[name].get("exclude_if") or []
+        kept = {r for r in roots if not any(r in raw_hits.get(o, set()) for o in excl)}
+        if kept:
+            hits[name] = kept
+
     result = []
     for name in sorted(hits):
-        excl = profiles[name].get("exclude_if") or []
-        for root in sorted(hits[name]):
-            if any(root in hits.get(o, set()) for o in excl):
-                continue
-            result.append((name, root))
+        roots = hits[name]
+        # 상위 경로가 이미 있으면 하위 경로는 합친다
+        collapsed = sorted(r for r in roots if not any(o != r and _is_under(r, o) for o in roots))
+        excl_names = profiles[name].get("exclude_if") or []
+        for root in collapsed:
+            # exclude_if (2차) — 합쳐진 상위 경로 안에서 exclude_if 대상이 감지된 더 깊은 경로
+            inner = sorted({r for o in excl_names for r in raw_hits.get(o, set())
+                            if r != root and _is_under(r, root)})
+            result.append((name, root, inner))
     return result
 
 
@@ -689,13 +735,13 @@ def main(argv=None) -> int:
             print(f"디렉터리가 아닙니다: {args.target}", file=sys.stderr)
             return 1
         forced = [x.strip() for x in args.profiles.split(",") if x.strip()]
-        found = detect(args.target, profiles, forced or None)
+        found = detect_full(args.target, profiles, forced or None)
         if args.format == "json":
-            print(json.dumps([{"profile": n, "path": r, "label": format_profile_label(n, r)}
-                              for n, r in found], ensure_ascii=False))
+            print(json.dumps([{"profile": n, "path": r, "exclude": ex, "label": format_profile_label(n, r)}
+                              for n, r, ex in found], ensure_ascii=False))
         else:
-            for n, r in found:
-                print(f"{n}\t{r}")
+            for n, r, ex in found:
+                print(f"{n}\t{r}\t{','.join(ex)}")
         return 0
     return 1
 
