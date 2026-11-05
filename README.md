@@ -9,7 +9,7 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 | 플러그인 | 상태 | 커맨드 | 설명 |
 |---|---|---|---|
 | `workflow` | ✅ 사용 가능 | `/workflow:commit` `/workflow:create-pr` `/workflow:pr-review` `/workflow:apply-review` `/workflow:pipeline` | 커밋부터 병합까지 |
-| `security` | 🚧 설계 단계 | `/security:scan-code` `/security:scan-app` `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검 ([설계 문서](docs/security/보안%20툴킷.md)) |
+| `security` | 🚧 설계 단계 | `/security:scan-code` `/security:scan-app` `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
 
 ## 목차
 
@@ -17,6 +17,7 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 - [설치](#설치)
   - [이전 설치 방식(복사)에서 옮겨오기](#이전-설치-방식복사에서-옮겨오기)
 - [요구사항](#요구사항)
+  - [Docker 런타임](#docker-런타임)
 - [커맨드](#커맨드)
 - [커스터마이징](#커스터마이징)
 - [문서](#문서)
@@ -66,8 +67,29 @@ mv ~/.claude/templates/{review,review-criteria,apply-review} ~/.claude/backup/te
 |---|---|---|
 | **GitHub MCP 서버** | `pr-review`·`apply-review` 필수, `create-pr` 선택 | `cp examples/mcp.json.example .mcp.json` 후 사용. `.mcp.json`은 커밋하지 않습니다 |
 | **`GITHUB_PERSONAL_ACCESS_TOKEN`** | GitHub MCP 사용 시 | 환경 변수로만 주입 |
-| **Docker** | GitHub MCP 사용 시 | 공식 GitHub MCP 서버를 Docker 이미지로 실행 |
+| **Docker 호환 런타임** | GitHub MCP 사용 시, `security` 플러그인 전체 | GitHub MCP 서버와 보안 도구를 모두 컨테이너로 실행. 아래 [Docker 런타임](#docker-런타임) 참고 |
 | **`gh` CLI** | `apply-review` 답글, `create-pr` 폴백, `pipeline` | `gh auth login` 필요 |
+
+### Docker 런타임
+
+Docker CLI + Compose v2 + dockerd 엔진이면 됩니다. **무료로 쓰려면 Colima를 권장**합니다.
+
+| 런타임 | 비용 |
+|---|---|
+| **Colima** (권장) | 무료 (MIT) |
+| Docker Desktop | 개인·교육·소규모 사업(직원 250명 미만, 연 매출 1천만 달러 미만)은 무료, **그 외 업무 사용은 유료** |
+| Rancher Desktop (dockerd 모드) | 무료 |
+| OrbStack | 개인 무료, 상업 사용 유료 |
+
+```bash
+brew install colima docker docker-compose
+colima start --cpu 4 --memory 8      # security 플러그인의 MobSF까지 쓰면 메모리 8GB 권장
+docker info && docker compose version
+```
+
+`docker compose`를 찾을 수 없다고 나오면 Homebrew의 compose 플러그인 경로를 등록하세요: `~/.docker/config.json`에 `"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]` 추가 (Intel Mac은 `/usr/local/lib/docker/cli-plugins`).
+
+Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple Silicon 주의사항: [Docker 런타임](docs/security/01%20개요/Docker%20런타임.md)
 
 자세한 설정·의존성: [docs/workflow/설정.md](docs/workflow/설정.md) · 왜 GitHub MCP인가: [docs/workflow/GitHub MCP.md](docs/workflow/GitHub%20MCP.md)
 
