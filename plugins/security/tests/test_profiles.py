@@ -43,6 +43,15 @@ empty:
                     profiles.parse_yaml(bad)
 
 
+class YamlEdgeTest(unittest.TestCase):
+    def test_apostrophe_inside_plain_value_and_bom(self):
+        self.assertEqual(profiles.parse_yaml("description: Flutter's app # 주석\n"), {"description": "Flutter's app"})
+        self.assertEqual(profiles.parse_yaml("\ufeffname: x\n".lstrip("\ufeff")), {"name": "x"})
+
+    def test_bare_dash_item_after_key(self):
+        self.assertEqual(profiles.parse_yaml("a:\n-\n  b: 1\n"), {"a": [{"b": 1}]})
+
+
 class SchemaTest(unittest.TestCase):
     def _write(self, d, name, body):
         with open(os.path.join(d, name), "w", encoding="utf-8") as f:
@@ -170,13 +179,59 @@ class DetectTest(unittest.TestCase):
         self.assertEqual(self.detect("dart-package"), [])
 
     def test_forced_profiles(self):
-        self.assertEqual(self.detect("none", ["web", "server"]), [("web", "."), ("server", ".")])
+        self.assertEqual(self.detect("none", ["web", "server", "web"]), [("web", "."), ("server", ".")])
         with self.assertRaises(SystemExit):
             self.detect("none", ["cobol"])
 
     def test_labels(self):
         self.assertEqual(profiles.format_profile_label("flutter", "."), "flutter")
         self.assertEqual(profiles.format_profile_label("android", "android"), "android:android/")
+
+    def _tree(self, d, files):
+        for rel, body in files.items():
+            path = os.path.join(d, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(body)
+
+    def test_root_markers_do_not_hoist_other_detect_items(self):
+        """PR #18 W5: 루트 Android 앱 + backend(express) — server 가 루트로 올라가 사라지면 안 된다."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "settings.gradle": "include ':app'",
+                "app/build.gradle": "plugins { id 'com.android.application' }",
+                "app/src/main/AndroidManifest.xml": "<manifest/>",
+                "backend/package.json": '{"dependencies": {"express": "4"}}',
+                "tools/requirements.txt": "flask==3.0\n",
+            })
+            self.assertEqual(profiles.detect(d, self.profiles),
+                             [("android", "."), ("server", "backend"), ("server", "tools")])
+
+    def test_collapsed_root_keeps_exclude_if_subpaths(self):
+        """PR #18 W6: 루트 devDependencies 의 react 로 web 이 . 이 돼도 RN 앱 경로는 제외 경로로 남는다."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "package.json": '{"devDependencies": {"react": "18"}}',
+                "apps/web/package.json": '{"dependencies": {"react": "18"}}',
+                "apps/mobile/package.json": '{"dependencies": {"react": "18", "react-native": "0.74"}}',
+            })
+            self.assertEqual(profiles.detect_full(d, self.profiles),
+                             [("react-native", "apps/mobile", []), ("web", ".", ["apps/mobile"])])
+
+    def test_pubspec_four_space_indent(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {"pubspec.yaml": "name: a\ndependencies:\n    flutter:\n        sdk: flutter\n    http: ^1.0.0\n"})
+            self.assertEqual(profiles.dependency_names(os.path.join(d, "pubspec.yaml")), {"flutter", "http"})
+            self.assertEqual(profiles.detect(d, self.profiles), [("flutter", ".")])
+
+    def test_flutter_macos_runner_is_not_ios(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "pubspec.yaml": "dependencies:\n  flutter:\n    sdk: flutter\n",
+                "ios/Runner.xcodeproj/project.pbxproj": "x",
+                "macos/Runner.xcodeproj/project.pbxproj": "x",
+            })
+            self.assertEqual(profiles.detect(d, self.profiles), [("flutter", "."), ("ios", "ios")])
 
     def test_symlinked_dirs_are_not_followed(self):
         with tempfile.TemporaryDirectory() as d:

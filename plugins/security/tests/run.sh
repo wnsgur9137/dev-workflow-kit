@@ -18,7 +18,21 @@ for f in "${files[@]}"; do
   case "$f" in /*) ;; *) f="$TESTS_DIR/$f" ;; esac
   [ -f "$f" ] || continue
   echo "# $(basename "$f")"
-  for fn in $(bash -c ". '$f' >/dev/null 2>&1; declare -F" | awk '$3 ~ /^test_/ { print $3 }'); do
+  # 문법 오류가 있으면 그 뒤 테스트가 조용히 빠지므로 파일 단위로 실패 처리한다
+  if ! bash -n "$f" 2>"${TMPDIR:-/tmp}/sec-test-syntax.$$"; then
+    failed=$((failed + 1)); failures="$failures $(basename "$f")(문법)"
+    echo "FAIL $(basename "$f") 문법 오류"; sed 's/^/    /' "${TMPDIR:-/tmp}/sec-test-syntax.$$"
+    rm -f "${TMPDIR:-/tmp}/sec-test-syntax.$$"
+    continue
+  fi
+  rm -f "${TMPDIR:-/tmp}/sec-test-syntax.$$"
+  fns=$(bash -c ". '$f' >/dev/null 2>&1; declare -F" | awk '$3 ~ /^test_/ { print $3 }')
+  if [ -z "$fns" ]; then
+    failed=$((failed + 1)); failures="$failures $(basename "$f")(테스트 0개)"
+    echo "FAIL $(basename "$f") 테스트 함수가 없습니다"
+    continue
+  fi
+  for fn in $fns; do
     out=$(
       cd "$TESTS_DIR" || exit 1
       SEC_TMP=$(mktemp -d "${TMPDIR:-/tmp}/sec-test.XXXXXX")

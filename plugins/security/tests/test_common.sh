@@ -177,8 +177,8 @@ test_rules_lock_validation() {
 test_preflight_d1_no_docker_cli() {
   load_common
   mkdir -p "$SEC_TMP/emptybin"
-  # docker 가 없는 PATH (기본 유틸만)
-  PATH="$SEC_TMP/emptybin:/usr/bin:/bin" assert_status 1 sec_preflight code
+  # docker 가 없는 PATH — D1 은 command -v 만 쓰므로 빈 폴더 하나면 된다 (Linux 의 /usr/bin/docker 회피)
+  PATH="$SEC_TMP/emptybin" assert_status 1 sec_preflight code
   assert_contains "$OUT" "[D1]"
   assert_contains "$OUT" "colima"
 }
@@ -263,4 +263,82 @@ test_detect_sh_labels() {
   assert_eq "$(printf '%s\n' "$tsv" | sec_profile_labels)" "android:android/, flutter, ios:ios/"
   assert_eq "$(sec_detect_profiles "$TESTS_DIR/fixtures/detect/none" | sec_profile_labels)" "(감지 없음 — 공통 기반만 적용)"
   assert_eq "$(sec_detect_profiles "$TESTS_DIR/fixtures/detect/none" web | sec_profile_labels)" "web"
+}
+
+# --- 리뷰 반영 회귀 테스트 (PR #18) -----------------------------------------------
+
+test_validate_rejects_case_variants_of_forbidden_paths() {
+  load_common
+  local upper_home lower_home
+  upper_home=$(printf '%s' "$HOME" | tr '[:lower:]' '[:upper:]')
+  lower_home=$(printf '%s' "$HOME" | tr '[:upper:]' '[:lower:]')
+  mkdir -p "$HOME/projects/app"
+  # 대소문자를 구분하지 않는 APFS 에서는 이 경로들이 실제로 존재한다
+  if [ -d "$upper_home" ]; then
+    assert_status 1 sec_validate_target "$upper_home" dir
+    assert_status 1 sec_validate_target "$lower_home" dir
+    assert_status 1 sec_validate_target "$HOME/.SSH" dir
+    assert_status 1 sec_validate_target /USR/bin dir
+    assert_status 1 sec_validate_target /private/ETC dir
+  fi
+  # 파일시스템과 무관하게 비교 자체가 대소문자를 무시하는지 (이중 장치)
+  _sec_is_within "/USERS/ME/.SSH/keys" "/Users/me/.ssh" || fail "대소문자 무시 비교 실패"
+  _sec_is_within "/Users/me/projects" "/Users/me/.ssh" && fail "다른 경로를 포함으로 판정"
+  return 0
+}
+
+test_validate_rejects_symlinked_credential_dir_targets() {
+  load_common
+  # ~/.aws -> ~/dotfiles/aws (stow·chezmoi)
+  mkdir -p "$HOME/dotfiles/aws"
+  rmdir "$HOME/.aws"
+  ln -s "$HOME/dotfiles/aws" "$HOME/.aws"
+  assert_status 1 sec_validate_target "$HOME/.aws" dir
+  assert_status 1 sec_validate_target "$HOME/dotfiles/aws" dir
+  assert_status 1 sec_validate_target "$HOME/dotfiles" dir
+  assert_status 0 sec_validate_target "$HOME/projects/app" dir
+}
+
+test_validate_rejects_more_credential_dirs() {
+  load_common
+  local d
+  for d in .gradle .android .m2 .cargo .password-store; do
+    mkdir -p "$HOME/$d/sub"
+    assert_status 1 sec_validate_target "$HOME/$d/sub" dir
+  done
+}
+
+test_validate_file_kind_only_accepts_app_artifacts() {
+  load_common
+  echo x >"$HOME/.zsh_history"
+  echo x >"$HOME/projects/app/App.IPA"
+  assert_status 1 sec_validate_target "$HOME/.zsh_history" file
+  assert_contains "$OUT" "앱 산출물"
+  assert_status 0 sec_validate_target "$HOME/projects/app/App.IPA" file
+  assert_status 1 sec_validate_target "$HOME/projects/app" weird
+  assert_contains "$OUT" "알 수 없는 대상 종류"
+}
+
+test_validate_works_with_cdpath_and_dash_names() {
+  load_common
+  export CDPATH="$HOME"
+  mkdir -p "$HOME/projects/-"
+  cd "$HOME/projects" || fail "cd 실패"
+  local got
+  got=$(sec_validate_target app dir) || fail "CDPATH 환경에서 상대 경로 거부: $got"
+  assert_eq "$got" "$(cd -P "$HOME/projects/app" && pwd -P)"
+  got=$(sec_validate_target - dir) || fail "'-' 이름 폴더 거부: $got"
+  assert_eq "$got" "$(cd -P "$HOME/projects/-" && pwd -P)"
+}
+
+test_new_run_is_atomic_under_concurrency() {
+  load_common
+  sec_init_dirs
+  local i
+  for i in 1 2 3 4 5 6; do
+    (sec_new_run code >/dev/null 2>&1 && echo "$SEC_RUN_ID" >>"$SEC_TMP/ids") &
+  done
+  wait
+  assert_eq "$(wc -l <"$SEC_TMP/ids" | tr -d ' ')" 6
+  assert_eq "$(sort -u "$SEC_TMP/ids" | wc -l | tr -d ' ')" 6 "(run-id 중복)"
 }
