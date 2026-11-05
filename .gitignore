@@ -22,3 +22,9 @@
 
 # Logs
 *.log
+
+# MCP server config (personal; copy from examples/mcp.json.example)
+.mcp.json
+
+# Obsidian per-user UI state
+.obsidian/workspace*.json
