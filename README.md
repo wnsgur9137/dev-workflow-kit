@@ -624,6 +624,8 @@ CI 가 Draft PR 을 건너뛰는 설정이면, Ready 전환 후의 모든 push �
 cp examples/mcp.json.example .mcp.json
 ```
 
+> **기존 clone 사용자**: 이전 버전은 `.mcp.json`을 저장소에서 추적했습니다. 이 변경 이후 `git pull`하면 git이 로컬 `.mcp.json`을 삭제하므로, **pull 전에 백업**(`cp .mcp.json .mcp.json.bak`)한 뒤 pull 후 다시 복원하세요.
+
 [`examples/mcp.json.example`](examples/mcp.json.example) 내용:
 ```json
 {
