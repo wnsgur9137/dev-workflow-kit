@@ -19,8 +19,11 @@ profile: web
 
 ## 감지 (`profiles/web.yaml`)
 ```yaml
-detect: ["**/package.json"]                     # react-native 프로파일이 감지되면 web은 제외
-signals: ["next.config.*", "vite.config.*", "**/pages/**", "**/app/**/page.tsx"]
+detect:
+  - "**/next.config.*"
+  - "**/vite.config.*"
+  - { file: "**/package.json", has_dependency: [next, react, react-dom, vue, svelte, "@angular/core", vite] }
+exclude_if: [react-native]                      # RN 앱의 react 의존성은 web으로 보지 않음
 exclude_paths: ["**/node_modules/**", "**/.next/**", "**/dist/**", "**/build/**", "**/coverage/**"]
 ```
 

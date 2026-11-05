@@ -42,7 +42,8 @@ exclude_paths: ["**/.dart_tool/**", "**/build/**", "**/*.g.dart", "**/*.freezed.
 
 ## React Native (`profiles/react-native.yaml`)
 ```yaml
-detect: ["**/package.json:react-native"]   # package.json의 dependencies에 react-native가 있을 때
+detect:
+  - { file: "**/package.json", has_dependency: [react-native, expo] }
 exclude_paths: ["**/node_modules/**", "**/ios/Pods/**", "**/android/build/**"]
 ```
 
@@ -65,5 +66,4 @@ exclude_paths: ["**/node_modules/**", "**/ios/Pods/**", "**/android/build/**"]
 
 > [!warning] 검증 필요
 > - Semgrep의 Dart 지원 상태(실험적 여부)와 커스텀 규칙 작성 가능 범위
-> - `detect`의 "package.json 내용 조건" 구현 방식 (스크립트에서 JSON 파싱)
 > - OSV-Scanner의 `pubspec.lock`·`pnpm-lock.yaml` 지원

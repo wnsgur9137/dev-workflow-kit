@@ -23,10 +23,10 @@ profile: server
 | Python | `pyproject.toml`, `requirements*.txt`, `Pipfile` | `poetry.lock`, `requirements*.txt`, `Pipfile.lock`, `uv.lock` |
 | Go | `go.mod` | `go.mod`/`go.sum` |
 | Java/Kotlin | `pom.xml`, `build.gradle*` + `src/main/resources/application*` | `pom.xml`, `gradle.lockfile` |
-| Node | `package.json` + 서버 프레임워크(express, fastify, nest) 의존성 | `package-lock.json` 등 |
+| Node | `{ file: "**/package.json", has_dependency: [express, fastify, "@nestjs/core", koa, hono] }` | `package-lock.json` 등 |
 
-- Android 프로파일과 `build.gradle*`가 겹침 → `AndroidManifest.xml`이 있으면 Android, 없으면 Server
-- Node는 web 프로파일과 겹칠 수 있음 → 둘 다 적용 (프론트+API 혼합 저장소)
+- Java/Kotlin은 `build.gradle*`가 Android와 겹치므로 `exclude_if: [android]` — 같은 하위 프로젝트에 `AndroidManifest.xml`이 있으면 그 경로는 Android만 적용 ([[스택 프로파일 개요#감지 규칙]] 4번)
+- Node는 서버 프레임워크 의존성이 있을 때만 Server로 판정한다. Next.js API 라우트·서버 액션은 web 프로파일(W4·W5)이 담당하고, Next.js에 express 등 커스텀 서버를 붙인 경우에만 web·server가 함께 적용된다
 
 ## 점검 항목
 
