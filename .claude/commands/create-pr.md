@@ -101,6 +101,31 @@ git ls-remote origin refs/heads/<현재 브랜치> | head -1
 - `## 📸 동작 데모`는 자동으로 채울 수 없으므로 Before/After 자리만 비워두고 **"<!-- 스크린샷 첨부 필요 -->"** 안내를 남긴다.
 - 제목(title): 가장 대표적인 커밋 메시지 또는 커밋들의 공통 주제를 기반으로 70자 이내로 작성. `type: 설명` 형식 유지(예: `feat: ...`, `fix: ...`).
 
+### 6-1. 라벨 선택 (필수)
+
+PR에는 **항상 라벨을 붙인다.** 저장소에 이미 있는 라벨 중에서만 고르고, 새 라벨은 만들지 않는다.
+
+```bash
+gh label list -R <owner>/<repo> --limit 200 --json name,description
+```
+
+- 커밋 prefix와 diff 내용에 맞는 라벨을 모두 고른다. 예: `feat` → Feature, `fix` → BugFix, `refactor` → Refactor, `chore`·설정 파일 → Setting, `docs` → Docs, `test` → Test, 의존성·lock 파일 변경 → Dependency, 배포·CI 설정 → Deploy, LLM·AI 관련 → AI.
+- 라벨 이름은 이모지까지 포함해 저장소의 표기를 **그대로** 쓴다(예: `✨Feature`).
+- 저장소에 라벨이 하나도 없거나 맞는 라벨이 없으면 라벨 없이 진행하되, 사후 보고에 그 사실을 적는다.
+
+### 6-2. 연결 이슈와 마일스톤
+
+저장소가 마일스톤을 쓰면 PR도 같은 마일스톤에 넣는다.
+
+```bash
+gh api repos/<owner>/<repo>/milestones --jq '.[] | "\(.number) \(.title)"'
+gh issue list -R <owner>/<repo> --state open --json number,title,milestone
+```
+
+- 연결 이슈는 브랜치 이름의 이슈 번호(`feat/12-…`), 커밋·브랜치의 작업 ID(예: `M0-3`)와 같은 ID가 제목에 든 이슈(`[M0-3] …`) 순서로 찾는다. 찾으면 본문에 `Closes #N`을 넣는다(기획서 PR이면 `Refs #N`).
+- PR 마일스톤은 연결 이슈의 마일스톤을 그대로 쓴다. 연결 이슈가 없으면 작업 ID 접두사(`M0`)로 시작하는 열린 마일스톤을 쓴다.
+- 연결 이슈를 못 찾았는데 마일스톤이 있는 저장소면, 이슈 없이 진행할지 사용자에게 확인한다(AskUserQuestion). 이슈·마일스톤을 임의로 새로 만들지 않는다.
+
 ### 7. PR 생성 (GitHub MCP 우선)
 
 다음 순서로 시도한다.
@@ -115,6 +140,8 @@ git ls-remote origin refs/heads/<현재 브랜치> | head -1
 
 생성 성공 시 PR URL을 굵게 표시해 보고한다.
 
+MCP의 PR 생성 도구는 라벨·마일스톤을 받지 않으므로, 생성 직후 6-1의 라벨과 6-2의 마일스톤을 붙인다(`mcp__github__update_issue`의 `labels`·`milestone`, 없으면 `gh pr edit <번호> --add-label "<라벨>" --milestone "<마일스톤>"`). 붙인 뒤 `gh pr view <번호> --json labels,milestone,closingIssuesReferences`로 확인한다.
+
 #### 7-B. MCP 불가 시 폴백
 
 `mcp__github__create_pull_request`가 도구 목록에 없거나 호출이 실패하면, 사용자에게 다음과 같이 확인한다 (AskUserQuestion):
@@ -125,15 +152,17 @@ git ls-remote origin refs/heads/<현재 브랜치> | head -1
 
 ```bash
 gh auth status            # 인증 확인
-
-# --open 인자가 없을 때만 --draft 옵션을 추가하여 실행합니다.
 gh pr create \
   --base "<base>" \
   --head "<현재 브랜치>" \
   --title "<title>" \
-  --body-file - <<'EOF'
+  --body-file <(cat <<'EOF'
 <본문>
 EOF
+) \
+  --label "<라벨1>" --label "<라벨2>" \   # 6-1에서 고른 라벨
+  [--milestone "<마일스톤>"] \              # 6-2에서 정한 마일스톤(있을 때)
+  [--draft]                # --open 인자가 없을 때만 --draft 추가
 ```
 
 - 본문은 HEREDOC으로 안전하게 전달한다. 본문에 `'EOF'`가 포함되면 별도 구분자(`'OMC_PR_EOF'` 등)로 바꾼다.
@@ -148,6 +177,8 @@ PR 생성 결과를 다음 형식으로 요약 출력한다.
 - URL: <PR URL>
 - 상태: Draft | Open
 - Base ← Head: <base> ← <head>
+- 라벨: <붙인 라벨 목록 | 없음(이유)>
+- 마일스톤 / 연결 이슈: <마일스톤> / Closes #N | 없음
 - 커밋 수: N개
 - 변경 파일: M개 (+추가 / -삭제)
 - 다음 단계: <스크린샷 첨부 / 리뷰어 지정 / Ready for review 전환 등 권장 액션>
