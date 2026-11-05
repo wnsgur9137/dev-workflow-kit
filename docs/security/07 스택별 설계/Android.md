@@ -20,14 +20,13 @@ profile: android
 ## 감지 (`profiles/android.yaml`)
 ```yaml
 detect:
-  - "**/AndroidManifest.xml"
+  - { glob: "**/AndroidManifest.xml", root_markers: [settings.gradle, settings.gradle.kts] }
   - { file: "**/build.gradle", has_dependency: [com.android.application, com.android.library] }
   - { file: "**/build.gradle.kts", has_dependency: [com.android.application, com.android.library] }
-root_markers: [settings.gradle, settings.gradle.kts]
 exclude_paths: ["**/build/**", "**/.gradle/**", "**/generated/**"]
 ```
 - `build.gradle*` 파일 존재만으로는 일반 JVM 서버(Spring 등)와 구분되지 않아 **Android Gradle 플러그인 id**가 있을 때만 감지한다 (P0 구현 시 변경).
-- `AndroidManifest.xml`은 `app/src/main/`에 있으므로 `root_markers`로 가장 가까운 Gradle 루트(`settings.gradle*`가 있는 폴더)를 하위 프로젝트 경로로 잡는다. Flutter·RN의 `android/`가 이렇게 잡힌다.
+- `AndroidManifest.xml`은 `app/src/main/`에 있으므로 감지 항목의 `root_markers`로 가장 가까운 Gradle 루트(`settings.gradle*`가 있는 폴더)를 하위 프로젝트 경로로 잡는다. Flutter·RN의 `android/`가 이렇게 잡힌다.
 
 ## 점검 항목
 
