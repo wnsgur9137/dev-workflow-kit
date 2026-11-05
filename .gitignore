@@ -28,3 +28,7 @@
 
 # Obsidian per-user UI state
 **/.obsidian/workspace*.json
+
+# Python
+__pycache__/
+*.pyc
