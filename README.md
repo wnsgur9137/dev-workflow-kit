@@ -4,12 +4,14 @@ Claude Code에서 사용할 수 있는 개발 워크플로 커맨드 모음입�
 
 > 저장소 이름이 `pr-review-command`에서 `dev-workflow-kit`으로 바뀌었습니다. 이전 주소는 새 주소로 자동 연결되지만, 로컬 clone의 remote는 `git remote set-url origin <새 주소>`로 갱신하는 것을 권장합니다.
 
-> **글로벌 커맨드**: 이 커맨드들은 `~/.claude/commands/`에 설치되어 **모든 프로젝트에서 사용 가능**합니다. 프로젝트별 오버라이드도 지원됩니다.
+> **플러그인**: Claude Code 플러그인 마켓플레이스로 배포됩니다. 한 번 설치하면 **모든 프로젝트에서 `/workflow:<커맨드>`** 로 사용할 수 있습니다. 아래 [설치](#설치)를 참고하세요.
 >
 > **필수 조건**: `/pr-review`와 `/apply-review`는 **GitHub MCP 서버**가 프로젝트의 `.mcp.json`에 설정되어 있어야 동작합니다. `/create-pr`은 GitHub MCP를 우선 사용하되, 없거나 실패하면 사용자 승인 후 `gh` CLI로 폴백합니다. 아래 [설정](#설정) 섹션을 먼저 확인하세요.
 
 ## 목차
 
+- [설치](#설치)
+  - [이전 설치 방식(복사)에서 옮겨오기](#이전-설치-방식복사에서-옮겨오기)
 - [Why GitHub MCP?](#why-github-mcp)
 - [커맨드 목록](#커맨드-목록)
 - [/commit](#commit)
@@ -32,8 +34,42 @@ Claude Code에서 사용할 수 있는 개발 워크플로 커맨드 모음입�
 - [의존성](#의존성)
 - [설정](#설정)
   - [필수 요구사항](#필수-요구사항)
-  - [글로벌 디렉토리 구조](#글로벌-디렉토리-구조)
+  - [디렉토리 구조](#디렉토리-구조)
   - [커스터마이징](#커스터마이징)
+
+---
+
+## 설치
+
+Claude Code에서 마켓플레이스를 추가하고 `workflow` 플러그인을 설치합니다.
+
+```
+/plugin marketplace add wnsgur9137/dev-workflow-kit
+/plugin install workflow@dev-workflow-kit
+```
+
+터미널에서는 같은 일을 다음 명령으로 할 수 있습니다.
+
+```bash
+claude plugin marketplace add wnsgur9137/dev-workflow-kit
+claude plugin install workflow@dev-workflow-kit
+```
+
+- 업데이트: `/plugin marketplace update dev-workflow-kit` 후 `/plugin update workflow@dev-workflow-kit`
+- 플러그인 커맨드는 **`/workflow:<커맨드>`** 형식으로 호출합니다 (예: `/workflow:commit`, `/workflow:pr-review <URL>`). 이 문서의 `/commit` 등은 `/workflow:commit`을 줄여 쓴 것입니다.
+- 설치 없이 한 세션만 시험하려면: `claude --plugin-dir <clone 경로>/plugins/workflow`
+
+### 이전 설치 방식(복사)에서 옮겨오기
+
+이전에는 `~/.claude/commands/`와 `~/.claude/templates/`에 파일을 복사해 설치했습니다. 플러그인 설치 후에는 복사본을 정리하세요. 남겨 두면 `/commit`(복사본)과 `/workflow:commit`(플러그인)이 따로 존재해 업데이트가 반영되지 않은 쪽을 실행할 수 있습니다.
+
+```bash
+mkdir -p ~/.claude/backup/commands ~/.claude/backup/templates
+mv ~/.claude/commands/{commit,create-pr,pr-review,apply-review,pipeline,ship}.md ~/.claude/backup/commands/ 2>/dev/null
+mv ~/.claude/templates/{review,review-criteria,apply-review} ~/.claude/backup/templates/ 2>/dev/null
+```
+
+리뷰 이력(`~/.claude/review-history/`)과 외부 레포 캐시(`~/.claude/repo-cache/`)는 플러그인과 무관하므로 그대로 두면 됩니다.
 
 ---
 
@@ -629,10 +665,9 @@ CI가 Draft PR을 건너뛰는 설정이면, Ready 전환 후의 모든 push가 
 | **GitHub MCP 서버** | `/pr-review`·`/apply-review` 필수 / `/create-pr` 선택 | PR 정보 수집·코멘트 게시에 사용. 프로젝트 `.mcp.json`에 설정(`examples/mcp.json.example` 복사). `/create-pr`은 미설정·실패 시 `gh` CLI로 폴백 |
 | **`GITHUB_PERSONAL_ACCESS_TOKEN`** | GitHub MCP 사용 시 필수 | GitHub API 인증용 환경변수 |
 | **`gh` CLI** | `/apply-review` 답글 게시 시 필요 / `/create-pr` 폴백 시 필요 | `/apply-review`의 리뷰 코멘트 스레드 답글 게시, GitHub MCP 불가 시 `/create-pr`의 PR 생성 폴백 경로. `gh auth login` 인증 필요 |
-| **`~/.claude/commands/`** | 필수 | 글로벌 커맨드 정의 파일 (`commit.md`, `create-pr.md`, `pr-review.md`, `apply-review.md`, `pipeline.md`) |
+| **`workflow` 플러그인** | 필수 | 커맨드 정의(`commands/`)와 템플릿(`templates/`)을 함께 배포. [설치](#설치) 참고 |
 | **`/commit`·`/create-pr`·`/pr-review`·`/apply-review`** | `/pipeline` 필수 | `/pipeline`은 9~12단계에서 이 커맨드들을 재구현하지 않고 그대로 호출한다 |
 | **파이프라인 규약 문서** | `/pipeline` 이슈 모드 필수 | 대상 저장소의 `docs/**/PIPELINE.md` 등. `--no-issue` 모드는 불필요 |
-| **`~/.claude/templates/`** | 필수 | 출력 템플릿 및 플랫폼별 리뷰 기준 |
 | **oh-my-claudecode (OMC)** | 불필요 | `/pr-review`, `/apply-review`는 OMC와 독립적으로 동작. OMC 설치 여부와 무관하게 사용 가능 |
 | **code-review-graph** | 선택 | 설치+그래프 빌드 시 AST 기반 정밀 분석 자동 활용. 미설치 시 기존 Grep/Glob 방식으로 폴백 |
 
@@ -683,42 +718,45 @@ cp examples/mcp.json.example .mcp.json
 
 > 토큰은 파일에 직접 적지 말고 환경 변수로만 주입하세요. 다른 MCP 서버를 추가하는 것은 자유이며, `.mcp.json`이 커밋되지 않으므로 개인 경로를 넣어도 저장소에 노출되지 않습니다.
 
-### 글로벌 디렉토리 구조
+### 디렉토리 구조
+
+저장소(플러그인 소스):
+
+```
+dev-workflow-kit/
+├── .claude-plugin/marketplace.json  # 마켓플레이스 정의
+├── plugins/
+│   └── workflow/
+│       ├── .claude-plugin/plugin.json
+│       ├── commands/                # commit, create-pr, pr-review, apply-review, pipeline
+│       └── templates/
+│           ├── review-criteria/     # 플랫폼별 리뷰 기준 (ios, android, frontend, backend, general)
+│           ├── review/              # /pr-review 출력 형식
+│           └── apply-review/        # /apply-review 출력 형식
+└── examples/mcp.json.example
+```
+
+사용자 데이터(플러그인 밖, 업데이트해도 유지):
 
 ```
 ~/.claude/
-├── commands/                        # 글로벌 커맨드 정의
-│   ├── commit.md
-│   ├── create-pr.md
-│   ├── pr-review.md
-│   ├── apply-review.md
-│   └── pipeline.md
-├── templates/
-│   ├── review-criteria/             # 리뷰 기준 (커스터마이징 권장)
-│   │   ├── ios.md
-│   │   ├── android.md
-│   │   ├── frontend.md
-│   │   ├── backend.md
-│   │   ├── general.md
-│   │   └── README.md               # 가이드 문서
-│   ├── review/                      # /pr-review 출력 형식 (선택적 커스터마이징)
-│   │   └── templates.md
-│   └── apply-review/                # /apply-review 출력 형식 (선택적 커스터마이징)
-│       └── templates.md
-├── review-history/                  # 리뷰/반영 이력 (자동 생성)
-│   └── {owner}/{repo}/
-├── repo-cache/                      # 외부 레포 분석 캐시 (자동 생성)
-│   └── {owner}/{repo}/
-└── settings.json                    # 글로벌 권한 설정
+├── review-history/{owner}/{repo}/   # /apply-review 반영 기록 (자동 생성)
+└── repo-cache/{owner}/{repo}/       # 외부 레포 분석 캐시 (자동 생성)
+
+<프로젝트>/.claude/review-history/    # 로컬 레포 리뷰 기록 (/pr-review, 자동 생성)
 ```
 
-> **프로젝트 오버라이드**: 특정 프로젝트의 `.claude/commands/`에 동일 이름의 커맨드 파일을 배치하면 글로벌 커맨드를 오버라이드할 수 있습니다.
+커맨드는 템플릿을 `${CLAUDE_PLUGIN_ROOT}/templates/...` 경로로 읽습니다. 설치된 플러그인 위치가 어디든 동작합니다.
+
+> **이름이 같은 개인 커맨드**: `~/.claude/commands/` 또는 프로젝트 `.claude/commands/`에 `commit.md`를 두면 `/commit`으로 따로 호출되며, 플러그인의 `/workflow:commit`과는 별개로 동작합니다.
 
 ### 커스터마이징
 
+> 설치된 플러그인 폴더를 직접 고치면 업데이트 때 덮어써집니다. 템플릿을 바꾸려면 **저장소를 fork해 수정한 뒤 fork를 마켓플레이스로 추가**하세요(`/plugin marketplace add <내 계정>/dev-workflow-kit`).
+
 #### 리뷰 기준 커스텀
 
-`.claude/templates/review-criteria/` 디렉토리의 플랫폼별 파일을 편집하여 리뷰 기준을 자유롭게 조정할 수 있습니다.
+`plugins/workflow/templates/review-criteria/` 디렉토리의 플랫폼별 파일을 편집하여 리뷰 기준을 자유롭게 조정할 수 있습니다.
 
 각 파일은 **우선순위 테이블**, **플랫폼별 체크리스트**, **보안 체크리스트** 3개 섹션으로 구성되어 있으며, 프로젝트 특성에 맞게 다음과 같이 커스텀할 수 있습니다:
 
@@ -726,7 +764,7 @@ cp examples/mcp.json.example .mcp.json
 - **항목 추가/제거**: 프로젝트에 불필요한 카테고리를 제거하거나, 프로젝트 고유의 체크 항목을 추가
 - **보안 체크리스트 보강**: 프로젝트에 특화된 보안 검사 항목 추가
 
-**새 플랫폼 추가**: `.claude/templates/review-criteria/` 디렉토리에 새 파일을 생성하면 자동으로 인식됩니다 (예: `flutter.md`, `react-native.md`). 기존 파일을 복사하여 수정하는 것을 권장합니다.
+**새 플랫폼 추가**: `plugins/workflow/templates/review-criteria/` 디렉토리에 새 파일을 생성하면 자동으로 인식됩니다 (예: `flutter.md`, `react-native.md`). 기존 파일을 복사하여 수정하는 것을 권장합니다.
 
 기본 제공 플랫폼:
 
@@ -740,6 +778,6 @@ cp examples/mcp.json.example .mcp.json
 
 #### 출력 형식 커스텀
 
-- **리뷰 출력 형식**: `.claude/templates/review/templates.md`에서 `/pr-review` 커맨드의 출력 템플릿을 편집
-- **반영 출력 형식**: `.claude/templates/apply-review/templates.md`에서 `/apply-review` 커맨드의 출력 템플릿을 편집
+- **리뷰 출력 형식**: `plugins/workflow/templates/review/templates.md`에서 `/pr-review` 커맨드의 출력 템플릿을 편집
+- **반영 출력 형식**: `plugins/workflow/templates/apply-review/templates.md`에서 `/apply-review` 커맨드의 출력 템플릿을 편집
 
