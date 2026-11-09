@@ -389,6 +389,74 @@ class ChecksTest(unittest.TestCase):
         for v in ("Zq9plain", "Zq9default", "Zq9inlist", "Zq9doc2", "Zq9esc", "Zq9space"):
             self.assertNotIn(v, json.dumps(rs))
 
+    def test_compose_rereview_cases(self):
+        """PR #25 재리뷰: volumes 긴·흐름 문법 docker.sock, ports ${VAR}·!override, DB 이미지 추가·${VAR:-기본값}, 하위 매핑 무시"""
+        _w(os.path.join(self.t, "docker-compose.yml"), "\n".join([
+            "services:",
+            "  a:",
+            "    image: alpine",
+            "    volumes:",
+            "      - type: bind",                          # 5 → 긴 문법 docker.sock
+            "        source: /var/run/docker.sock",
+            "        target: /var/run/docker.sock",
+            "  b:",
+            "    image: alpine",
+            "    volumes: [\"/var/run/docker.sock:/var/run/docker.sock\"]",   # 10
+            "  c:",
+            "    image: alpine",
+            "    volumes: [",                              # 13 → 여러 줄 흐름
+            "      \"/var/run/docker.sock:/s\"",
+            "    ]",
+            "  db:",
+            "    image: mysql/mysql-server:8.0",
+            "    ports:",
+            "      - ${DB_PORT:-3306}:3306",                # 19
+            "  pg:",
+            "    image: ${PG_IMAGE:-postgres:16}",
+            "    ports: !override",
+            "      - \"5432:5432\"",                       # 23
+            "  web:",
+            "    image: postgres",
+            "    labels:",
+            "      ports: \"[5432]\"",                     # 하위 매핑 — 무시
+            ""]))
+        got = sorted((r["rule_id"].split(".")[1], r["line"]) for r in self.run_checks([("server", ".", [])])["results"])
+        self.assertEqual(got, [("compose-db-port-exposed", 19), ("compose-db-port-exposed", 23),
+                               ("compose-docker-socket", 5), ("compose-docker-socket", 10), ("compose-docker-socket", 13)])
+
+    def test_spring_rereview_cases(self):
+        _w(os.path.join(self.t, "api/src/main/resources/application.yml"),
+           "spring:\n  datasource:\n    password: 1234\napp:\n  password: '*Zq9star'\n  token: '|Zq9pipe'\n  alias: *ref\n")
+        _w(os.path.join(self.t, "api/src/main/resources/application.properties"),
+           "spring.datasource.password=1234\napp.x=" + "a" * 4100 + "\\\n  password=continued\n")
+        _w(os.path.join(self.t, "api/src/integrationTest/resources/application.yml"), "spring:\n  password: sa\n")
+        got = sorted((r["file"].split("/")[-3] + "/" + r["file"].rsplit("/", 1)[-1], r["line"], r["severity"])
+                     for r in self.run_checks([("server", "api", [])])["results"])
+        self.assertEqual(got, [("integrationTest/application.yml", 2, "low"),
+                               ("main/application.properties", 1, "high"),
+                               ("main/application.yml", 3, "high"),
+                               ("main/application.yml", 5, "high"),
+                               ("main/application.yml", 6, "high")])
+
+    def test_server_line_length_is_linear(self):
+        """PR #25 재리뷰: 줄 길이에 대한 이차는 줄 수 비율로 안 보인다 — 같은 줄 수에서 줄 길이를 2배로 늘려 비교"""
+        def compose(pad):
+            return "services:\n" + "".join(f"  s{i}:{pad}x\n    image: a\n" for i in range(100))
+        def compose_tab(pad):
+            return "services:\n" + "".join(f"  s{i}:{pad.replace(' ', chr(9))}x\n    image: a\n" for i in range(100))
+        def yml(pad):
+            return "".join(f"password:{pad}v\n" for _ in range(100))
+        for name, gen in (("docker-compose.yml", compose), ("compose.yaml", compose_tab), ("api/application.yml", yml)):
+            times = []
+            for width in (1900, 3800):
+                path = os.path.join(self.t, name)
+                _w(path, gen(" " * width))
+                t0 = time.time()
+                self.run_checks([("server", "api", [])])
+                times.append(time.time() - t0)
+                os.remove(path)
+            self.assertLess(times[1], max(times[0] * 3.0, 0.3), (name, times))
+
     def test_server_checks_linear_time_per_input(self):
         """PR #25 리뷰: 악성 입력이 실제로 해당 코드를 거치고(결과 1건 이상), 크기를 두 배로 늘려도 이차로 늘지 않는다"""
         pad = " " * 3900

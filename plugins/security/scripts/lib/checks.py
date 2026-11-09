@@ -575,9 +575,11 @@ COMPOSE_FILE = re.compile(r"(^|/)(docker-)?compose([.-][\w.-]*)?\.ya?ml$")
 DB_IMAGES = {"postgres", "postgis", "postgresql", "timescaledb", "mysql", "mariadb", "percona", "mongo", "mongodb",
              "redis", "redis-stack", "redis-stack-server", "valkey", "keydb", "elasticsearch", "opensearch",
              "memcached", "cassandra", "scylla", "couchdb", "rabbitmq", "clickhouse", "clickhouse-server", "neo4j",
-             "influxdb", "cockroach", "etcd", "zookeeper", "kafka", "nats", "minio"}
+             "influxdb", "cockroach", "etcd", "zookeeper", "kafka", "nats", "minio", "mysql-server",
+             "mongodb-community-server", "mongodb-enterprise-server", "cp-kafka", "oracle-xe", "oracle-free", "mssql"}
 LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
-SERVICE_KEY = re.compile(r"( *)([\"']?)([\w.-]+)\2[ \t]*:[ \t]*(?:&\S+)?[ \t]*$")
+# 줄은 strip_yaml_comment 로 끝 공백이 지워진 상태 — 끝의 [ \t]*$ 를 두면 이차 백트래킹이 생긴다 (PR #25 재리뷰)
+SERVICE_KEY = re.compile(r"( *)([\"']?)([\w.-]+)\2[ \t]*:(?:[ \t]+&\S+)?")
 PRIVILEGED = re.compile(r"privileged[ \t]*:[ \t]*(true|True|TRUE)$")
 
 
@@ -618,6 +620,9 @@ def _kv(st):
 
 
 def _image_is_db(image):
+    m = re.fullmatch(r"\$\{[\w]+:?-([^}]*)\}", image.strip())     # ${PG_IMAGE:-postgres:16} → 기본값으로 판정
+    if m:
+        image = m.group(1)
     ref = image.split("@", 1)[0]
     last = ref.rsplit("/", 1)[-1].split(":", 1)[0].lower()
     return last in DB_IMAGES or "mssql/server" in ref.lower()
@@ -703,30 +708,37 @@ def _compose_services(text):
 
 
 def check_compose(ctx):
-    """S6 — docker-compose 의 privileged, docker.sock 마운트, DB·캐시 포트의 전체 인터페이스 바인딩 (서비스 본문 한 번 순회)."""
+    """S6 — docker-compose 의 privileged, docker.sock 마운트, DB·캐시 포트의 전체 인터페이스 바인딩 (서비스 본문 한 번 순회).
+    서비스 직속 키(첫 들여쓰기)만 해석한다 — labels 같은 하위 매핑 안의 같은 이름은 보지 않는다."""
     out = []
     for rel, full in ctx.files(lambda rel, name: bool(COMPOSE_FILE.search(rel))):
         text = ctx.read(full)
         if text is None:
             continue
         for name, body in _compose_services(text):
-            image = next((kv[1] for _, l in body for kv in [_kv(l.strip())] if kv and kv[0] == "image"), "")
+            if not body:
+                continue
+            key_indent = _indent(body[0][1])
+            image = next((kv[1] for _, l in body if _indent(l) == key_indent
+                          for kv in [_kv(l.strip())] if kv and kv[0] == "image"), "")
             is_db = _image_is_db(image) if image else False
-            block, block_indent, entries, flow, flow_line = None, None, [], None, None
+            block, entries, flow, flow_line, flow_kind = None, [], None, None, None
             for n, line in body + [(None, "")]:
                 st, ind = line.strip(), _indent(line)
-                if flow is not None:                      # 여러 줄 흐름 문법 ports: [ … ]
+                if flow is not None:                      # 여러 줄 흐름 문법 ports|volumes: [ … ]
                     flow += " " + st
                     if "]" in st or len(flow) > MAX_LINE or n is None:
                         inner = flow.split("[", 1)[-1].rsplit("]", 1)[0]
-                        entries += [(flow_line, _flow_entry(x)) for x in _split_flow(inner) if x]
+                        entries += [(flow_line, flow_kind, _flow_entry(x)) for x in _split_flow(inner) if x]
                         flow = None
                     continue
-                if block and (n is None or (ind <= block_indent and not (ind == block_indent and st.startswith("-")))):
+                if block and (n is None or ind < key_indent or (ind == key_indent and not st.startswith("-"))):
                     block = None
                 if n is None:
                     break
                 if block is None:
+                    if ind != key_indent:
+                        continue
                     if PRIVILEGED.fullmatch(st):
                         out.append(ctx.finding(
                             "compose", "server.compose-privileged", "medium", "config", rel, n,
@@ -735,34 +747,34 @@ def check_compose(ctx):
                             fix_hint="privileged 를 빼고 필요한 cap_add 만 지정하세요.", references=["CWE-250"]))
                     kv = _kv(st)
                     if kv and kv[0] in ("ports", "volumes"):
-                        if kv[0] == "ports" and kv[1].startswith("["):
-                            if "]" in kv[1]:
-                                inner = kv[1].split("[", 1)[1].rsplit("]", 1)[0]
-                                entries += [(n, _flow_entry(x)) for x in _split_flow(inner) if x]
+                        val = re.sub(r"^!(override|reset)\b[ \t]*", "", kv[1])   # compose 2.24+ 태그
+                        if val.startswith("["):
+                            if "]" in val:
+                                inner = val.split("[", 1)[1].rsplit("]", 1)[0]
+                                entries += [(n, kv[0], _flow_entry(x)) for x in _split_flow(inner) if x]
                             else:
-                                flow, flow_line = kv[1], n
-                        elif not kv[1]:
-                            block, block_indent = kv[0], ind
+                                flow, flow_line, flow_kind = val, n, kv[0]
+                        elif not val:
+                            block = kv[0]
                     continue
                 # ports·volumes 블록 안
                 if st.startswith("-"):
                     item = st[1:].strip()
-                    kv = _kv(item) if item and not item[0].isdigit() and not item.startswith(("'", '"', "[", "/", ".")) else None
-                    if block == "volumes":
-                        entries.append((n, {"volume": item}))
-                    elif kv:
-                        entries.append((n, {kv[0]: kv[1]}))
+                    is_scalar = not item or item[0].isdigit() or item.startswith(("'", '"', "[", "/", ".", "$", "~"))
+                    kv = None if is_scalar else _kv(item)
+                    if kv:
+                        entries.append((n, block, {kv[0]: kv[1]}))
                     else:
-                        entries.append((n, {"short": _unquote(item)} if item else {}))
+                        entries.append((n, block, {"short": _unquote(item)} if item else {}))
                 elif entries:
                     kv = _kv(st)
                     if kv:
-                        entries[-1][1].pop("short", None)
-                        entries[-1][1][kv[0]] = kv[1]
+                        entries[-1][2].pop("short", None)
+                        entries[-1][2][kv[0]] = kv[1]
             seen = set()
-            for en, e in entries:
-                if "volume" in e or "source" in e:
-                    src = e.get("volume") or e.get("source", "")
+            for en, kind, e in entries:
+                if kind == "volumes":
+                    src = e.get("short") or e.get("source", "")
                     if "docker.sock" in src and ("volume", en) not in seen:
                         seen.add(("volume", en))
                         out.append(ctx.finding(
@@ -783,26 +795,44 @@ def check_compose(ctx):
 
 SPRING_CONFIG = re.compile(r"(^|/)(application|bootstrap)(-[\w.-]+)?\.(ya?ml|properties)$")
 SECRET_KEY = re.compile(r"(password|passwd|pwd|secret|token|api[-_]?key|private[-_]?key|credentials?)$", re.I)
-NOT_A_SECRET = re.compile(r"(null|~|none|changeme|true|false|yes|no|on|off|\d+(\.\d+)?)", re.I)
+NOT_A_SECRET = re.compile(r"(null|~|none|changeme)", re.I)
+# 불리언·숫자는 설정 값일 가능성이 높아 제외하되, 비밀번호 키(password·passwd·pwd)는 숫자도 비밀번호로 본다 (PR #25 재리뷰)
+NOT_A_SECRET_SETTING = re.compile(r"(true|false|yes|no|on|off|\d+(\.\d+)?)", re.I)
+PASSWORD_KEY = re.compile(r"(password|passwd|pwd)$", re.I)
 PROPS_LINE = re.compile(r"[ \t]*((?:\\.|[^=:\s\\])+)[ \t]*(?:[=:]|[ \t])[ \t]*(.*)")
 YAML_KEY = re.compile(r"( *)([\w.\-\[\]\"']+)[ \t]*:(.*)")
 
 
-def _secret_value(v):
-    """평문 비밀로 볼 값이면 (True, 설명), 아니면 (False, None). ${NAME:기본값} 은 기본값을 본다."""
-    v = _unquote(v)
-    if v.startswith("&"):                                   # YAML 앵커
-        v = _unquote(v.split(None, 1)[1]) if " " in v else ""
+def _secret_value(raw, key="", yaml=False):
+    """평문 비밀로 볼 값이면 (True, 설명), 아니면 (False, None). ${NAME:기본값} 은 기본값을 본다.
+    YAML 의 별칭(*x)·앵커(&x)는 따옴표를 벗기기 전 값에서만 판정한다."""
+    raw = raw.strip()
+    if yaml:
+        if raw.startswith("*"):                              # 별칭 — 값이 아니다
+            return False, None
+        if raw.startswith("&"):                              # 앵커 — 뒤의 값을 본다
+            raw = raw.split(None, 1)[1] if " " in raw else ""
+    v = _unquote(raw)
+
+    def plain(x):
+        if not x or NOT_A_SECRET.fullmatch(x) or x.startswith(("{cipher}", "ENC(")):
+            return False
+        if not NOT_A_SECRET_SETTING.fullmatch(x):
+            return True
+        return bool(PASSWORD_KEY.search(key)) and bool(re.fullmatch(r"\d+", x))   # 숫자 비밀번호(1234)만 인정
+
     if v.startswith("${") and v.endswith("}") and v.count("${") == 1:
         inner = v[2:-1]
         if ":" not in inner:
             return False, None
-        default = inner.split(":", 1)[1]
-        ok = bool(default) and not NOT_A_SECRET.fullmatch(default) and not default.startswith(("{cipher}", "ENC("))
-        return ok, "자리표시자의 기본값"
-    if not v or "${" in v or NOT_A_SECRET.fullmatch(v) or v.startswith(("{cipher}", "ENC(", "|", ">", "*")):
+        default = inner.split(":", 1)[1].lstrip("-")
+        return plain(default), "자리표시자의 기본값"
+    if "${" in v:
         return False, None
-    return True, None
+    return plain(v), None
+
+
+TEST_PATH = re.compile(r"(^|/)src/[^/]*[Tt]est[^/]*/|-test\.")
 
 
 def check_spring_config_secret(ctx):
@@ -813,19 +843,19 @@ def check_spring_config_secret(ctx):
         text = ctx.read(full)
         if text is None:
             continue
-        sev = "low" if ("/src/test/" in "/" + rel or "-test." in rel) else "high"
+        sev = "low" if TEST_PATH.search(rel) else "high"
         hits = []
         if rel.endswith(".properties"):
             continued = False
-            for n, line in _lines(text):
+            for n, line in enumerate(text.splitlines(), 1):      # 이어짐 상태는 긴 줄도 포함해 계산한다
                 was_continued, continued = continued, (len(line) - len(line.rstrip("\\"))) % 2 == 1
-                if was_continued or not line.strip() or line.lstrip().startswith(("#", "!")):
+                if was_continued or len(line) > MAX_LINE or not line.strip() or line.lstrip().startswith(("#", "!")):
                     continue
                 m = PROPS_LINE.fullmatch(line.rstrip("\\") if continued else line)
                 if not m:
                     continue
                 key = m.group(1).replace("\\", "")
-                ok, note = _secret_value(m.group(2).strip())
+                ok, note = _secret_value(m.group(2).strip(), key)
                 if SECRET_KEY.search(key) and ok:
                     hits.append((n, key, note))
         else:
@@ -856,7 +886,7 @@ def check_spring_config_secret(ctx):
                 if val.startswith(("|", ">")):
                     block_indent = ind
                     continue
-                ok, note = _secret_value(val)
+                ok, note = _secret_value(val, key, yaml=True)
                 if val and SECRET_KEY.search(key) and ok:
                     hits.append((n, ".".join(k for _, k in stack), note))
         for n, key, note in hits:
