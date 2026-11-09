@@ -1,0 +1,19 @@
+# S3 — Django 설정 파일의 DEBUG = True (docs/security/07 스택별 설계/Server.md)
+rules:
+  - id: django-debug-true
+    message: >-
+      Django 설정에서 DEBUG 가 True 입니다. 배포 환경에서 켜지면 오류 페이지에 설정값·스택트레이스·SQL 이 노출됩니다.
+      환경 변수로 읽고 기본값을 False 로 두세요 (예: DEBUG = os.environ.get("DEBUG") == "1").
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - "**/settings.py"
+        - "**/settings_*.py"
+        - "**/settings/*.py"
+    metadata:
+      category: security
+      cwe: ["CWE-489: Active Debug Code"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      stack: server
+    pattern: DEBUG = True

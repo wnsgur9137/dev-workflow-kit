@@ -1,0 +1,15 @@
+# S5 — .env 파일을 이미지에 복사 (docs/security/07 스택별 설계/Server.md)
+rules:
+  - id: dockerfile-copy-env
+    message: >-
+      .env 파일을 이미지에 복사합니다. 이미지 레이어에 비밀 값이 남아 레지스트리에서 누구나 꺼낼 수 있습니다.
+      런타임에 환경 변수·시크릿으로 주입하고 .dockerignore 에 .env 를 넣으세요.
+    severity: ERROR
+    languages: [dockerfile]
+    metadata:
+      category: security
+      cwe: ["CWE-538: Insertion of Sensitive Information into Externally-Accessible File or Directory"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      stack: server
+    # 여러 소스·--chown 같은 플래그가 붙어도 잡도록 줄 단위 정규식으로 쓴다 (Semgrep 1.182.0 의 $...ARGS 바인딩이 dockerfile 에서 매칭되지 않음을 실측)
+    pattern-regex: '(?im)^[ \t]*(COPY|ADD)\b[^\n]*[\s/"'']\.env(?!\.(example|sample|template|dist)\b)(\.[\w.-]+)?(["'']|[ \t]|$)'
