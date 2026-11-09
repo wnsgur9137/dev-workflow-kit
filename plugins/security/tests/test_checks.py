@@ -626,6 +626,42 @@ class ChecksTest(unittest.TestCase):
             ("ios.xcconfig-secret", "App/Config.xcconfig"),
         ])
 
+    def test_flutter_env_asset(self):
+        _w(os.path.join(self.t, "pubspec.yaml"), "name: a\ndependencies:\n  flutter:\n    sdk: flutter\nflutter:\n  assets:\n"
+           "    - assets/\n    - \"config/.env.production\"  # 주석\n    - .env.example\n  fonts: []\nother:\n  assets:\n    - .env\n")
+        rs = self.run_checks([("flutter", ".", [])])["results"]
+        self.assertEqual([(r["rule_id"], r["line"]) for r in rs], [("flutter.env-asset", 8)])
+
+    def test_flutter_build_obfuscate(self):
+        _w(os.path.join(self.t, ".github/workflows/ci.yml"),
+           "steps:\n  - run: flutter build apk --release\n  - run: flutter build ios --obfuscate --split-debug-info=s\n"
+           "  - run: flutter build apk --debug\n  - run: flutter test\n")
+        _w(os.path.join(self.t, "scripts/release.sh"), "flutter build appbundle\n")
+        _w(os.path.join(self.t, "docs/build.md"), "flutter build apk\n")       # 문서 — 대상 아님
+        rs = self.run_checks([("flutter", "app", [])])["results"]           # 저장소 전체 검사
+        self.assertEqual(sorted((r["file"], r["line"]) for r in rs), [(".github/workflows/ci.yml", 2), ("scripts/release.sh", 1)])
+
+    def test_flutter_and_rn_fixture_expectations(self):
+        import shutil
+        for name, extra, want in (
+            ("flutter", None, [("android.manifest-debuggable", "android/app/src/main/AndroidManifest.xml", "android"),
+                               ("flutter.build-no-obfuscate", ".github/workflows/release.yml", "flutter"),
+                               ("flutter.env-asset", "pubspec.yaml", "flutter"),
+                               ("ios.ats-arbitrary-loads", "ios/Runner/Info.plist", "ios")]),
+            ("react-native", ("env.fixture", ".env"),
+             [("android.manifest-exported-component", "android/app/src/main/AndroidManifest.xml", "android"),
+              ("ios.ats-arbitrary-loads", "ios/App/Info.plist", "ios"),
+              ("web.env-public-secret", ".env", "react-native")]),
+        ):
+            t = os.path.join(self.tmp.name, name)
+            shutil.copytree(os.path.join(HERE, "fixtures", name), t)
+            if extra:
+                shutil.copy(os.path.join(t, extra[0]), os.path.join(t, extra[1]))
+            detected = profiles.detect_full(t, self.defs)
+            report = checks.run(t, detected, self.defs)
+            self.assertEqual(report["errors"], [], name)
+            self.assertEqual(sorted((r["rule_id"], r["file"], r["profile"]) for r in report["results"]), want, name)
+
     def test_web_fixture_expectations(self):
         """tests/fixtures/web 의 README 표와 같은 결과 (env·lockfile 은 테스트에서 실제 이름으로 복사)"""
         import shutil

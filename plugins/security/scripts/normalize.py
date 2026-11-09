@@ -155,6 +155,11 @@ class ProfileIndex:
     def for_language(self, file, lang):
         return self._candidates(file, lambda n: lang in (self.defs.get(n, {}).get("semgrep", {}).get("rulesets") or [])) or "common"
 
+    def for_custom(self, file, custom):
+        """커스텀 규칙(rules/custom/<스택>)을 쓰는 프로파일 중 이 파일을 덮는 가장 깊은 것 — 없으면 스택 이름.
+        예: react-native 프로파일이 web 규칙을 함께 쓰면 RN 앱의 결과는 react-native 로 귀속한다."""
+        return self._candidates(file, lambda n: custom in (self.defs.get(n, {}).get("semgrep", {}).get("custom") or [])) or custom
+
     def for_lockfile(self, file):
         def pred(n):
             pats = self.defs.get(n, {}).get("sca", {}).get("lockfiles") or []
@@ -249,7 +254,7 @@ def parse_semgrep(data, index: ProfileIndex, target=None):
         lang, custom = _semgrep_origin(check_id)
         file = strip_container_prefix(r.get("path", ""))
         line = (r.get("start") or {}).get("line")
-        profile = custom if custom else (index.for_language(file, lang) if lang and lang != "generic" else "common")
+        profile = index.for_custom(file, custom) if custom else (index.for_language(file, lang) if lang and lang != "generic" else "common")
         refs = []
         for c in meta.get("cwe", []) if isinstance(meta.get("cwe"), list) else [meta.get("cwe")] if meta.get("cwe") else []:
             m = re.match(r"(CWE-\d+)", str(c))

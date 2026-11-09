@@ -1216,6 +1216,73 @@ def check_ios_xcconfig_secret(ctx):
 
 
 # ---------------------------------------------------------------------------
+# flutter
+# ---------------------------------------------------------------------------
+def check_flutter_env_asset(ctx):
+    """F1 — pubspec.yaml 의 flutter.assets 에 .env 가 들어 있어 앱 번들에 그대로 포함된다."""
+    out = []
+    for rel, full in ctx.files(lambda rel, name: name == "pubspec.yaml"):
+        text = ctx.read(full)
+        if text is None:
+            continue
+        in_flutter, assets_indent = False, None
+        for n, raw in _lines(text):
+            line = strip_yaml_comment(raw)
+            if not line.strip():
+                continue
+            ind = _indent(line)
+            if ind == 0:
+                in_flutter, assets_indent = line.startswith("flutter:"), None
+                continue
+            if not in_flutter:
+                continue
+            st = line.strip()
+            if assets_indent is None:
+                if st == "assets:":
+                    assets_indent = ind
+                continue
+            if ind <= assets_indent and not st.startswith("-"):
+                assets_indent = None
+                continue
+            if st.startswith("-"):
+                item = _unquote(st[1:].strip())
+                base = item.rstrip("/").rsplit("/", 1)[-1]
+                if base == ".env" or (base.startswith(".env.") and not base.endswith((".example", ".sample", ".template"))):
+                    out.append(ctx.finding(
+                        "flutter-env-asset", "flutter.env-asset", "high", "secret", rel, n,
+                        ".env 파일을 asset 으로 번들합니다 — 앱 패키지에서 누구나 꺼낼 수 있습니다",
+                        evidence=f"flutter.assets 항목: {item[:120]}",
+                        fix_hint="비밀 값은 앱에 넣지 말고 서버를 거쳐 받으세요. 공개 설정만 --dart-define 등으로 넣고, 그 값도 바이너리에 평문으로 남는다고 가정하세요.",
+                        references=["CWE-312"]))
+    return out
+
+
+BUILD_SCRIPT = re.compile(r"(^|/)(\.github/workflows/[^/]+\.ya?ml|codemagic\.ya?ml|bitrise\.ya?ml|\.gitlab-ci\.ya?ml|"
+                          r"azure-pipelines\.ya?ml|Makefile|[^/]+\.sh|fastlane/Fastfile)$")
+FLUTTER_BUILD = re.compile(r"\bflutter[ \t]+build[ \t]+(apk|appbundle|aab|ipa|ios)\b")
+
+
+def check_flutter_build_obfuscate(ctx):
+    """F3 — CI·빌드 스크립트의 릴리스 flutter build 에 --obfuscate 가 없다 (빌드 명령이 없으면 판단하지 않는다)."""
+    out = []
+    for rel, full in ctx.files(lambda rel, name: bool(BUILD_SCRIPT.search(rel))):
+        text = ctx.read(full)
+        if text is None:
+            continue
+        for n, line in _lines(text):
+            m = FLUTTER_BUILD.search(line)
+            if not m or "--obfuscate" in line or "--debug" in line or "--profile" in line:
+                continue
+            out.append(ctx.finding(
+                "flutter-build-obfuscate", "flutter.build-no-obfuscate", "medium", "mobile", rel, n,
+                "릴리스 flutter build 에 --obfuscate 가 없습니다 — Dart 코드의 클래스·함수 이름이 그대로 남습니다",
+                evidence=f"flutter build {m.group(1)} (--obfuscate 없음)",
+                fix_hint="--obfuscate --split-debug-info=<경로> 를 붙이고 심볼 파일은 크래시 분석용으로 따로 보관하세요.",
+                references=["CWE-656"]))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 등록부
 # ---------------------------------------------------------------------------
 CHECKS = {
@@ -1230,10 +1297,12 @@ CHECKS = {
     "android-properties-secret": check_android_properties_secret,
     "ios-ats": check_ios_ats,
     "ios-xcconfig-secret": check_ios_xcconfig_secret,
+    "flutter-env-asset": check_flutter_env_asset,
+    "flutter-build-obfuscate": check_flutter_build_obfuscate,
 }
 # 저장소 전체를 보는 검사 — 인프라 설정처럼 프로파일 하위 경로가 아니라 저장소 루트에 있는 경우가 많은 것.
 # 감지된 프로파일 중 하나라도 이 검사를 쓰면 대상 루트 기준으로 한 번만 실행한다.
-REPO_WIDE = {"compose"}
+REPO_WIDE = {"compose", "flutter-build-obfuscate"}   # CI 설정은 저장소 루트에 있다
 
 
 class _Timeout(Exception):

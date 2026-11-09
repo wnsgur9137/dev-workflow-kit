@@ -270,6 +270,13 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(x["location"]["file"], path)
         self.assertIn(path, summary)
 
+    def test_custom_rule_profile_follows_using_profile(self):
+        """S-Flutter·RN: react-native 가 web 커스텀 규칙을 함께 쓰면 RN 앱의 결과는 react-native 로 귀속"""
+        _w(os.path.join(self.target, "src", "config.ts"), "x\n")
+        self.raw("semgrep.json", {"results": [self.semgrep_result("/src/src/config.ts", line=1, check="custom.web.public-env-secret")]})
+        f, _ = self.run_normalize("react-native\t.\t\n")
+        self.assertEqual(f["findings"][0]["profile"], "react-native")
+
     def test_tool_failures_and_warnings_are_not_hidden(self):
         _w(os.path.join(self.run, "raw", "status.tsv"),
            "semgrep\tfailed\t2\tFatal error\ngitleaks-git\tskipped\t-\tgit 저장소가 아님\nosv-scanner\tok\t0\t\n")
