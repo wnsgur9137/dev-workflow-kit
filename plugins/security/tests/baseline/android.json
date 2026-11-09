@@ -11,6 +11,7 @@
     {"tool": "toolkit", "rule_id": "android.gradle-release-minify-disabled", "file": "app/build.gradle", "note": "A5"},
     {"tool": "semgrep", "rule_suffix": "webview-javascript-interface", "file": "app/src/main/java/com/example/fx/MainActivity.kt", "note": "A6"},
     {"tool": "semgrep", "rule_suffix": "webview-file-access", "file": "app/src/main/java/com/example/fx/MainActivity.kt", "note": "A6"},
+    {"tool": "semgrep", "rule_suffix": "webview-file-access-kotlin-scope", "file": "app/src/main/java/com/example/fx/MainActivity.kt", "note": "A6 Kotlin apply"},
     {"tool": "semgrep", "rule_suffix": "world-readable-mode", "file": "app/src/main/java/com/example/fx/Storage.java", "note": "A7"},
     {"tool": "osv-scanner", "package": "com.fasterxml.jackson.core:jackson-databind@2.9.8", "file": "app/gradle.lockfile", "note": "A8"}
   ]
