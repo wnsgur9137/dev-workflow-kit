@@ -160,9 +160,9 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 |---|---|---|
 | Gitleaks | 하드코딩 시크릿 (작업 트리 + git 히스토리) | 리포트에는 시크릿 원문을 남기지 않음 |
 | Semgrep | 취약 코드 패턴 | `generic` + 감지된 스택의 언어 규칙셋 |
-| OSV-Scanner | 취약 의존성 (lockfile) | 오프라인 DB 사용, DB가 오래되면 경고 |
+| OSV-Scanner | 취약 의존성 (lockfile) | 오프라인 DB 사용, DB가 오래되면 경고. npm·PyPI·Go·Maven·Pub·SwiftPM·crates.io·RubyGems·Packagist·NuGet (CocoaPods 미지원) |
 
-모든 컨테이너는 `--network none`·읽기 전용 루트·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.
+모든 컨테이너는 `--network none`·읽기 전용 루트·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.
 
 ### 권한 설정
 

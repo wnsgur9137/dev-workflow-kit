@@ -31,7 +31,7 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 | I2 | ATS 예외 (`NSAllowsArbitraryLoads`, `NSExceptionAllowsInsecureHTTPLoads`) | 커스텀 검사 (plist 파싱) | `Info.plist` | high |
 | I3 | `UserDefaults`에 토큰·비밀번호 저장 | Semgrep 커스텀 `ios/insecure-storage` | `*.swift` | medium |
 | I4 | `print`/`NSLog`로 민감 정보 출력 | Semgrep 커스텀 `ios/sensitive-log` | `*.swift`, `*.m` | low |
-| I5 | 취약 의존성 | OSV-Scanner | `Package.resolved`, `Podfile.lock` | CVSS 기준 |
+| I5 | 취약 의존성 | OSV-Scanner | `Package.resolved` (`Podfile.lock`은 미지원 — "점검되지 않음" 경고) | CVSS 기준 |
 | I6 | 약한 암호화 (`CC_MD5`, `kCCAlgorithmDES`, `CommonCrypto` ECB) | Semgrep 커스텀 `ios/weak-crypto` | `*.swift`, `*.m` | medium |
 | I7 | WebView JS 브리지·`allowFileAccessFromFileURLs` | Semgrep 커스텀 `ios/webview` | `*.swift` | medium |
 | I8 | 바이너리 점검 (ATS, PIE·스택 보호, 임베디드 URL·키) | [[MobSF]] (`/security:scan-app` IPA) | `.ipa` | MobSF 기준 |
@@ -59,5 +59,5 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 
 > [!warning] 검증 필요
 > - `semgrep-rules`의 Swift 규칙 수와 Semgrep의 Swift/Objective-C 파서 지원 수준
-> - OSV-Scanner의 `Package.resolved`(SwiftPM)·`Podfile.lock`(CocoaPods) 지원 여부
+> - ~~OSV-Scanner의 `Package.resolved`(SwiftPM)·`Podfile.lock`(CocoaPods) 지원 여부~~ → P1 확인: `Package.resolved`만 지원, `Podfile.lock`은 v2.7.0이 추출하지 않음 (`unsupported_lockfiles`로 경고)
 > - MobSF iOS 정적분석 항목 범위 (Info.plist·바이너리 보호 기법)
