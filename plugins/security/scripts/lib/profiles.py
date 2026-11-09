@@ -699,6 +699,66 @@ def format_profile_label(name: str, root: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 스캔 계획 (scan-code.sh 가 Semgrep 인자를 조립할 때 쓴다)
+# ---------------------------------------------------------------------------
+COMMON_RULESETS = ("generic",)
+
+
+def _semgrep_exclude(pattern: str) -> str:
+    """프로파일 glob(`**/build/**`, `**/*.g.dart`) → Semgrep --exclude 패턴(`build`, `*.g.dart`)."""
+    p = pattern
+    while p.startswith("**/"):
+        p = p[3:]
+    while p.endswith("/**"):
+        p = p[:-3]
+    return p or pattern
+
+
+def _has_rules(d: str) -> bool:
+    if not os.path.isdir(d):
+        return False
+    for _, _, files in os.walk(d):
+        if any(f.endswith((".yaml", ".yml")) for f in files):
+            return True
+    return False
+
+
+def build_plan(detected, profiles: dict, rules_dir: str, custom_dir: str):
+    """[(kind, value)] — kind: ruleset | custom | exclude | warning"""
+    plan, seen = [], set()
+
+    def add(kind, value):
+        if (kind, value) not in seen:
+            seen.add((kind, value))
+            plan.append((kind, value))
+
+    rulesets = list(COMMON_RULESETS)
+    customs, excludes = [], []
+    for name, _root in detected:
+        p = profiles[name]
+        rulesets += p["semgrep"].get("rulesets") or []
+        customs += p["semgrep"].get("custom") or []
+        excludes += p.get("exclude_paths") or []
+    for r in rulesets:
+        if not re.fullmatch(r"[a-z0-9_-]+", r):
+            add("warning", f"규칙셋 이름 형식 오류로 건너뜀: {r}")
+        elif _has_rules(os.path.join(rules_dir, r)):
+            add("ruleset", r)
+        else:
+            add("warning", f"Semgrep 규칙셋 '{r}' 이 없어 건너뜀 (update.sh 실행 또는 rules.lock 경로 확인)")
+    for c in customs:
+        if not re.fullmatch(r"[a-z0-9_-]+", c):
+            add("warning", f"커스텀 규칙 이름 형식 오류로 건너뜀: {c}")
+        elif _has_rules(os.path.join(custom_dir, c)):
+            add("custom", c)
+        else:
+            add("warning", f"커스텀 규칙 '{c}' 폴더가 비어 있어 건너뜀")
+    for x in excludes:
+        add("exclude", _semgrep_exclude(x))
+    return plan
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main(argv=None) -> int:
@@ -712,6 +772,10 @@ def main(argv=None) -> int:
     d.add_argument("target")
     d.add_argument("--profiles", default="")
     d.add_argument("--format", choices=("tsv", "json"), default="tsv")
+    pl = sub.add_parser("plan")
+    pl.add_argument("profiles_tsv")
+    pl.add_argument("--rules-dir", required=True)
+    pl.add_argument("--custom-dir", required=True)
     args = ap.parse_args(argv)
 
     try:
@@ -742,6 +806,19 @@ def main(argv=None) -> int:
         else:
             for n, r, ex in found:
                 print(f"{n}\t{r}\t{','.join(ex)}")
+        return 0
+    if args.cmd == "plan":
+        detected = []
+        with open(args.profiles_tsv, encoding="utf-8") as f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 2 and parts[0]:
+                    if parts[0] not in profiles:
+                        print(f"알 수 없는 프로파일: {parts[0]}", file=sys.stderr)
+                        return 1
+                    detected.append((parts[0], parts[1]))
+        for kind, value in build_plan(detected, profiles, args.rules_dir, args.custom_dir):
+            print(f"{kind}\t{value}")
         return 0
     return 1
 
