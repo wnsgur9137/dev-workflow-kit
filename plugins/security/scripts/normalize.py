@@ -675,7 +675,12 @@ def main(argv=None) -> int:
     for mode in ("git", "dir"):
         run_parser(f"gitleaks-{mode}.json", lambda d, m=mode: (parse_gitleaks(d, m), []))
     run_parser("osv.json", lambda d: (parse_osv(d, index), []))
-    run_parser("checks.json", parse_checks)
+    def _checks(data):
+        f, e = parse_checks(data)
+        warnings.extend(clean_text(w, 300, True) for w in (data.get("warnings") or [])[:20])
+        return f, e
+
+    run_parser("checks.json", _checks)
 
     # 중복 제거 (id 기준) 후 심각도·위치 순 정렬
     uniq = {}
