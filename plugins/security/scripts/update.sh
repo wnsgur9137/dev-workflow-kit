@@ -42,9 +42,9 @@ sec_validate_rules_lock || sec_die "rules.lock 형식 오류"
 need_docker=$((DO_IMAGES + DO_OSV))
 if [ $need_docker -gt 0 ]; then
   sec_preflight code || exit 1
-  # Docker Desktop 을 지운 뒤 다른 런타임을 쓰면 credsStore 가 남아 pull 이 실패한다
+  # Docker Desktop 을 지운 뒤 다른 런타임을 쓰면 credsStore 가 남아 pull 이 실패한다 (pull 하는 --images 에서만 검사)
   cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
-  if [ -f "$cfg" ]; then
+  if [ $DO_IMAGES -eq 1 ] && [ -f "$cfg" ]; then
     store=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("credsStore",""))' "$cfg" 2>/dev/null)
     if [ -n "$store" ] && ! command -v "docker-credential-$store" >/dev/null 2>&1; then
       sec_err "$cfg 의 \"credsStore\": \"$store\" 에 해당하는 docker-credential-$store 가 없어 이미지를 받을 수 없습니다."
