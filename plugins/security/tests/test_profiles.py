@@ -135,6 +135,38 @@ class DependencyTest(unittest.TestCase):
             self.assertIn("com.squareup.okhttp3:okhttp", names)
 
 
+class PlanExcludeTest(unittest.TestCase):
+    """PR #19 QUESTION: exclude_paths 는 그 프로파일이 감지된 하위 경로 안에서만 적용한다."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.profiles = profiles.load_profiles(profiles.DEFAULT_PROFILE_DIR)
+
+    def excludes(self, detected):
+        with tempfile.TemporaryDirectory() as d:
+            return [v for k, v in profiles.build_plan(detected, self.profiles, d, d) if k == "exclude"]
+
+    def test_root_profile_applies_everywhere(self):
+        ex = self.excludes([("server", ".")])
+        self.assertIn("build", ex)
+        self.assertIn("node_modules", ex)
+
+    def test_subpath_profile_is_anchored_to_its_root(self):
+        """Flutter 의 ios/ 프로파일이 macos 러너(macos/)나 다른 프로젝트의 build/ 를 제외하지 않는다"""
+        ex = self.excludes([("flutter", "."), ("ios", "ios"), ("android", "android"), ("server", "backend")])
+        self.assertIn("ios/**/macos", ex)
+        self.assertNotIn("macos", ex)
+        self.assertIn("backend/**/build", ex)
+        self.assertIn("backend/**/node_modules", ex)
+        self.assertIn("build", ex)            # flutter(.) 자체의 제외는 전체 적용
+        self.assertNotIn("node_modules", ex)  # server 는 backend/ 에서만 감지됨
+
+    def test_subpath_glob_characters_are_escaped(self):
+        self.assertEqual(profiles.scoped_excludes("**/build/**", "apps/a[1]"), "apps/a\\[1\\]/**/build")
+        self.assertEqual(profiles.scoped_excludes("**/*.g.dart", "!pkg"), "\\!pkg/**/*.g.dart")
+        self.assertEqual(profiles.scoped_excludes("**/x/**", "."), "x")
+
+
 class DetectTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
