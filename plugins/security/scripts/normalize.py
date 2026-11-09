@@ -13,6 +13,7 @@ docs/security/01 개요/리포트 포맷.md 의 스키마를 따른다. 표준 �
   gitleaks-git.json    Gitleaks git 모드 (--redact)
   gitleaks-dir.json    Gitleaks dir 모드 (--redact)
   osv.json             OSV-Scanner --format json
+  checks.json          스택별 커스텀 검사 (scripts/lib/checks.py)
 
 출력 (DIR/): findings.json, summary.md, meta.json (모두 권한 600)
 
@@ -44,7 +45,7 @@ SUMMARY_DETAIL_MAX = 50     # Critical/High 상세 표시 상한
 SUMMARY_TOP_OTHERS = 10     # Medium 이하 상위 N 개
 SECRET_EVIDENCE = "(시크릿 탐지 — 원문은 리포트에 남기지 않습니다. 위치만 참고하세요)"
 # 스캔 종류별로 status.tsv 에 반드시 있어야 하는 도구 (행이 없으면 도구가 기록 전에 비정상 종료한 것)
-EXPECTED_TOOLS = {"code": ("semgrep", "gitleaks-git", "gitleaks-dir", "osv-scanner")}
+EXPECTED_TOOLS = {"code": ("semgrep", "gitleaks-git", "gitleaks-dir", "osv-scanner", "checks")}
 OSV_STALE_DAYS = 7
 CONTAINER_PREFIXES = ("/src/", "/repo/")
 
@@ -372,6 +373,36 @@ def parse_osv(data, index: ProfileIndex):
     return out
 
 
+def parse_checks(data):
+    """scripts/lib/checks.py 결과 — 툴킷 자체 검사. 문자열은 다른 도구와 같이 신뢰하지 않는 데이터로 정제한다."""
+    out, errors = [], []
+    if not isinstance(data, dict):
+        raise ValueError("checks.json 최상위가 객체가 아닙니다")
+    for e in data.get("errors") or []:
+        errors.append("checks: " + clean_text(e, 200, True))
+    for r in data.get("results") or []:
+        sev = r.get("severity") if r.get("severity") in SEVERITIES else "medium"
+        cat = r.get("category") if r.get("category") in ("sast", "secret", "dependency", "config", "mobile", "web") else "config"
+        file = clean_text(r.get("file"), 300, True)
+        line = r.get("line") if isinstance(r.get("line"), int) else None
+        pkg = clean_text(r.get("package"), 120, True) or None
+        rule = clean_text(r.get("rule_id") or r.get("check"), 120, True)
+        out.append({
+            "id": finding_id("toolkit", rule, file, line, pkg),
+            "tool": "toolkit",
+            "rule_id": rule,
+            "severity": sev,
+            "category": cat,
+            "profile": clean_text(r.get("profile") or "common", 40, True),
+            "title": clean_text(r.get("title"), TITLE_MAX, True),
+            "location": {"file": file, "line": line, "url": None, "package": pkg},
+            "evidence": clean_text(r.get("evidence"), EVIDENCE_MAX, True),
+            "fix_hint": clean_text(r.get("fix_hint"), EVIDENCE_MAX, True),
+            "references": [clean_text(x, 60, True) for x in (r.get("references") or [])[:6]],
+        })
+    return out, errors
+
+
 # ---------------------------------------------------------------------------
 # 상태·경고
 # ---------------------------------------------------------------------------
@@ -644,6 +675,7 @@ def main(argv=None) -> int:
     for mode in ("git", "dir"):
         run_parser(f"gitleaks-{mode}.json", lambda d, m=mode: (parse_gitleaks(d, m), []))
     run_parser("osv.json", lambda d: (parse_osv(d, index), []))
+    run_parser("checks.json", parse_checks)
 
     # 중복 제거 (id 기준) 후 심각도·위치 순 정렬
     uniq = {}
