@@ -12,16 +12,18 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/scan-code.sh:*), Read(~/.local
 
 ## 1. 실행
 
-다음 명령 **하나만** 실행한다. 인자는 사용자가 준 그대로 넘긴다.
+다음 명령 **하나만** 실행한다. 사용자가 준 인자에서 **저장소 경로**와 `--profile=…` 옵션을 구분해 넘긴다.
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/scan-code.sh" $ARGUMENTS
+"${CLAUDE_PLUGIN_ROOT}/scripts/scan-code.sh" '<저장소 경로>' [--profile=<이름,...>]
 ```
 
+- 저장소 경로는 **작은따옴표로 감싸 하나의 인자**로 넘긴다. `~/My App`처럼 공백이 있어도 쪼개지지 않게 하기 위해서다. 경로 안의 `'`는 `'\''`로 바꾼다. `~`는 따옴표 밖에서만 확장되므로 `~/`로 시작하면 `"$HOME"/'My App'`처럼 홈 부분을 따옴표 밖에 둔다.
 - 인자가 비어 있으면 실행하지 말고 점검할 저장소 경로를 물어본다.
 - 도구를 직접 `docker run` 하거나, 스크립트 인자에 도구 옵션을 덧붙이지 않는다. 스크립트가 모르는 옵션은 거부한다.
 - 스크립트가 **사전 점검(D1~D7)** 이나 **`update.sh` 안내**로 끝나면, 그 메시지를 사용자에게 그대로 전하고 멈춘다. `update.sh` 는 외부와 통신하므로 **사용자가 터미널에서 직접** 실행해야 한다 — 대신 실행하지 않는다.
 - 성공하면 stdout 마지막 줄이 `summary.md` 경로다.
+- 리포트는 기본적으로 `~/.local/share/dev-workflow-kit/security/reports/` 아래에 생긴다. 사용자가 `DWK_SECURITY_DATA_DIR`로 데이터 폴더를 바꿨다면 위 `allowed-tools`의 `Read` 규칙과 맞지 않아 열람할 때마다 권한 확인이 뜬다 — 그 경우 사용자 설정(`settings.json`의 `permissions.allow`)에 바뀐 경로의 `Read(…/reports/**)` 규칙을 추가하라고 안내한다.
 
 ## 2. 결과 읽기
 
