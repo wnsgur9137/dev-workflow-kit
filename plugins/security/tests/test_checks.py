@@ -301,14 +301,116 @@ class ChecksTest(unittest.TestCase):
                                ("application.properties", 1, "app.api-key")])
         self.assertNotIn(value, json.dumps(report))
 
-    def test_server_checks_linear_time_on_adversarial_files(self):
-        big = 900_000
-        _w(os.path.join(self.t, "docker-compose.yml"), "services:\n  db:\n    image: postgres\n    ports:\n" + "      -\n" * (big // 8))
-        _w(os.path.join(self.t, "api/application.yml"), "a" * 3000 + "\n" + (" " * 3000 + "x\n") * 200)
-        _w(os.path.join(self.t, "api/application.properties"), ("k" * 3900 + "\n") * 200)
-        t0 = time.time()
-        self.run_checks([("server", "api", [])])
-        self.assertLess(time.time() - t0, 5.0)
+    def test_compose_review_cases(self):
+        """PR #25 리뷰 재현 사례 — 서비스 경계(주석·앵커), 흐름 문법, published 생략, - 다음 줄 키, True, docker.sock 범위, DB 판정"""
+        _w(os.path.join(self.t, "compose.yaml"), "\n".join([
+            "services:",
+            "  db:",                                   # 2
+            "    image: postgres",
+            "  web:   # frontend",                     # 4 — 주석 붙은 서비스 키
+            "    image: nginx",
+            "    ports:",
+            "      - \"80:80\"",                      # 7 — nginx 는 DB 아님
+            "  pg: &pg",                               # 8 — 앵커 서비스
+            "    image: bitnami/postgresql:16",
+            "    ports:",
+            "      - \"5432:5432\"",                  # 11 → 노출
+            "  m:",
+            "    image: mongo",
+            "    ports: [\"27017:27017\"]  # db",      # 14 → 1건만
+            "  r:",
+            "    image: redis",
+            "    ports: [{target: 6379, published: 6379, host_ip: 127.0.0.1}]",   # 17 → 루프백
+            "  r2:",
+            "    image: redis:7",
+            "    ports: [",
+            "      \"6380:6379\"",
+            "    ]",                                   # 20 줄 시작 → 노출 (여러 줄 흐름)
+            "  e:",
+            "    image: elasticsearch:8",
+            "    privileged: True",                    # 25 → privileged
+            "    ports:",
+            "      - target: 9200",                    # 27 → published 생략도 노출
+            "      -",
+            "        target: 9300",                    # 28 의 항목 → 노출
+            "        published: 9300",
+            "    environment:",
+            "      DOCKER_HOST: unix:///var/run/docker.sock",   # 환경 변수 — 마운트 아님
+            "  ui:",
+            "    image: mongo-express",                # DB 아님
+            "    ports:",
+            "      - \"8081:8081\"",
+            "    volumes:",
+            "      - /var/run/docker.sock:/var/run/docker.sock:ro",   # 38 → docker.sock
+            ""]))
+        got = sorted((r["rule_id"].split(".")[1], r["line"]) for r in self.run_checks([("server", ".", [])])["results"])
+        self.assertEqual(got, [("compose-db-port-exposed", 11), ("compose-db-port-exposed", 14),
+                               ("compose-db-port-exposed", 20), ("compose-db-port-exposed", 27),
+                               ("compose-db-port-exposed", 28), ("compose-docker-socket", 38),
+                               ("compose-privileged", 25)])
+
+    def test_compose_file_name_and_evidence(self):
+        _w(os.path.join(self.t, "composer.yml"), "services:\n  a:\n    privileged: true\n")
+        self.assertEqual(self.run_checks([("server", ".", [])])["results"], [])
+        _w(os.path.join(self.t, "compose.prod.yml"), "services:\n  db:\n    image: postgres\n    ports: [\"5432:5432\"]\n")
+        (r,) = self.run_checks([("server", ".", [])])["results"]
+        self.assertIn("서비스 db, 포트 5432:5432", r["evidence"])
+
+    def test_spring_review_cases(self):
+        _w(os.path.join(self.t, "api/src/main/resources/application.yml"), "\n".join([
+            "app:",
+            "  require-password: true",                # 불리언 — 제외
+            "  max-token: 100",                        # 숫자 — 제외
+            "  password: &pw Zq9plain",                # 4 — 앵커 값
+            "  db:",
+            "    password: ${DB_PASSWORD:Zq9default}", # 6 — 자리표시자 기본값
+            "    token: ${TOKEN}",                     # 자리표시자 — 제외
+            "  props: |",
+            "    db.password: inblock",                # 블록 스칼라 — 제외
+            "  users:",
+            "    - password: Zq9inlist",               # 11 — 리스트 항목
+            "---",
+            "  password: Zq9doc2",                     # 13 — 새 문서, 스택 초기화
+            ""]))
+        _w(os.path.join(self.t, "api/src/main/resources/application.properties"),
+           "app.desc=hello \\\n  password=continued\napp.db\\.password=Zq9esc\napp.secret Zq9space\n")
+        _w(os.path.join(self.t, "api/src/test/resources/application-test.yml"), "spring:\n  password: sa\n")
+        rs = self.run_checks([("server", "api", [])])["results"]
+        got = sorted((r["file"].rsplit("/", 1)[-1], r["line"], r["evidence"].split(" ")[1], r["severity"]) for r in rs)
+        self.assertEqual(got, [
+            ("application-test.yml", 2, "spring.password", "low"),
+            ("application.properties", 3, "app.db.password", "high"),
+            ("application.properties", 4, "app.secret", "high"),
+            ("application.yml", 4, "app.password", "high"),
+            ("application.yml", 6, "app.db.password", "high"),
+            ("application.yml", 11, "app.users.password", "high"),
+            ("application.yml", 13, "password", "high")])
+        self.assertTrue(any("자리표시자의 기본값" in r["evidence"] for r in rs))
+        for v in ("Zq9plain", "Zq9default", "Zq9inlist", "Zq9doc2", "Zq9esc", "Zq9space"):
+            self.assertNotIn(v, json.dumps(rs))
+
+    def test_server_checks_linear_time_per_input(self):
+        """PR #25 리뷰: 악성 입력이 실제로 해당 코드를 거치고(결과 1건 이상), 크기를 두 배로 늘려도 이차로 늘지 않는다"""
+        pad = " " * 3900
+        cases = {
+            "api/application.yml": lambda k: ("password: a" + pad + "b\n") * (k * 120),
+            "docker-compose.yml": lambda k: "services:\n  db:\n    image: postgres\n    ports:\n" + ("      - a" + pad + "b\n") * (k * 120),
+            "compose.yaml": lambda k: "services:\n" + "".join(f"  s{i}:\n    image: a{pad}b\n    privileged: true\n" for i in range(k * 120)),
+            "api/application.properties": lambda k: ("app.password=a" + pad + "b\n") * (k * 120),
+        }
+        for name, gen in cases.items():
+            times = []
+            for k in (1, 2):
+                path = os.path.join(self.t, name)
+                _w(path, gen(k))
+                t0 = time.time()
+                rs = self.run_checks([("server", "api", [])])["results"]
+                times.append(time.time() - t0)
+                self.assertTrue(rs, name)          # 경로를 실제로 거쳤는지
+                os.remove(path)
+            self.assertLess(times[1], max(times[0] * 3.5, 0.5), (name, times))
+            # 줄 길이에 대한 이차(이전 `\\s+#.*$`: 이 입력에서 4초 이상)는 줄 수 비율로는 안 보이므로 절대 상한도 둔다
+            self.assertLess(times[1], 1.5, (name, times))
 
     def test_server_fixture_expectations(self):
         import shutil
