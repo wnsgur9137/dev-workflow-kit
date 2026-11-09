@@ -432,3 +432,43 @@ test_real_scan_code_ios_baseline() {
     fail "xcconfig 비밀 값이 리포트에 남음"
   fi
 }
+
+# S-Flutter·RN: 크로스플랫폼 픽스처 기준선 — 공용 코드 점검 + 하위 ios/·android/ 에만 네이티브 프로파일 적용
+_real_xplat_baseline() {
+  local name=$1 summary run_dir
+  mkdir -p "$HOME/.cache/dev-workflow-kit-tests"
+  XP_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/$name.XXXXXX")
+  trap 'rm -rf "$XP_DIR"; [ -n "${XP_RUN:-}" ] && rm -rf "$XP_RUN"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+  cp -R "$TESTS_DIR/fixtures/$name/." "$XP_DIR/"
+  [ -f "$XP_DIR/pubspec.lock.fixture" ] && mv "$XP_DIR/pubspec.lock.fixture" "$XP_DIR/pubspec.lock"
+  [ -f "$XP_DIR/package-lock.json.fixture" ] && mv "$XP_DIR/package-lock.json.fixture" "$XP_DIR/package-lock.json"
+  [ -f "$XP_DIR/env.fixture" ] && mv "$XP_DIR/env.fixture" "$XP_DIR/.env"
+  summary=$("$SCAN" "$XP_DIR" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  XP_RUN=$(dirname "$summary")
+  run_dir=$XP_RUN
+  assert_eq "$(awk -F '\t' '$2 != "ok" && $1 != "gitleaks-git"' "$run_dir/raw/status.tsv")" "" "(도구 실패)"
+  _check_baseline "$run_dir/findings.json" "$TESTS_DIR/baseline/$name.json"
+  # 네이티브 규칙(Kotlin·Swift 언어 규칙셋 결과)은 하위 경로 밖 파일에 귀속되지 않는다
+  python3 - "$run_dir/findings.json" <<'PY' || fail "네이티브 프로파일이 하위 경로 밖에 귀속됨"
+import json, sys
+bad = [f for f in json.load(open(sys.argv[1]))["findings"]
+       if f["profile"] in ("android", "ios") and not f["location"]["file"].startswith(("android/", "ios/"))]
+for b in bad:
+    print("    하위 경로 밖:", b["profile"], b["rule_id"], b["location"]["file"])
+sys.exit(1 if bad else 0)
+PY
+}
+
+test_real_scan_code_flutter_baseline() {
+  _real_ready || exit 77
+  _real_xplat_baseline flutter
+}
+
+test_real_scan_code_react_native_baseline() {
+  _real_ready || exit 77
+  _real_xplat_baseline react-native
+  if grep -rqF "fixture-rn-secret" "$XP_RUN"; then
+    fail ".env 값이 리포트에 남음"
+  fi
+}
