@@ -42,6 +42,9 @@ EVIDENCE_MAX = 200
 TITLE_MAX = 160
 SUMMARY_DETAIL_MAX = 50     # Critical/High 상세 표시 상한
 SUMMARY_TOP_OTHERS = 10     # Medium 이하 상위 N 개
+SECRET_EVIDENCE = "(시크릿 탐지 — 원문은 리포트에 남기지 않습니다. 위치만 참고하세요)"
+# 스캔 종류별로 status.tsv 에 반드시 있어야 하는 도구 (행이 없으면 도구가 기록 전에 비정상 종료한 것)
+EXPECTED_TOOLS = {"code": ("semgrep", "gitleaks-git", "gitleaks-dir", "osv-scanner")}
 OSV_STALE_DAYS = 7
 CONTAINER_PREFIXES = ("/src/", "/repo/")
 
@@ -64,8 +67,10 @@ _SECRET_PATTERNS = [
     (re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b"), "eyJ[MASKED-JWT]"),
     # URL 안의 자격증명 scheme://user:pass@host
     (re.compile(r"(\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:/@]+:)[^\s@/]+@"), r"\1[MASKED]@"),
-    # key = "value" 형태 (키 이름은 남기고 값만 가린다)
-    (re.compile(r"(?i)\b([\w.\-]*(?:password|passwd|pwd|secret|token|api[_\-]?key|apikey|access[_\-]?key|private[_\-]?key|client[_\-]?secret|auth)[\w.\-]*\s*[:=]\s*)(['\"]?)([^'\"\s,;]{4,})(['\"]?)"),
+    # Authorization: Bearer <토큰>
+    (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/\-]{8,}=*"), r"\1[MASKED]"),
+    # key = "value" 형태 (키 이름은 남기고 값만 가린다). 키를 감싼 따옴표("password": ...)와 => 도 허용
+    (re.compile(r"(?i)\b([\w.\-]*(?:password|passwd|pwd|pass|secret|token|api[_\-]?key|apikey|access[_\-]?key|private[_\-]?key|client[_\-]?secret|credential|auth)[\w.\-]*['\"]?\s*(?:=>|[:=])\s*)(['\"]?)([^'\"\s,;]{4,})(['\"]?)"),
      r"\1\2[MASKED]\4"),
     # 32자 이상 고엔트로피 토큰 (hex/base64 계열)
     (re.compile(r"\b[A-Za-z0-9+/_\-]{40,}={0,2}"), "[MASKED-TOKEN]"),
@@ -150,7 +155,8 @@ class ProfileIndex:
 # 파서
 # ---------------------------------------------------------------------------
 def _load_json(path):
-    if not os.path.exists(path):
+    # 스캔 스크립트가 권한 600 으로 미리 만든 빈 파일 = 도구가 결과를 쓰지 못함 (실패는 status.tsv 가 알린다)
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
         return None, None
     try:
         with open(path, encoding="utf-8") as f:
@@ -226,16 +232,25 @@ def parse_semgrep(data, index: ProfileIndex, target=None):
             refs.append(clean_text(o, 80, True))
         fix = extra.get("fix")
         fix = fix if isinstance(fix, str) and fix.strip() not in ("", "False", "None") else ""
-        lines = extra.get("lines") or ""
-        if not lines.strip() or lines.strip() == "requires login":
-            lines = read_source_lines(target, file, line, (r.get("end") or {}).get("line"))
+        category = "secret" if "secret" in check_id.lower() else "sast"
+        severity = SEMGREP_SEVERITY.get(str(extra.get("severity", "")).upper(), "medium")
+        if category == "secret":
+            # 시크릿 줄은 소스에서 읽지도, 도구 출력(lines)을 쓰지도 않는다 — 마스킹 정규식은 보조 장치일 뿐이다
+            lines = SECRET_EVIDENCE
+            # gitleaks 포팅 규칙은 INFO 라 low 가 된다. 시크릿은 폐기가 필요하므로 최소 high
+            if SEVERITIES.index(severity) > SEVERITIES.index("high"):
+                severity = "high"
+        else:
+            lines = extra.get("lines") or ""
+            if not lines.strip() or lines.strip() == "requires login":
+                lines = read_source_lines(target, file, line, (r.get("end") or {}).get("line"))
         rule_short = check_id.split(".")[-1] if check_id else "semgrep"
         out.append({
             "id": finding_id("semgrep", check_id, file, line),
             "tool": "semgrep",
             "rule_id": clean_text(check_id, 200, True),
-            "severity": SEMGREP_SEVERITY.get(str(extra.get("severity", "")).upper(), "medium"),
-            "category": "secret" if "secret" in check_id.lower() else "sast",
+            "severity": severity,
+            "category": category,
             "profile": profile,
             "title": clean_text((extra.get("message") or rule_short).split("\n")[0], TITLE_MAX, True),
             "location": {"file": file, "line": line, "url": None, "package": None},
@@ -363,11 +378,13 @@ def missing_lockfile_hints(target, detected, defs):
     for name, root, _excluded in detected:
         sca = defs.get(name, {}).get("sca", {}) or {}
         pats = sca.get("lockfiles") or []
+        unsupported = sca.get("unsupported_lockfiles") or []
         hint = sca.get("missing_lockfile_hint")
-        if not pats or not hint:
+        if not (pats and hint) and not unsupported:
             continue
         base = target if root == "." else os.path.join(target, root)
         found = False
+        unsupported_found = []
         for dirpath, dirs, files in os.walk(base):
             dirs[:] = [d for d in dirs if d not in _profiles.WALK_SKIP_DIRS]
             rel_dir = os.path.relpath(dirpath, target)
@@ -375,11 +392,13 @@ def missing_lockfile_hints(target, detected, defs):
                 rel = fn if rel_dir == "." else f"{rel_dir}/{fn}"
                 if any(_profiles.glob_match(p, rel) for p in pats):
                     found = True
-                    break
-            if found:
-                break
-        if not found:
-            label = _profiles.format_profile_label(name, root)
+                elif any(_profiles.glob_match(p, rel) for p in unsupported) and len(unsupported_found) < 3:
+                    unsupported_found.append(rel)
+        label = _profiles.format_profile_label(name, root)
+        if unsupported_found:
+            hints.append(f"[{label}] {', '.join(unsupported_found)} — OSV-Scanner 가 이 lockfile 을 읽지 못해 "
+                         "해당 의존성은 점검되지 않았습니다.")
+        if pats and hint and not found:
             hints.append(f"[{label}] lockfile 없음 — 의존성 점검 정확도가 낮습니다. {hint}")
     return hints
 
@@ -550,6 +569,11 @@ def main(argv=None) -> int:
             extra_meta = json.load(f)
 
     status_rows = read_status(os.path.join(raw, "status.tsv"))
+    seen_tools = {r["tool"] for r in status_rows}
+    for t in EXPECTED_TOOLS.get(args.kind, ()):
+        if t not in seen_tools:
+            status_rows.append({"tool": t, "status": "failed", "exit_code": "-",
+                                "note": "상태 기록 없음 — 도구가 결과를 기록하기 전에 비정상 종료했습니다"})
     findings, errors, warnings = [], [], []
 
     data, err = _load_json(os.path.join(raw, "semgrep.json"))

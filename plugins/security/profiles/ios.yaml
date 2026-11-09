@@ -7,8 +7,10 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 semgrep:
   rulesets: [swift]
 sca:
-  lockfiles: ["**/Package.resolved", "**/Podfile.lock"]
-  missing_lockfile_hint: "Package.resolved / Podfile.lock 을 커밋하세요"
+  lockfiles: ["**/Package.resolved"]
+  # osv-scanner v2.7.0 은 Podfile.lock 을 추출하지 않는다 — 있으면 "점검되지 않음" 경고
+  unsupported_lockfiles: ["**/Podfile.lock"]
+  missing_lockfile_hint: "Swift Package Manager 를 쓰면 Package.resolved 를 커밋하세요"
 artifact:
   types: [ipa]
   analyzer: mobsf

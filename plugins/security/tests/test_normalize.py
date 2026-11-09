@@ -33,6 +33,16 @@ class MaskTest(unittest.TestCase):
         self.assertIn("AKIA", out)          # 종류를 알 수 있게 접두사는 남긴다
         self.assertIn("password = ", out)   # 키 이름은 남긴다
 
+    def test_masks_quoted_keys_arrows_and_bearer(self):
+        """PR #19 C1: 따옴표로 감싼 키, =>, pass, Bearer 토큰"""
+        pw = "Hunter2" + "Hunter2Zq"
+        cases = [f'"password": "{pw}",', f'{{"api_key": "{pw}"}}', f'password => "{pw}"',
+                 f"DB_PASS={pw}", f'"X-Api-Key": "{pw}"', "Authorization: Bearer " + "0123456789abcdef" * 2]
+        for c in cases:
+            out = normalize.mask_secrets(c)
+            self.assertNotIn(pw, out, c)
+            self.assertNotIn("0123456789abcdef", out, c)
+
     def test_private_key_block(self):
         out = normalize.mask_secrets("-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----")
         self.assertNotIn("MIIEow", out)
@@ -173,6 +183,37 @@ class ParserTest(unittest.TestCase):
         with open(os.path.join(self.run, "meta.json"), encoding="utf-8") as fh:
             meta = json.load(fh)
         self.assertEqual(meta["tool_status"][0]["status"], "failed")
+
+    def test_semgrep_secret_rule_never_keeps_source_line(self):
+        """PR #19 C1·W1: 시크릿 규칙은 소스 줄을 읽지 않고, INFO 여도 최소 high"""
+        pw = "Zq9" + "Hunter2Hunter2"
+        _w(os.path.join(self.target, "app", "config.json"), f'{{\n  "pw": "{pw}"\n}}\n')
+        r = self.semgrep_result("/src/app/config.json", line=2, sev="INFO",
+                                check="rules.generic.secrets.gitleaks.generic-api-key")
+        r["extra"]["lines"] = f'  "pw": "{pw}"'   # 도구 출력에 원문이 있어도 쓰지 않는다
+        self.raw("semgrep.json", {"results": [r]})
+        f, summary = self.run_normalize()
+        (x,) = f["findings"]
+        self.assertEqual((x["category"], x["severity"]), ("secret", "high"))
+        self.assertEqual(x["evidence"], normalize.SECRET_EVIDENCE)
+        for name in ("findings.json", "summary.md", "meta.json"):
+            with open(os.path.join(self.run, name), encoding="utf-8") as fh:
+                self.assertNotIn(pw, fh.read(), name)
+
+    def test_missing_status_row_is_reported_as_failure(self):
+        """PR #19 W5: 도구가 status 를 기록하기 전에 죽으면 '모든 도구 정상'이 되면 안 된다"""
+        _w(os.path.join(self.run, "raw", "status.tsv"),
+           "gitleaks-git\tok\t0\t\ngitleaks-dir\tok\t0\t\nosv-scanner\tok\t0\t\n")
+        _, summary = self.run_normalize()
+        self.assertNotIn("모든 도구가 정상 종료했습니다", summary)
+        self.assertIn("| semgrep | failed | - | 상태 기록 없음", summary)
+
+    def test_unsupported_lockfile_is_warned(self):
+        """PR #19 W4: Podfile.lock 은 OSV-Scanner 가 읽지 못하므로 '점검되지 않음'을 알린다"""
+        _w(os.path.join(self.target, "ios", "Podfile.lock"), "PODS:\n  - Alamofire (5.4.0)\n")
+        _, summary = self.run_normalize("ios\tios\t\n")
+        self.assertIn("ios/Podfile.lock — OSV-Scanner 가 이 lockfile 을 읽지 못해", summary)
+        self.assertIn("lockfile 없음", summary)   # Package.resolved 도 없으므로
 
     def test_dedupe_and_file_modes(self):
         r = self.semgrep_result("/src/src/app.py")

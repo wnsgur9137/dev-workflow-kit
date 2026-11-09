@@ -312,10 +312,12 @@ def validate_profile(p, fname: str) -> list[str]:
         errs.append(f"{fname}: sca 매핑이 필요합니다")
     else:
         for k in sca:
-            if k not in ("lockfiles", "missing_lockfile_hint"):
+            if k not in ("lockfiles", "unsupported_lockfiles", "missing_lockfile_hint"):
                 errs.append(f"{fname}: sca 의 알 수 없는 키 '{k}'")
         if not _is_str_list(sca.get("lockfiles")):
             errs.append(f"{fname}: sca.lockfiles 는 문자열 리스트여야 합니다")
+        if "unsupported_lockfiles" in sca and not _is_str_list(sca["unsupported_lockfiles"]):
+            errs.append(f"{fname}: sca.unsupported_lockfiles 는 문자열 리스트여야 합니다")
         if "missing_lockfile_hint" in sca and not isinstance(sca["missing_lockfile_hint"], str):
             errs.append(f"{fname}: sca.missing_lockfile_hint 는 문자열이어야 합니다")
 
