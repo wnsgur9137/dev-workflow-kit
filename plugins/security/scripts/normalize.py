@@ -219,8 +219,8 @@ def semgrep_partial_warning(data):
             paths.add(strip_container_prefix(p))
     if not count:
         return ""
-    where = f"{len(paths)}개 파일" if paths else f"{count}건"
-    return (f"Semgrep 이 {where}의 일부를 점검하지 못했습니다 (타임아웃·파싱 실패 등 경고 {count}건) — "
+    where = f"{len(paths)}개 파일의 일부를" if paths else "일부 파일을"
+    return (f"Semgrep 이 {where} 점검하지 못했습니다 (타임아웃·파싱 실패 등 경고 {count}건) — "
             "raw/semgrep.json 의 errors 를 확인하세요.")
 
 
@@ -538,7 +538,7 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors) -> str:
 
     L.append("## 경고")
     # 경고에는 대상 저장소의 경로·파일 이름이 들어간다
-    L.append(_fence("\n".join(f"- {w}" for w in warnings)) if warnings else "없음")
+    L.append(_fence("\n".join(f"- {clean_text(w, 300, True)}" for w in warnings)) if warnings else "없음")
     L.append("")
     L.append("## 실행 오류·건너뛴 도구")
     problems = [r for r in status_rows if r["status"] != "ok"]
