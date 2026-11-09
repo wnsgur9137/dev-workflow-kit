@@ -259,6 +259,17 @@ class ParserTest(unittest.TestCase):
         self.assertIn("checks: web: 알 수 없는 검사 'nope'", summary)
         self.assert_only_in_fence(summary, "v9/pnpm-lock.yaml: 판별하지 못했습니다")   # 검사 경고는 경고 섹션으로
 
+    def test_long_paths_are_not_masked_as_tokens(self):
+        """S-Android: 40자 이상 이어진 경로가 고엔트로피 토큰 마스킹에 걸려 바뀌면 안 된다 (기준선 불일치로 드러남)"""
+        path = "app/src/main/res/xml/network_security_config.xml"
+        self.raw("checks.json", {"results": [{"rule_id": "android.nsc-cleartext", "severity": "high", "category": "mobile",
+                                              "profile": "android", "file": path, "line": 3, "title": "t",
+                                              "package": "com.fasterxml.jackson.core:jackson-databind@2.9.8"}]})
+        f, summary = self.run_normalize("android\t.\t\n")
+        (x,) = f["findings"]
+        self.assertEqual(x["location"]["file"], path)
+        self.assertIn(path, summary)
+
     def test_tool_failures_and_warnings_are_not_hidden(self):
         _w(os.path.join(self.run, "raw", "status.tsv"),
            "semgrep\tfailed\t2\tFatal error\ngitleaks-git\tskipped\t-\tgit 저장소가 아님\nosv-scanner\tok\t0\t\n")

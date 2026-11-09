@@ -99,6 +99,16 @@ def clean_text(text, limit: int, single_line: bool = False) -> str:
     return text
 
 
+def clean_ident(text, limit: int) -> str:
+    """경로·패키지·규칙 ID 같은 식별자 — 제어문자 제거·한 줄·길이 제한만 한다.
+    시크릿 재마스킹은 하지 않는다: 40자 이상 이어진 경로(app/src/main/res/xml/network_security_config)가
+    고엔트로피 토큰 패턴에 걸려 [MASKED-TOKEN] 으로 바뀌던 문제 (다른 도구의 location 도 마스킹하지 않는다)."""
+    if text is None:
+        return ""
+    t = re.sub(r"\s+", " ", _CONTROL.sub("", str(text))).strip()
+    return t if len(t) <= limit else t[: limit - 1] + "…"
+
+
 def strip_container_prefix(path: str) -> str:
     if not path:
         return path
@@ -383,10 +393,10 @@ def parse_checks(data):
     for r in data.get("results") or []:
         sev = r.get("severity") if r.get("severity") in SEVERITIES else "medium"
         cat = r.get("category") if r.get("category") in ("sast", "secret", "dependency", "config", "mobile", "web") else "config"
-        file = clean_text(r.get("file"), 300, True)
+        file = clean_ident(r.get("file"), 300)
         line = r.get("line") if isinstance(r.get("line"), int) else None
-        pkg = clean_text(r.get("package"), 120, True) or None
-        rule = clean_text(r.get("rule_id") or r.get("check"), 120, True)
+        pkg = clean_ident(r.get("package"), 120) or None
+        rule = clean_ident(r.get("rule_id") or r.get("check"), 120)
         out.append({
             "id": finding_id("toolkit", rule, file, line, pkg),
             "tool": "toolkit",
@@ -473,8 +483,9 @@ def _cell(text) -> str:
 
 
 def _code(text) -> str:
-    """짧은 식별자(경로·규칙 ID·프로파일 라벨)는 인라인 코드로 감싼다."""
-    return f"`{_cell(text)}`"
+    """짧은 식별자(경로·규칙 ID·프로파일 라벨)는 인라인 코드로 감싼다 — 마스킹 없이 정제만 (긴 경로가 가려지지 않게)."""
+    t = clean_ident(text, 200)
+    return "`" + t.replace("|", "\\|").replace("`", "'") + "`"
 
 
 def _fence(text: str) -> str:

@@ -426,6 +426,94 @@ class ChecksTest(unittest.TestCase):
             ("server.config-plaintext-secret", "api/src/main/resources/application.yml"),
         ])
 
+    def test_android_manifest_and_nsc(self):
+        _w(os.path.join(self.t, "app/src/main/AndroidManifest.xml"), """<?xml version="1.0"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:allowBackup="false" android:networkSecurityConfig="@xml/nsc">
+    <activity android:name=".Main" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+    </activity>
+    <activity android:name=".Deep" android:exported="true"/>
+    <service android:name=".S" android:exported="true" android:permission="x.P"/>
+    <receiver android:name=".R" android:exported="false"/>
+  </application>
+</manifest>
+""")
+        _w(os.path.join(self.t, "app/src/main/res/xml/nsc.xml"),
+           '<network-security-config><domain-config cleartextTrafficPermitted="true"><domain>10.0.2.2</domain></domain-config>'
+           '<debug-overrides><trust-anchors><certificates src="system"/></trust-anchors></debug-overrides></network-security-config>')
+        got = sorted((r["rule_id"], r["severity"], r["evidence"]) for r in self.run_checks([("android", ".", [])])["results"])
+        self.assertEqual([(a, b) for a, b, _ in got], [("android.manifest-exported-component", "high"), ("android.nsc-cleartext", "medium")])
+        self.assertIn(".Deep", got[0][2])
+
+    def test_android_xml_with_doctype_is_refused(self):
+        _w(os.path.join(self.t, "AndroidManifest.xml"),
+           '<?xml version="1.0"?><!DOCTYPE m [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;">]><manifest><application/></manifest>')
+        report = self.run_checks([("android", ".", [])])
+        self.assertEqual(report["results"], [])
+        self.assertTrue(any("DOCTYPE" in w for w in report["warnings"]))
+
+    def test_android_gradle_release(self):
+        _w(os.path.join(self.t, "a/build.gradle.kts"),
+           'plugins { id("com.android.application") }\nandroid { buildTypes { getByName("release") { isMinifyEnabled = true } } }\n')
+        _w(os.path.join(self.t, "b/build.gradle"),
+           "plugins { id 'com.android.application' }\nandroid {\n  buildTypes {\n    debug { minifyEnabled true }\n  }\n}\n")
+        _w(os.path.join(self.t, "c/build.gradle"),
+           "plugins { id 'com.android.library' }\nandroid { buildTypes { release { minifyEnabled false } } }\n")   # 라이브러리 — 대상 아님
+        _w(os.path.join(self.t, "d/build.gradle"),
+           "plugins { id 'com.android.application' }\nandroid { buildTypes { release {\n // minifyEnabled true\n minifyEnabled false } } }\n")
+        got = sorted((r["file"], r["evidence"][:14]) for r in self.run_checks([("android", ".", [])])["results"])
+        self.assertEqual(got, [("b/build.gradle", "release 빌드 타입이"), ("d/build.gradle", "release 빌드 타입에")])
+
+    def test_android_properties_secret(self):
+        value = "Zq9" + "storepw"
+        _w(os.path.join(self.t, "gradle.properties"),
+           f"org.gradle.jvmargs=-Xmx2g\nRELEASE_STORE_PASSWORD={value}\nKEY_PASSWORD=${{KEY_PW}}\nandroid.enableR8=true\n"
+           "KEYSTORE_PASSWORD=123456\n")
+        _w(os.path.join(self.t, "local.properties"), "sdk.dir=/Users/x/Library/Android/sdk\nMAPS_API_KEY=" + value + "\n")
+        rs = self.run_checks([("android", ".", [])])["results"]
+        self.assertEqual(sorted((r["file"], r["line"]) for r in rs),
+                         [("gradle.properties", 2), ("gradle.properties", 5), ("local.properties", 2)])   # 숫자 비밀번호도
+        self.assertNotIn(value, json.dumps(rs))
+
+    def test_android_checks_line_length_is_linear(self):
+        """S-Server 리뷰 교훈: 줄 길이를 2배로 늘려도 시간이 이차로 늘지 않는다 (해당 경로를 거치는지 결과로 확인)"""
+        def gradle(pad):
+            body = "".join(f"minifyEnabled{pad}x\n" for _ in range(150))
+            return "plugins { id 'com.android.application' }\nandroid { buildTypes { release {\n" + body + "} } }\n"
+        def props(pad):
+            return "".join(f"STORE_PASSWORD={pad}v\n" for _ in range(150))
+        for name, gen in (("app/build.gradle", gradle), ("gradle.properties", props)):
+            times = []
+            for width in (1900, 3800):
+                path = os.path.join(self.t, name)
+                _w(path, gen(" " * width))
+                t0 = time.time()
+                rs = self.run_checks([("android", ".", [])])["results"]
+                times.append(time.time() - t0)
+                self.assertTrue(rs, name)
+                os.remove(path)
+            self.assertLess(times[1], max(times[0] * 3.0, 0.3), (name, times))
+
+    def test_android_fixture_expectations(self):
+        import shutil
+        shutil.copytree(os.path.join(HERE, "fixtures", "android"), self.t, dirs_exist_ok=True)
+        detected = profiles.detect_full(self.t, self.defs)
+        self.assertEqual([(n, r) for n, r, _ in detected], [("android", ".")])
+        report = checks.run(self.t, detected, self.defs)
+        self.assertEqual(report["errors"], [])
+        self.assertEqual(self.rules(report), [
+            ("android.gradle-release-minify-disabled", "app/build.gradle"),
+            ("android.manifest-allow-backup", "app/src/main/AndroidManifest.xml"),
+            ("android.manifest-cleartext", "app/src/main/AndroidManifest.xml"),
+            ("android.manifest-debuggable", "app/src/main/AndroidManifest.xml"),
+            ("android.manifest-exported-component", "app/src/main/AndroidManifest.xml"),
+            ("android.manifest-exported-component", "app/src/main/AndroidManifest.xml"),
+            ("android.nsc-cleartext", "app/src/main/res/xml/network_security_config.xml"),
+            ("android.nsc-user-certs", "app/src/main/res/xml/network_security_config.xml"),
+            ("android.properties-secret", "gradle.properties"),
+        ])
+
     def test_web_fixture_expectations(self):
         """tests/fixtures/web 의 README 표와 같은 결과 (env·lockfile 은 테스트에서 실제 이름으로 복사)"""
         import shutil
