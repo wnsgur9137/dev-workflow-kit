@@ -97,6 +97,11 @@ class Ctx:
                 yield rel, full
 
     def read(self, full):
+        """대상 폴더 안의 일반 파일을 텍스트로 (read_bytes 참고)."""
+        data = self.read_bytes(full)
+        return None if data is None else data.decode("utf-8-sig", "replace")
+
+    def read_bytes(self, full):
         """대상 폴더 안의 일반 파일만, 크기 제한 안에서 읽는다 (넘거나 문제가 있으면 None).
         마지막 경로 구성 요소는 O_NOFOLLOW 로 열고, 연 뒤의 fstat 으로 일반 파일·크기를 다시 확인한다."""
         real = os.path.realpath(full)
@@ -114,7 +119,7 @@ class Ctx:
                 data = f.read(MAX_FILE + 1)
             if len(data) > MAX_FILE:
                 return None
-            return data.decode("utf-8-sig", "replace")
+            return data
         except OSError:
             return None
         finally:
@@ -1200,86 +1205,101 @@ def check_android_properties_secret(ctx):
 # ios
 # ---------------------------------------------------------------------------
 WEAK_TLS = ("TLSv1.0", "TLSv1.1")
+# iOS 10 이상에서 이 키 중 하나라도 있으면 NSAllowsArbitraryLoads 는 무시된다 (Apple 문서 NSAllowsArbitraryLoads)
+ATS_OVERRIDES = ("NSAllowsArbitraryLoadsForMedia", "NSAllowsArbitraryLoadsInWebContent", "NSAllowsLocalNetworking")
+HUGE_PLIST_INT = re.compile(rb"<integer>[ \t\r\n]*[-+]?[0-9]{100,}")
 
 
 def _load_plist(ctx, rel, full):
-    """Info.plist(XML·바이너리)를 표준 plistlib 로 읽는다 — XML 엔티티 선언은 plistlib 이 거부한다."""
+    """Info.plist(XML·바이너리)를 표준 plistlib 로 읽는다 — XML 엔티티 선언은 plistlib 이 거부한다.
+    아주 긴 정수(Python 3.8·3.9 초기 버전의 int 변환 이차 시간, CVE-2020-10735)는 파싱 전에 거른다."""
     import plistlib
-    real = os.path.realpath(full)
-    if not real.startswith(ctx.target + os.sep):
+    data = ctx.read_bytes(full)
+    if data is None:
+        return None, None
+    if HUGE_PLIST_INT.search(data):
+        ctx.warn(f"{rel}: 비정상적으로 긴 정수가 있어 plist 를 해석하지 않았습니다")
         return None, None
     try:
-        fd = os.open(real, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-    except OSError:
-        return None, None
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_FILE:
-            return None, None
-        with os.fdopen(fd, "rb", closefd=False) as f:
-            data = f.read(MAX_FILE + 1)
-    except OSError:
-        return None, None
-    finally:
-        os.close(fd)
-    try:
-        return plistlib.loads(data), data.decode("utf-8", "replace") if data[:6] != b"bplist" else ""
+        return plistlib.loads(data), (data.decode("utf-8", "replace") if data[:6] != b"bplist" else "")
     except Exception:  # noqa: BLE001 — 대상 파일은 신뢰하지 않는 입력이다
         ctx.warn(f"{rel}: plist 를 해석하지 못했습니다")
         return None, None
 
 
+def _plist_key(k):
+    from xml.sax.saxutils import escape
+    return f"<key>{escape(str(k))}</key>"
+
+
 def check_ios_ats(ctx):
-    """I2 — Info.plist 의 ATS 예외: NSAllowsArbitraryLoads(전체 평문 허용), 웹 콘텐츠·미디어 예외,
-    예외 도메인의 평문 허용·낮은 최소 TLS 버전."""
+    """I2 — Info.plist 의 ATS 예외: NSAllowsArbitraryLoads(전체 평문 허용, iOS 10+ 에서 무시되는 조합이면 low),
+    웹 콘텐츠·미디어 예외, 예외 도메인의 평문 허용·낮은 최소 TLS 버전.
+    줄 번호는 plist 키를 문서 순서대로 이어 찾는다(선형, plistlib 은 dict 순서를 파일 순서대로 보존). 바이너리 plist 처럼
+    줄이 없으면 키 경로(package 자리)로 결과를 구분한다."""
     out = []
-    for rel, full in ctx.files(lambda rel, name: name.endswith("Info.plist")):
+    for rel, full in ctx.files(lambda rel, name: name.lower().endswith("info.plist")):
         data, text = _load_plist(ctx, rel, full)
         if not isinstance(data, dict):
             continue
         ats = data.get("NSAppTransportSecurity")
         if not isinstance(ats, dict):
             continue
+        cur = _LineCursor(text)
+        cur.find("<key>NSAppTransportSecurity</key>") if text else None
 
-        def line_of(key):
-            return _xml_line(text, key) if text else None
+        def add(rid, sev, line, keypath, title, evidence, hint, cwe):
+            out.append(ctx.finding("ios-ats", rid, sev, "mobile", rel, line, title, evidence=evidence, fix_hint=hint,
+                                   references=[cwe], package=None if line else f"ATS:{keypath}"[:120]))
 
-        if ats.get("NSAllowsArbitraryLoads") is True:
-            out.append(ctx.finding(
-                "ios-ats", "ios.ats-arbitrary-loads", "high", "mobile", rel, line_of("NSAllowsArbitraryLoads"),
-                "ATS 가 꺼져 있습니다 (NSAllowsArbitraryLoads = true) — 모든 도메인에 평문 HTTP 를 허용합니다",
-                evidence="NSAppTransportSecurity.NSAllowsArbitraryLoads = true",
-                fix_hint="키를 지우고, 평문이 꼭 필요한 도메인만 NSExceptionDomains 로 좁히세요.", references=["CWE-319"]))
-        for key in ("NSAllowsArbitraryLoadsInWebContent", "NSAllowsArbitraryLoadsForMedia"):
-            if ats.get(key) is True:
-                out.append(ctx.finding(
-                    "ios-ats", "ios.ats-arbitrary-loads-partial", "medium", "mobile", rel, line_of(key),
-                    f"ATS 부분 예외가 켜져 있습니다 ({key} = true)", evidence=f"NSAppTransportSecurity.{key} = true",
-                    fix_hint="필요한 경우가 아니면 지우세요.", references=["CWE-319"]))
-        domains = ats.get("NSExceptionDomains")
-        for domain, conf in (domains.items() if isinstance(domains, dict) else []):
-            if not isinstance(conf, dict):
-                continue
-            d = str(domain)[:120]
-            if conf.get("NSExceptionAllowsInsecureHTTPLoads") is True or conf.get("NSTemporaryExceptionAllowsInsecureHTTPLoads") is True:
-                out.append(ctx.finding(
-                    "ios-ats", "ios.ats-insecure-http-exception", "medium", "mobile", rel, line_of(d) if text else None,
-                    "ATS 예외 도메인에 평문 HTTP 를 허용합니다", evidence=f"도메인 {d}: NSExceptionAllowsInsecureHTTPLoads = true",
-                    fix_hint="서버를 HTTPS 로 옮기고 예외를 지우세요.", references=["CWE-319"]))
-            tls = conf.get("NSExceptionMinimumTLSVersion") or conf.get("NSTemporaryExceptionMinimumTLSVersion")
-            if isinstance(tls, str) and tls in WEAK_TLS:
-                out.append(ctx.finding(
-                    "ios-ats", "ios.ats-weak-tls", "medium", "mobile", rel, line_of(d) if text else None,
-                    "ATS 예외 도메인의 최소 TLS 버전이 낮습니다", evidence=f"도메인 {d}: 최소 TLS {tls}",
-                    fix_hint="TLS 1.2 이상만 허용하세요.", references=["CWE-326"]))
+        overrides = [k for k in ATS_OVERRIDES if k in ats]
+        for key, value in ats.items():
+            line = cur.find(_plist_key(key)) if text else None
+            if key == "NSAllowsArbitraryLoads" and value is True:
+                if overrides:
+                    add("ios.ats-arbitrary-loads", "low", line, key,
+                        "NSAllowsArbitraryLoads = true — iOS 9 이하에서만 적용됩니다", f"NSAllowsArbitraryLoads = true (iOS 10 이상에서는 {overrides[0]} 가 있어 무시)",
+                        "최소 배포 버전이 iOS 10 이상이면 키를 지우세요.", "CWE-319")
+                else:
+                    add("ios.ats-arbitrary-loads", "high", line, key,
+                        "ATS 가 꺼져 있습니다 (NSAllowsArbitraryLoads = true) — 모든 도메인에 평문 HTTP 를 허용합니다",
+                        "NSAppTransportSecurity.NSAllowsArbitraryLoads = true",
+                        "키를 지우고, 평문이 꼭 필요한 도메인만 NSExceptionDomains 로 좁히세요.", "CWE-319")
+            elif key in ("NSAllowsArbitraryLoadsInWebContent", "NSAllowsArbitraryLoadsForMedia") and value is True:
+                add("ios.ats-arbitrary-loads-partial", "medium", line, key, f"ATS 부분 예외가 켜져 있습니다 ({key} = true)",
+                    f"NSAppTransportSecurity.{key} = true", "필요한 경우가 아니면 지우세요.", "CWE-319")
+            elif key == "NSExceptionDomains" and isinstance(value, dict):
+                for domain, conf in value.items():
+                    if len(out) > MAX_RESULTS_PER_CHECK:
+                        break
+                    dline = cur.find(_plist_key(domain)) if text else None
+                    if not isinstance(conf, dict):
+                        continue
+                    d = str(domain)[:120]
+                    sub = " (하위 도메인 포함)" if conf.get("NSIncludesSubdomains") is True else ""
+                    if any(conf.get(k) is True for k in ("NSExceptionAllowsInsecureHTTPLoads",
+                                                         "NSTemporaryExceptionAllowsInsecureHTTPLoads",
+                                                         "NSThirdPartyExceptionAllowsInsecureHTTPLoads")):
+                        add("ios.ats-insecure-http-exception", "medium", dline, f"NSExceptionDomains/{d}",
+                            "ATS 예외 도메인에 평문 HTTP 를 허용합니다", f"도메인 {d}{sub}: 평문 HTTP 허용",
+                            "서버를 HTTPS 로 옮기고 예외를 지우세요.", "CWE-319")
+                    tls = (conf.get("NSExceptionMinimumTLSVersion") or conf.get("NSTemporaryExceptionMinimumTLSVersion")
+                           or conf.get("NSThirdPartyExceptionMinimumTLSVersion"))
+                    if isinstance(tls, str) and tls in WEAK_TLS:
+                        add("ios.ats-weak-tls", "medium", dline, f"NSExceptionDomains/{d}/tls",
+                            "ATS 예외 도메인의 최소 TLS 버전이 낮습니다", f"도메인 {d}{sub}: 최소 TLS {tls}",
+                            "TLS 1.2 이상만 허용하세요.", "CWE-326")
     return out
 
 
-XCCONFIG_ASSIGN = re.compile(r"[ \t]*([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]\n]{0,100}\])?[ \t]*=(.*)")
+# 조건부 설정 [sdk=…][arch=…][config=…] 는 여러 개 붙을 수 있다 (구분자 [ 가 있어 백트래킹이 늘지 않는다)
+XCCONFIG_ASSIGN = re.compile(r"[ \t]*([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]\n]{0,100}\]){0,4}[ \t]*=(.*)")
+XCCONFIG_REF = re.compile(r"\$[({][^)}\n]{0,200}[)}]")
 
 
 def check_ios_xcconfig_secret(ctx):
-    """I1 보강 — *.xcconfig 의 비밀 키 평문 값 (빌드 설정은 Info.plist·바이너리로 들어간다). 값은 기록하지 않는다."""
+    """I1 보강 — *.xcconfig 의 비밀 키 평문 값 (빌드 설정은 Info.plist·바이너리로 들어간다). 값은 기록하지 않는다.
+    xcconfig 에서 // 는 어디서든 주석이다 (그래서 URL 을 https:/$()/ 로 쓴다). $(…)·${…} 참조만 있는 값은 제외."""
     out = []
     for rel, full in ctx.files(lambda rel, name: name.endswith(".xcconfig")):
         text = ctx.read(full)
@@ -1289,16 +1309,16 @@ def check_ios_xcconfig_secret(ctx):
             if line.lstrip().startswith(("//", "#include")):
                 continue
             m = XCCONFIG_ASSIGN.fullmatch(line)
-            if not m:
+            if not m or not is_secret_key(m.group(1)):
                 continue
-            # 줄 끝 주석은 공백 뒤 // 만 (URL 의 :// 는 값이다)
-            key, value = m.group(1), m.group(2).split(" //", 1)[0].strip()
-            ok, _note = _secret_value(value, key)
-            if is_secret_key(key) and ok and not value.startswith("$("):
+            key, value = m.group(1), m.group(2).split("//", 1)[0].strip()
+            plain = XCCONFIG_REF.sub("", value).strip()          # $(inherited) realSecret → realSecret
+            ok, _note = _secret_value(plain, key)
+            if ok:
                 out.append(ctx.finding(
                     "ios-xcconfig-secret", "ios.xcconfig-secret", "high", "secret", rel, n,
                     "xcconfig 의 비밀 키에 평문 값이 있습니다 — 앱 번들(Info.plist·바이너리)에 들어갈 수 있습니다",
-                    evidence=f"키: {key} — 값은 리포트에 남기지 않습니다",
+                    evidence=f"키: {key[:60]} — 값은 리포트에 남기지 않습니다",
                     fix_hint="저장소 밖 xcconfig(gitignore)나 CI 시크릿으로 옮기고, 앱에 넣어야 하는 키라면 서버를 거쳐 발급받으세요.",
                     references=["CWE-798"]))
     return out
