@@ -42,6 +42,23 @@ exclude_paths: ["**/build/**", "**/.gradle/**", "**/generated/**"]
 | A8 | 취약 의존성 | OSV-Scanner | `gradle.lockfile`, `verification-metadata.xml` | CVSS 기준 |
 | A9 | 바이너리 점검 (권한, 인증서, 임베디드 키, 난독화) | [[MobSF]] (`/security:scan-app` APK·AAB) | `.apk`, `.aab` | MobSF 기준 |
 
+## 구현 메모 (S-Android)
+
+| # | 구현 | 규칙·검사 ID | 심각도 |
+|---|---|---|---|
+| A1 | Gitleaks (공통) + 스택 검사 — `gradle.properties`·`local.properties`·`keystore.properties`·`signing.properties`의 비밀 키(`password`·`secret`·`token`·`api-key`) 평문 값, **키 이름만** 기록 | `android.properties-secret` | high |
+| A2 | 스택 검사 — `application`의 `debuggable="true"` / `allowBackup="true"` | `android.manifest-debuggable` / `android.manifest-allow-backup` | high / medium |
+| A3 | 스택 검사 — `exported="true"`이면서 `permission`·`readPermission`·`writePermission`이 없는 activity·activity-alias·service·receiver·provider. 런처(MAIN+LAUNCHER) Activity는 제외 | `android.manifest-exported-component` | high |
+| A4 | 스택 검사 — `usesCleartextTraffic="true"`, `networkSecurityConfig`가 가리키는 `res/xml/*.xml`의 `cleartextTrafficPermitted="true"`(base-config high, domain-config medium), `trust-anchors`의 `certificates src="user"`(debug-overrides 밖) | `android.manifest-cleartext`, `android.nsc-cleartext`, `android.nsc-user-certs` | high / medium |
+| A5 | 스택 검사 — `com.android.application` 모듈의 `buildTypes.release`에 `minifyEnabled true`(`isMinifyEnabled = true`)가 없거나 release 블록이 없음. 주석은 지우고 본다 | `android.gradle-release-minify-disabled` | medium |
+| A6 | Semgrep 커스텀 — `addJavascriptInterface`, 파일 접근 허용(`setAllowFileAccess(true)`·`allowFileAccess = true` 등, Java·Kotlin) | `custom.android.webview-*` | medium |
+| A7 | Semgrep 커스텀 `MODE_WORLD_READABLE`·`MODE_WORLD_WRITEABLE` + 공식 `java/android`(ECB·MD5 등) | `custom.android.world-readable-mode` | medium |
+| A8 | OSV-Scanner (공통) — `gradle.lockfile` | — | CVSS |
+
+- 공식 `java/android/.../manifest-security-features`가 cleartext·사용자 CA 를 INFO(low)로도 내므로 A4 는 같은 위치에 low·high 결과가 함께 나올 수 있다.
+- XML 은 표준 파서로 읽되 DOCTYPE·엔티티 선언이 있으면 해석하지 않고 경고한다(엔티티 확장 방지). 리소스 병합(flavor·library manifest)은 보지 않고 소스의 Manifest 만 본다.
+- A5 는 Gradle 을 실행하지 않는 텍스트 해석이라, 컨벤션 플러그인·`buildSrc`에서 설정하는 구조는 오탐이 된다.
+
 ## Semgrep 규칙
 - 공식: `semgrep-rules/kotlin`, `semgrep-rules/java`(Android 관련 포함), `generic`
 - 커스텀: `$PLUGIN/rules/custom/android/` — A6 보강
@@ -63,6 +80,6 @@ exclude_paths: ["**/build/**", "**/.gradle/**", "**/generated/**"]
 `tests/fixtures/android/`: `debuggable`·`allowBackup`·`exported` 켠 Manifest, cleartext 허용 network_security_config, `minifyEnabled false`, WebView JS 인터페이스 코드
 
 > [!warning] 검증 필요
-> - `semgrep-rules`의 Kotlin 규칙 범위
+> - ~~`semgrep-rules`의 Kotlin 규칙 범위~~ → `kotlin/`은 lang·gradle 위주, Android 는 `java/android/`(manifest-security-features, exported_activity, ECB·MD5 등). WebView·world-readable 은 커스텀으로 보완
 > - OSV-Scanner의 `gradle.lockfile`·`verification-metadata.xml` 지원
 > - MobSF의 AAB 직접 분석 지원 여부
