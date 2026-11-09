@@ -1,0 +1,26 @@
+{
+  "_doc": "tests/fixtures/web 을 /security:scan-code 로 점검했을 때 반드시 나와야 하는 결과 (S-Web 기준선, 점검 항목 W1~W8 은 docs/security/07 스택별 설계/Web.md). 하나라도 빠지면 회귀다. W1(Gitleaks)은 공통 기준선 common.json 이 확인한다.",
+  "must_find": [
+    {"tool": "semgrep", "rule_suffix": "public-env-secret", "file": "app/page.tsx", "severity": "high", "note": "W2 소스"},
+    {"tool": "toolkit", "rule_id": "web.env-public-secret", "file": ".env", "severity": "high", "note": "W2 .env"},
+    {"tool": "semgrep", "rule_suffix": "react-dangerouslysetinnerhtml", "file": "app/page.tsx", "note": "W3"},
+    {"tool": "toolkit", "rule_id": "web.next-unauth-route", "file": "app/api/proxy/route.ts", "severity": "medium", "note": "W4"},
+    {"tool": "toolkit", "rule_id": "web.next-unauth-route", "file": "pages/api/legacy.js", "severity": "medium", "note": "W4"},
+    {"tool": "toolkit", "rule_id": "web.next-unauth-route", "file": "app/api/search/route.ts", "severity": "medium", "note": "W4"},
+    {"tool": "semgrep", "rule_suffix": "next-ssrf-fetch", "file": "app/api/proxy/route.ts", "severity": "high", "note": "W5"},
+    {"tool": "semgrep", "rule_suffix": "next-ssrf-fetch", "file": "pages/api/legacy.js", "severity": "high", "note": "W5"},
+    {"tool": "semgrep", "rule_suffix": "next-ssrf-fetch", "file": "app/api/search/route.ts", "severity": "high", "note": "W5 searchParams 구조 분해"},
+    {"tool": "toolkit", "rule_id": "web.next-config-no-security-headers", "file": "next.config.js", "note": "W6"},
+    {"tool": "toolkit", "rule_id": "web.next-config-wildcard-remote-image", "file": "next.config.js", "note": "W6"},
+    {"tool": "toolkit", "rule_id": "web.next-config-browser-sourcemaps", "file": "next.config.js", "note": "W6"},
+    {"tool": "osv-scanner", "package": "next@13.4.0", "file": "package-lock.json", "note": "W7"},
+    {"tool": "toolkit", "rule_id": "web.npm-install-script", "package": "esbuild@0.18.20", "severity": "info", "note": "W8"}
+  ],
+  "must_not_find": [
+    {"file": "app/api/me/route.ts", "rule_suffix": "next-unauth-route", "note": "auth() 로 인증하는 라우트"},
+    {"file": "app/api/safe-fetch/route.ts", "rule_suffix": "next-ssrf-fetch", "note": "고정 호스트·Map.get·axios.get(리터럴)"},
+    {"file": "app/api/safe-fetch/route.ts", "rule_suffix": "public-env-secret", "note": "ANON 키는 공개용"},
+    {"file": "app/api/safe-fetch/route.ts", "rule_suffix": "next-unauth-route", "note": "auth() 호출"},
+    {"file": "app/components/Client.tsx", "rule_suffix": "next-ssrf-fetch", "note": "클라이언트 컴포넌트의 router.query"}
+  ]
+}

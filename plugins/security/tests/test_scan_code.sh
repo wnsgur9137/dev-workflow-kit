@@ -204,6 +204,30 @@ _make_target() {
   TARGET_DIR=$t
 }
 
+# _check_baseline <findings.json> <baseline.json> — must_find 가 모두 있고 must_not_find 가 하나도 없어야 한다
+_check_baseline() {
+  python3 - "$1" "$2" <<'PY' || fail "기준선 회귀 ($(basename "$2"))"
+import json, sys
+found = json.load(open(sys.argv[1]))["findings"]
+base = json.load(open(sys.argv[2]))
+def match(f, b):
+    return ((("tool" not in b) or f["tool"] == b["tool"])
+            and (("rule_id" not in b) or f["rule_id"] == b["rule_id"])
+            and (("rule_suffix" not in b) or f["rule_id"].endswith(b["rule_suffix"]))
+            and (("package" not in b) or f["location"]["package"] == b["package"])
+            and (("file" not in b) or f["location"]["file"] == b["file"])
+            and (("severity" not in b) or f["severity"] == b["severity"]))
+missing = [b for b in base["must_find"] if not any(match(f, b) for f in found)]
+unexpected = [b for b in base.get("must_not_find", []) if any(match(f, b) for f in found)]
+for m in missing:
+    print("    기준선 누락:", m)
+for u in unexpected:
+    print("    나오면 안 되는 결과:", u)
+print(f"    findings {len(found)}건, 기준선 {len(base['must_find'])}건 중 {len(base['must_find']) - len(missing)}건 확인")
+sys.exit(1 if missing or unexpected else 0)
+PY
+}
+
 test_real_scan_code_end_to_end() {
   _real_ready || exit 77
   _make_target || fail "대상 저장소 생성 실패 (git 필요)"
@@ -238,26 +262,7 @@ test_real_scan_code_end_to_end() {
   assert_eq "$(awk -F '\t' '$2 != "ok"' "$RUN_DIR/raw/status.tsv")" "" "(도구 실패)"
 
   # V2: 기준선의 모든 항목이 나와야 한다
-  python3 - "$RUN_DIR/findings.json" "$TESTS_DIR/baseline/common.json" <<'PY' || fail "기준선 회귀"
-import json, sys
-found = json.load(open(sys.argv[1]))["findings"]
-base = json.load(open(sys.argv[2]))["must_find"]
-missing = []
-for b in base:
-    ok = any(f["tool"] == b["tool"]
-             and (("rule_id" not in b) or f["rule_id"] == b["rule_id"])
-             and (("rule_suffix" not in b) or f["rule_id"].endswith(b["rule_suffix"]))
-             and (("package" not in b) or f["location"]["package"] == b["package"])
-             and (("file" not in b) or f["location"]["file"] == b["file"])
-             and (("severity" not in b) or f["severity"] == b["severity"])
-             for f in found)
-    if not ok:
-        missing.append(b)
-for m in missing:
-    print("    기준선 누락:", m)
-print(f"    findings {len(found)}건, 기준선 {len(base)}건 중 {len(base) - len(missing)}건 확인")
-sys.exit(1 if missing else 0)
-PY
+  _check_baseline "$RUN_DIR/findings.json" "$TESTS_DIR/baseline/common.json"
 
   # V2·T4: 시크릿 원문이 리포트 폴더 어디에도 없다 (raw 포함)
   if grep -rqF "$AWS_KEY" "$RUN_DIR" || grep -rqF "$GH_TOKEN_FAKE" "$RUN_DIR" || grep -rqF "$PLAIN_PW" "$RUN_DIR"; then
@@ -346,4 +351,26 @@ test_real_exclude_paths_are_scoped_to_profile_root() {
     python3 -c 'import json,sys; print(" ".join(sorted(p.replace("/src/","") for p in json.load(sys.stdin)["paths"]["scanned"])))')
   # 루트 macos 러너·이름만 비슷한 a1/ 은 점검, 나머지는 제외
   assert_eq "$scanned" "a1/macos/g.py macos/a.py" "(제외 결과)"
+}
+
+# S-Web: 웹 픽스처 기준선 (W1~W8) — 커스텀 Semgrep 규칙·스택 검사·OSV 가 모두 연결되는지
+test_real_scan_code_web_baseline() {
+  _real_ready || exit 77
+  mkdir -p "$HOME/.cache/dev-workflow-kit-tests"
+  WEB_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/web.XXXXXX")
+  trap 'rm -rf "$WEB_DIR"; [ -n "${WEB_RUN:-}" ] && rm -rf "$WEB_RUN"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+  cp -R "$TESTS_DIR/fixtures/web/." "$WEB_DIR/"
+  mv "$WEB_DIR/env.fixture" "$WEB_DIR/.env"
+  mv "$WEB_DIR/package-lock.json.fixture" "$WEB_DIR/package-lock.json"
+  local summary
+  summary=$("$SCAN" "$WEB_DIR" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  WEB_RUN=$(dirname "$summary")
+  assert_eq "$(awk -F '\t' '$2 != "ok" && $1 != "gitleaks-git"' "$WEB_RUN/raw/status.tsv")" "" "(도구 실패)"
+  assert_contains "$(cat "$WEB_RUN/raw/profiles.tsv")" "web"
+  _check_baseline "$WEB_RUN/findings.json" "$TESTS_DIR/baseline/web.json"
+  # .env 의 값은 리포트 어디에도 없다 (키 이름만)
+  if grep -rqF "fixture-not-a-real-value" "$WEB_RUN"; then
+    fail ".env 값이 리포트에 남음"
+  fi
 }

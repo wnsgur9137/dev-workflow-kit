@@ -1,0 +1,62 @@
+# W2 — 클라이언트 번들에 포함되는 공개 접두사 환경 변수에 API 키 이름 (medium) (docs/security/07 스택별 설계/Web.md)
+# 이름 규칙(정규식)은 scripts/lib/checks.py 의 PUBLIC_ENV_KEY_RE 와 같은 문자열이어야 한다 — tests/test_checks.py 가 확인한다.
+# 대괄호 접근은 작은·큰따옴표 문자열만 다룬다 (템플릿 리터럴은 Semgrep 메타변수 텍스트가 달라 맞지 않음).
+rules:
+  - id: public-env-api-key
+    message: >-
+      공개 접두사 환경 변수에 API 키가 있습니다. 공개용으로 발급된 키가 아니라면 브라우저에 노출됩니다. 서버에서 호출하도록 옮기거나, 공개 키라면 도메인 제한 등 사용 범위를 제한하세요.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      stack: web
+    patterns:
+      - pattern-either:
+          - pattern: process.env.$KEY
+          - pattern: import.meta.env.$KEY
+          - pattern: |
+              const {..., $KEY, ...} = process.env
+          - pattern: |
+              const {..., $KEY: $_, ...} = process.env
+          - pattern: |
+              const {..., $KEY, ...} = import.meta.env
+          - pattern: |
+              const {..., $KEY: $_, ...} = import.meta.env
+          - pattern: |
+              let {..., $KEY, ...} = process.env
+          - pattern: |
+              let {..., $KEY: $_, ...} = process.env
+          - pattern: |
+              let {..., $KEY, ...} = import.meta.env
+          - pattern: |
+              let {..., $KEY: $_, ...} = import.meta.env
+          - pattern: |
+              var {..., $KEY, ...} = process.env
+          - pattern: |
+              var {..., $KEY: $_, ...} = process.env
+          - pattern: |
+              var {..., $KEY, ...} = import.meta.env
+          - pattern: |
+              var {..., $KEY: $_, ...} = import.meta.env
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '^(?:NEXT_PUBLIC_|VITE_|REACT_APP_|NUXT_PUBLIC_|GATSBY_|EXPO_PUBLIC_|PUBLIC_)(?!(?:[A-Za-z0-9]+_)*(?:PUBLISHABLE|ANON|PUBLIC|SITE|SITEKEY|FIREBASE|MEASUREMENT)(?:_|$))(?:[A-Za-z0-9]+_)*(?:API_KEY|APIKEY|ACCESS_KEY)(?:_[A-Za-z0-9_]*)?$'
+  - id: public-env-api-key-bracket
+    message: >-
+      공개 접두사 환경 변수에 API 키가 있습니다. 공개용으로 발급된 키가 아니라면 브라우저에 노출됩니다. 서버에서 호출하도록 옮기거나, 공개 키라면 도메인 제한 등 사용 범위를 제한하세요.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      stack: web
+    patterns:
+      - pattern-either:
+          - pattern: process.env[$STR]
+          - pattern: import.meta.env[$STR]
+      - metavariable-regex:
+          metavariable: $STR
+          regex: '^["''](?:NEXT_PUBLIC_|VITE_|REACT_APP_|NUXT_PUBLIC_|GATSBY_|EXPO_PUBLIC_|PUBLIC_)(?!(?:[A-Za-z0-9]+_)*(?:PUBLISHABLE|ANON|PUBLIC|SITE|SITEKEY|FIREBASE|MEASUREMENT)(?:_|["'']$))(?:[A-Za-z0-9]+_)*(?:API_KEY|APIKEY|ACCESS_KEY)(?:_[A-Za-z0-9_]*)?["'']$'

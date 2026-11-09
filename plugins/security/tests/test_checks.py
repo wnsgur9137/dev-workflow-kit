@@ -1,0 +1,294 @@
+"""checks.py 단위 테스트 — 스택별 커스텀 검사 (S-Web: W2 .env 키, W4 인증 없는 라우트, W6 next.config, W8 설치 스크립트)."""
+
+import json
+import os
+import re
+import sys
+import tempfile
+import time
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "scripts", "lib"))
+
+import checks  # noqa: E402
+import profiles  # noqa: E402
+
+FIXTURE = os.path.join(HERE, "fixtures", "web")
+
+
+def _w(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+class ChecksTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.defs = profiles.load_profiles(profiles.DEFAULT_PROFILE_DIR)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.t = os.path.join(self.tmp.name, "target")
+        os.makedirs(self.t)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_checks(self, detected=(("web", ".", []),), allow_errors=False):
+        report = checks.run(self.t, list(detected), self.defs)
+        if not allow_errors:
+            self.assertEqual(report["errors"], [], "검사 예외가 결과를 비우지 않았는지")
+        return report
+
+    def rules(self, report):
+        return sorted((r["rule_id"], r["file"]) for r in report["results"])
+
+    def test_all_profile_checks_are_registered(self):
+        for name, p in self.defs.items():
+            for c in p.get("checks") or []:
+                self.assertIn(c, checks.CHECKS, f"{name}.yaml 의 검사 '{c}' 가 checks.py 에 없습니다")
+
+    def test_env_public_secret_reports_key_name_only(self):
+        value = "Zq9" + "notArealSecretValue"
+        _w(os.path.join(self.t, ".env.production"),
+           f"NEXT_PUBLIC_API_SECRET={value}\nexport VITE_AUTH_TOKEN=x\nNEXT_PUBLIC_SUPABASE_ANON_KEY=a\n"
+           "VITE_STRIPE_PUBLISHABLE_KEY=pk\nDATABASE_PASSWORD=p\nNEXT_PUBLIC_SITE_URL=u\nNEXT_PUBLIC_OPENAI_API_KEY=k\n")
+        report = self.run_checks()
+        found = [(r["line"], r["severity"], r["category"]) for r in report["results"] if r["rule_id"] == "web.env-public-secret"]
+        self.assertEqual(found, [(1, "high", "secret"), (2, "high", "secret"), (7, "medium", "config")])
+        self.assertNotIn(value, json.dumps(report))   # 값은 결과에 넣지 않는다
+
+    def test_public_env_name_rules(self):
+        """PR #24 리뷰: 접두사를 뗀 나머지에서 단어 단위로 판정 (부분 문자열 오판 방지)"""
+        cases = {"NEXT_PUBLIC_KEY_SECRET": "high", "NEXT_PUBLIC_CANONICAL_TOKEN": "high", "EXPO_PUBLIC_API_SECRET": "high",
+                 "NEXT_PUBLIC_OPENAI_API_KEY": "medium", "VITE_API_KEY": "medium", "NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY": "high",
+                 "NEXT_PUBLIC_SUPABASE_ANON_KEY": None, "NEXT_PUBLIC_MAPBOX_TOKEN": None, "NEXT_PUBLIC_FIREBASE_API_KEY": None,
+                 "VITE_STRIPE_PUBLISHABLE_KEY": None, "NEXT_PUBLIC_RECAPTCHA_SITE_KEY": None, "NEXT_PUBLIC_SITE_URL": None,
+                 "DATABASE_PASSWORD": None, "NEXT_PUBLIC_TOKENIZER_URL": None,
+                 # 강한 단어는 공개용 조각과 함께 있어도 high (재리뷰)
+                 "NEXT_PUBLIC_FIREBASE_PRIVATE_KEY": "high", "NEXT_PUBLIC_FIREBASE_ADMIN_CLIENT_SECRET": "high",
+                 "NEXT_PUBLIC_SITE_ADMIN_PASSWORD": "high", "NEXT_PUBLIC_MAPBOX_SECRET_TOKEN": "high",
+                 "NEXT_PUBLIC_PUBLIC_KEY_PASSWORD": "high", "VITE_SITE_TOKEN": "high"}
+        for name, want in cases.items():
+            self.assertEqual(checks.public_env_severity(name), want, name)
+
+    def test_semgrep_public_env_rules_use_same_regex(self):
+        """W2 의 두 구현(checks.py·Semgrep 규칙)이 같은 이름 규칙을 쓴다"""
+        rules_dir = os.path.join(HERE, "..", "rules", "custom", "web")
+        for fn, rxs in (("public-env-secret.yaml", (checks.PUBLIC_ENV_SECRET_RE, checks.PUBLIC_ENV_SECRET_BRACKET_RE)),
+                        ("public-env-api-key.yaml", (checks.PUBLIC_ENV_KEY_RE, checks.PUBLIC_ENV_KEY_BRACKET_RE))):
+            with open(os.path.join(rules_dir, fn), encoding="utf-8") as f:
+                text = f.read()
+            for rx in rxs:
+                self.assertIn("regex: '" + rx.replace("'", "''") + "'", text, fn)
+
+    def test_strip_js_comments(self):
+        f = checks.strip_js_comments
+        self.assertEqual(f("a // x\nb /* y\nz */ c"), "a \nb \n c")
+        self.assertEqual(f("s = 'a//b' // c"), "s = 'a//b' ")
+        self.assertEqual(f("t = `x ${y} // not comment`"), "t = `x ${y} // not comment`")
+        self.assertEqual(f("e = 'it\\'s' // c"), "e = 'it\\'s' ")
+        # 정규식 리터럴 안의 /* · ' 는 주석·문자열 시작이 아니다
+        self.assertEqual(f("const re = /^\\/v1\\/*/\nexport function GET(){}"), "const re = /^\\/v1\\/*/\nexport function GET(){}")
+        self.assertEqual(f("const q = /'/\n// auth()\n"), "const q = /'/\n\n")
+        self.assertEqual(f("x = a / b // c"), "x = a / b ")                      # 나눗셈
+        self.assertEqual(f("if (/[/]x/.test(s)) {} // c"), "if (/[/]x/.test(s)) {} ")
+        # JSX 텍스트의 아포스트로피는 그 줄에서 끝난다
+        self.assertEqual(f("<p>Don't</p>\n// auth()\n"), "<p>Don't</p>\n\n")
+        # 닫히지 않은 블록 주석은 그대로 둔다
+        self.assertEqual(f("a /* b\nexport function GET(){}"), "a /* b\nexport function GET(){}")
+
+    def test_linear_time_per_input(self):
+        """재리뷰: 검사별 악성 입력이 실제로 해당 코드를 거치고, 크기를 두 배로 늘려도 시간이 이차로 늘지 않는다"""
+        cases = {
+            ".env": lambda k: "\n" * (k * 100_000),
+            "next.config.js": lambda k: "domains:[" * (k * 10_000),
+            "pnpm-lock.yaml": lambda k: "lockfileVersion: '6.0'\npackages:\n" + ("  a@" + "1" * 3000 + "x\n") * (k * 30),
+            "app/api/x/route.ts": lambda k: ("export{" + " " * 290 + "\n") * (k * 1500),
+            "middleware.ts": lambda k: "export const config = { matcher: [" + "'a," * (k * 50_000) + "\n",
+            "main.js": lambda k: ("x = a / b /'/ c\n/* " * (k * 20_000)),
+        }
+        for name, gen in cases.items():
+            times = []
+            for k in (1, 2):
+                path = os.path.join(self.t, name)
+                _w(path, gen(k))
+                t0 = time.time()
+                if name == "main.js":
+                    checks.strip_js_comments(open(path, encoding="utf-8").read())
+                else:
+                    self.run_checks()
+                times.append(time.time() - t0)
+                os.remove(path)
+            self.assertLess(times[1], max(times[0] * 3.5, 0.3), (name, times))
+
+    def test_linear_time_on_adversarial_files(self):
+        """PR #24 리뷰 CRITICAL: 1MB 가까운 악성 파일에서도 정규식이 선형 시간이어야 한다"""
+        big = 900_000
+        _w(os.path.join(self.t, ".env"), "\n" * big)
+        _w(os.path.join(self.t, "next.config.js"), "domains:[" * (big // 9))
+        _w(os.path.join(self.t, "pnpm-lock.yaml"), "lockfileVersion: '6.0'\npackages:\n  a@" + "1" * (big - 40) + "x\n")
+        _w(os.path.join(self.t, "app/api/x/route.ts"), "export {" + " " * (big - 20) + "\n")
+        _w(os.path.join(self.t, "middleware.ts"), "matcher: [" + "'" * (big // 2) + "\n")
+        t0 = time.time()
+        self.run_checks()
+        self.assertLess(time.time() - t0, 5.0)
+
+    def test_oversized_files_are_skipped(self):
+        _w(os.path.join(self.t, ".env"), "NEXT_PUBLIC_A_SECRET=x\n" + "#" * checks.MAX_FILE)
+        self.assertEqual(self.run_checks()["results"], [])
+
+    def test_run_timeout_keeps_partial_results(self):
+        defs = {"web": dict(self.defs["web"], checks=["next-config", "slow"])}
+        _w(os.path.join(self.t, "next.config.js"), "module.exports = {}\n")
+        checks.CHECKS["slow"] = lambda ctx: time.sleep(5) or []
+        try:
+            report = checks.run(self.t, [("web", ".", [])], defs, timeout=1)
+        finally:
+            del checks.CHECKS["slow"]
+        self.assertTrue(any("시간 제한" in e for e in report["errors"]))
+        self.assertTrue(any(r["rule_id"] == "web.next-config-no-security-headers" for r in report["results"]))
+
+    def test_unauth_route_heuristic(self):
+        _w(os.path.join(self.t, "app/api/open/route.ts"), "export async function POST(req) { return Response.json({}) }\n")
+        _w(os.path.join(self.t, "app/api/route.ts"), "export const GET = () => Response.json({})\n")
+        _w(os.path.join(self.t, "pages/api/arrow.js"), "export default async (req, res) => { res.end() }\n")
+        _w(os.path.join(self.t, "pages/api/wrapped.js"), "const h = (req, res) => res.end()\nexport default withSentry(h)\n")
+        _w(os.path.join(self.t, "app/api/db/route.ts"), "export async function GET() { const u = await getUser(1); return Response.json(u) }\n")
+        _w(os.path.join(self.t, "app/api/c/route.ts"), "// TODO auth()\nexport async function GET() {}\n")
+        _w(os.path.join(self.t, "app/api/sb/route.ts"), "export async function GET() { await supabase.auth.getUser() }\n")
+        _w(os.path.join(self.t, "app/api/safe/route.ts"),
+           "import { auth } from '@/auth'\nexport async function GET() { const s = await auth(); return Response.json(s) }\n")
+        _w(os.path.join(self.t, "app/api/lib/helper.ts"), "export function GET() {}\n")   # route 파일 아님
+        _w(os.path.join(self.t, "pages/api/old.js"), "export default function handler(req, res) { res.end() }\n")
+        report = self.run_checks()
+        hits = [r for r in report["results"] if r["rule_id"] == "web.next-unauth-route"]
+        self.assertEqual(sorted(r["file"] for r in hits), [
+            "app/api/c/route.ts", "app/api/db/route.ts", "app/api/open/route.ts", "app/api/route.ts",
+            "pages/api/arrow.js", "pages/api/old.js", "pages/api/wrapped.js"])
+        self.assertTrue(all(r["severity"] == "medium" for r in hits))
+
+    def test_unauth_route_severity_follows_middleware_matcher(self):
+        """PR #24 리뷰: 루트의 middleware(proxy) matcher 가 /api 를 덮을 때만 low"""
+        _w(os.path.join(self.t, "app/api/open/route.ts"), "export async function GET() {}\n")
+        cases = [
+            ("middleware.ts", "export const config = { matcher: ['/api/:path*'] }\n", "low"),
+            ("src/proxy.ts", "export function proxy() {}\n", "low"),                       # matcher 없음 = 전체
+            ("middleware.ts", "export const config = { matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'] }\n", "medium"),
+            ("middleware.ts", "import x from '@/lib/api-client'\nexport const config = { matcher: ['/dashboard/:path*'] }\n", "medium"),
+            ("server/middleware.js", "module.exports = (req, res, next) => next()\n", "medium"),   # 루트 밖 Express 미들웨어
+            ("middleware.ts", "// matcher: ['/api']\nexport const config = { matcher: ['/admin'] }\n", "medium"),
+            # 재리뷰: matcher 배열 밖의 '/' · 가져온 matcher · 정규식 리터럴 뒤의 config
+            ("middleware.ts", "export const config = { matcher: ['/dashboard/:path*'] }\nNextResponse.redirect(new URL('/', req.url))\n", "medium"),
+            ("middleware.ts", "import { matcher } from './m'\nconst home = '/'\n", "medium"),
+            ("middleware.ts", "if (/^\\/static\\/*/.test(p)) {}\nexport const config = { matcher: ['/admin'] }\n", "medium"),
+            ("middleware.ts", "export const config = { matcher: '/api/:path*' }\n", "low"),
+        ]
+        for rel, text, want in cases:
+            for old in ("middleware.ts", "src/proxy.ts", "server/middleware.js"):
+                if os.path.exists(os.path.join(self.t, old)):
+                    os.remove(os.path.join(self.t, old))
+            _w(os.path.join(self.t, rel), text)
+            (hit,) = [r for r in self.run_checks()["results"] if r["rule_id"] == "web.next-unauth-route"]
+            self.assertEqual(hit["severity"], want, (rel, text))
+
+    def test_next_config_ignores_comments_and_detects_url_form(self):
+        _w(os.path.join(self.t, "next.config.ts"),
+           "// headers: later\nexport default { images: { remotePatterns: [new URL('https://**/**')] } }\n")
+        rules = {r["rule_id"] for r in self.run_checks()["results"]}
+        self.assertIn("web.next-config-no-security-headers", rules)
+        self.assertIn("web.next-config-wildcard-remote-image", rules)
+
+    def test_next_config_checks(self):
+        _w(os.path.join(self.t, "next.config.mjs"),
+           "export default { async headers() { return [{ source: '/(.*)', headers: [{ key: 'Content-Security-Policy', value: \"default-src 'self'\" }] }] },\n"
+           "  images: { remotePatterns: [{ hostname: '*' }] } }\n")
+        rules = {r["rule_id"]: r for r in self.run_checks()["results"]}
+        self.assertNotIn("web.next-config-no-security-headers", rules)
+        self.assertIn("Strict-Transport-Security", rules["web.next-config-missing-security-headers"]["evidence"])
+        self.assertIn("web.next-config-wildcard-remote-image", rules)
+        self.assertNotIn("web.next-config-browser-sourcemaps", rules)
+
+    def test_npm_install_scripts_package_lock_and_pnpm(self):
+        _w(os.path.join(self.t, "package-lock.json"), json.dumps({"lockfileVersion": 3, "packages": {
+            "": {"name": "x"}, "node_modules/esbuild": {"version": "0.18.20", "hasInstallScript": True},
+            "node_modules/a/node_modules/@scope/b": {"version": "1.0.0", "hasInstallScript": True},
+            "packages/app": {"version": "1.0.0", "hasInstallScript": True},          # 워크스페이스 자체 — 제외
+            "node_modules/한글pkg": {"version": "1.0.0", "hasInstallScript": True},
+            "node_modules/plain": {"version": "1.0.0"}}}, ensure_ascii=False, indent=1))
+        _w(os.path.join(self.t, "v6/pnpm-lock.yaml"),
+           "lockfileVersion: '6.0'\npackages:\n  /sharp@0.32.6:\n    resolution: {integrity: x}\n    requiresBuild: true\n"
+           "  /@img/sharp-darwin@0.33.0(peer@1.0.0):\n    requiresBuild: true\n  /lodash@4.17.21:\n    resolution: {integrity: y}\n")
+        _w(os.path.join(self.t, "v5/pnpm-lock.yaml"),
+           "lockfileVersion: 5.4\npackages:\n  /esbuild/0.15.0:\n    requiresBuild: true\n"
+           "  /styled-jsx/5.1.1_react@18.2.0:\n    requiresBuild: true\n  /@swc/core/1.3.0_@swc+helpers@0.5.0:\n    requiresBuild: true\n")
+        _w(os.path.join(self.t, "v9/pnpm-lock.yaml"), "lockfileVersion: '9.0'\npackages:\n  esbuild@0.20.0:\n    resolution: {}\n")
+        report = self.run_checks()
+        hits = [r for r in report["results"] if r["rule_id"] == "web.npm-install-script"]
+        self.assertEqual(sorted(r["package"] for r in hits), [
+            "@img/sharp-darwin@0.33.0", "@scope/b@1.0.0", "@swc/core@1.3.0", "esbuild@0.15.0", "esbuild@0.18.20",
+            "sharp@0.32.6", "styled-jsx@5.1.1", "한글pkg@1.0.0"])
+        self.assertTrue(all(r["line"] for r in hits))
+        self.assertTrue(any("v9/pnpm-lock.yaml" in w and "판별하지 못했습니다" in w for w in report["warnings"]))
+
+    def test_truncation_is_reported(self):
+        lock = {"lockfileVersion": 3, "packages": {f"node_modules/p{i}": {"version": "1.0.0", "hasInstallScript": True}
+                                                   for i in range(checks.MAX_RESULTS_PER_CHECK + 5)}}
+        _w(os.path.join(self.t, "package-lock.json"), json.dumps(lock))
+        report = self.run_checks()
+        self.assertEqual(len(report["results"]), checks.MAX_RESULTS_PER_CHECK)
+        self.assertTrue(any("건만 리포트에 담았습니다" in w for w in report["warnings"]))
+
+    def test_symlinks_are_not_followed_and_outside_files_not_read(self):
+        outside = os.path.join(self.tmp.name, "outside")
+        _w(os.path.join(outside, ".env"), "NEXT_PUBLIC_LEAK_SECRET=x\n")
+        _w(os.path.join(outside, "next.config.js"), "module.exports = {}\n")
+        os.symlink(os.path.join(outside, ".env"), os.path.join(self.t, ".env"))
+        os.symlink(outside, os.path.join(self.t, "linked"))
+        self.assertEqual(self.run_checks()["results"], [])
+
+    def test_scoped_to_profile_root_and_excluded_subpaths(self):
+        _w(os.path.join(self.t, "web/.env"), "NEXT_PUBLIC_A_SECRET=x\n")
+        _w(os.path.join(self.t, "other/.env"), "NEXT_PUBLIC_B_SECRET=x\n")
+        _w(os.path.join(self.t, "web/apps/mobile/.env"), "NEXT_PUBLIC_C_SECRET=x\n")
+        _w(os.path.join(self.t, "web/node_modules/pkg/.env"), "NEXT_PUBLIC_D_SECRET=x\n")
+        report = self.run_checks([("web", "web", ["web/apps/mobile"])])
+        self.assertEqual([r["file"] for r in report["results"]], ["web/.env"])
+
+    def test_unknown_check_and_check_exception_become_errors(self):
+        defs = {"web": dict(self.defs["web"], checks=["nope", "next-config"])}
+        _w(os.path.join(self.t, "next.config.js"), "module.exports = {}\n")
+        orig = checks.CHECKS["next-config"]
+        checks.CHECKS["next-config"] = lambda ctx: 1 / 0
+        try:
+            report = checks.run(self.t, [("web", ".", [])], defs)
+        finally:
+            checks.CHECKS["next-config"] = orig
+        self.assertEqual(report["results"], [])
+        self.assertTrue(any("알 수 없는 검사 'nope'" in e for e in report["errors"]))
+        self.assertTrue(any("next-config: 검사 실패" in e for e in report["errors"]))
+
+    def test_web_fixture_expectations(self):
+        """tests/fixtures/web 의 README 표와 같은 결과 (env·lockfile 은 테스트에서 실제 이름으로 복사)"""
+        import shutil
+        shutil.copytree(FIXTURE, self.t, dirs_exist_ok=True)
+        shutil.copy(os.path.join(FIXTURE, "env.fixture"), os.path.join(self.t, ".env"))
+        shutil.copy(os.path.join(FIXTURE, "package-lock.json.fixture"), os.path.join(self.t, "package-lock.json"))
+        report = self.run_checks()
+        self.assertEqual(report["errors"], [])      # 검사 예외는 결과가 비는 것으로만 드러나므로 따로 확인한다
+        self.assertEqual(self.rules(report), [
+            ("web.env-public-secret", ".env"),
+            ("web.next-config-browser-sourcemaps", "next.config.js"),
+            ("web.next-config-no-security-headers", "next.config.js"),
+            ("web.next-config-wildcard-remote-image", "next.config.js"),
+            ("web.next-unauth-route", "app/api/proxy/route.ts"),
+            ("web.next-unauth-route", "app/api/search/route.ts"),
+            ("web.next-unauth-route", "pages/api/legacy.js"),
+            ("web.npm-install-script", "package-lock.json"),
+        ])
+
+
+if __name__ == "__main__":
+    unittest.main()

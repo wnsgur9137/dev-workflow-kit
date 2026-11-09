@@ -9,7 +9,9 @@ exclude_if: [react-native]   # RN 앱의 react 의존성은 web 으로 보지 �
 exclude_paths: ["**/node_modules/**", "**/.next/**", "**/dist/**", "**/build/**", "**/coverage/**"]
 semgrep:
   rulesets: [javascript, typescript]
+  custom: [web]
 sca:
   lockfiles: ["**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml"]
   missing_lockfile_hint: "package-lock.json / yarn.lock / pnpm-lock.yaml 을 커밋하세요"
+checks: [env-public-secret, next-unauth-route, next-config, npm-install-scripts]
 checklist: web

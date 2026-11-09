@@ -278,7 +278,20 @@ git_toplevel_above() {
   return 1
 }
 
-sec_log "도구 실행 중 (Semgrep · Gitleaks · OSV-Scanner, 네트워크 차단)..."
+# 스택별 커스텀 검사 (설정 파일·lockfile 메타데이터) — 호스트 Python 으로 대상 파일을 읽기만 한다. 컨테이너·네트워크 없음
+run_checks() {
+  local rc
+  python3 "$SEC_PLUGIN/scripts/lib/checks.py" --profile-dir "$SEC_PROFILE_DIR" --target "$TARGET" \
+    --profiles-tsv "$PROFILES_TSV" --out "$RAW/checks.json" 2>"$RAW/checks.log"
+  rc=$?
+  if [ $rc -eq 0 ] && [ -s "$RAW/checks.json" ]; then
+    record checks ok "$rc" ""
+  else
+    record checks failed "$rc" "$(tail_log "$RAW/checks.log")"
+  fi
+}
+
+sec_log "도구 실행 중 (Semgrep · Gitleaks · OSV-Scanner · 스택 검사, 네트워크 차단)..."
 run_semgrep &
 pid_semgrep=$!
 pid_git=""
@@ -300,7 +313,9 @@ run_gitleaks dir &
 pid_dir=$!
 run_osv &
 pid_osv=$!
-wait $pid_semgrep $pid_dir $pid_osv ${pid_git:+$pid_git}
+run_checks &
+pid_checks=$!
+wait $pid_semgrep $pid_dir $pid_osv $pid_checks ${pid_git:+$pid_git}
 
 # 리포트 파일 권한 정리 (컨테이너가 만든 파일 포함)
 find "$SEC_RUN_DIR" -type f -exec chmod 600 {} + 2>/dev/null
