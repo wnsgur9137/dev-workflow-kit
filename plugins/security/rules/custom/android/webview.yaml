@@ -31,3 +31,7 @@ rules:
       - pattern: $S.allowFileAccess = true
       - pattern: $S.allowFileAccessFromFileURLs = true
       - pattern: $S.allowUniversalAccessFromFileURLs = true
+      # Kotlin 범위 함수(apply·with) 안에서는 수신 객체 없이 대입한다
+      - pattern: allowFileAccess = true
+      - pattern: allowFileAccessFromFileURLs = true
+      - pattern: allowUniversalAccessFromFileURLs = true
