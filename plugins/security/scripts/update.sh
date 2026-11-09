@@ -57,6 +57,8 @@ fi
 # docker/osv-seed/ 의 씨앗이 받아야 하는 생태계 (OSV 디렉터리 이름)
 OSV_ECOSYSTEMS="npm PyPI Go Maven Pub SwiftURL crates.io RubyGems Packagist NuGet"
 
+# 강제 종료(SIGKILL 등)로 trap 이 돌지 않아 남은 하루 지난 작업 폴더를 지운다 (이전 형식 .tmp-update-<pid> 포함)
+find "$SEC_DATA/data" -mindepth 1 -maxdepth 1 -type d -name '.tmp-update*' -mmin +1440 -exec rm -rf {} + 2>/dev/null
 # PID 로 이름을 만들면 강제 종료로 trap 이 돌지 않은 이전 실행의 잔여물과 섞일 수 있다
 TMP_ROOT=$(mktemp -d "$SEC_DATA/data/.tmp-update.XXXXXX") || sec_die "임시 폴더를 만들 수 없습니다: $SEC_DATA/data"
 cleanup() { rm -rf "$TMP_ROOT"; }
@@ -129,7 +131,7 @@ update_rules() {
       failed=1
       continue
     fi
-    if ! python3 "$SELF_DIR/lib/extract_rules.py" "$work/src.tgz" "$work/out" "$paths" "$commit"; then
+    if ! python3 "$SELF_DIR/lib/extract_rules.py" "$work/src.tgz" "$work/out" "$paths" "$commit" "${repo##*/}"; then
       sec_err "규칙 추출 실패: $name"
       failed=1
       continue
