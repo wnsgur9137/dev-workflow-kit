@@ -20,14 +20,14 @@ profile: ios
 ## 감지 (`profiles/ios.yaml`)
 ```yaml
 detect: ["**/*.xcodeproj", "**/*.xcworkspace", "**/Package.swift", "**/Podfile"]
-exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**"]
+exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**", "**/macos/**"]
 ```
 
 ## 점검 항목
 
 | # | 점검 | 방법 | 대상 | 심각도 |
 |---|---|---|---|---|
-| I1 | 하드코딩 시크릿 | Gitleaks + Semgrep `generic` | 소스, `*.plist`, `*.xcconfig` | high |
+| I1 | 하드코딩 시크릿 | Gitleaks + Semgrep `generic` (+ 스택 검사 xcconfig — 구현 메모) | 소스, `*.plist`, `*.xcconfig` | high |
 | I2 | ATS 예외 (`NSAllowsArbitraryLoads`, `NSExceptionAllowsInsecureHTTPLoads`) | 커스텀 검사 (plist 파싱) | `Info.plist` | high |
 | I3 | `UserDefaults`에 토큰·비밀번호 저장 | Semgrep 커스텀 `ios/insecure-storage` | `*.swift` | medium |
 | I4 | `print`/`NSLog`로 민감 정보 출력 | Semgrep 커스텀 `ios/sensitive-log` | `*.swift`, `*.m` | low |
@@ -40,17 +40,17 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 
 | # | 구현 | 규칙·검사 ID | 심각도 |
 |---|---|---|---|
-| I1 | Gitleaks (공통) + 스택 검사 — `*.xcconfig`의 비밀 키 평문 값(`$(…)` 참조 제외, **키 이름만**) | `ios.xcconfig-secret` | high |
-| I2 | 스택 검사 — `*Info.plist`(XML·바이너리)의 `NSAllowsArbitraryLoads`(high), `…InWebContent`·`…ForMedia`(medium), 예외 도메인의 `NSExceptionAllowsInsecureHTTPLoads`·`NSTemporary…`(medium), `NSExceptionMinimumTLSVersion` TLS 1.0·1.1(medium) | `ios.ats-*` | high / medium |
-| I3 | Semgrep 커스텀 — `UserDefaults…set(…, forKey: "…token|password|secret…")` + 공식 `swift-user-defaults` | `custom.ios.insecure-storage` | medium |
-| I4 | Semgrep 커스텀 — `print`·`NSLog`·`debugPrint` 인자에 token·password 등, Objective-C `NSLog(@"…password…")` | `custom.ios.sensitive-log(-objc)` | low |
+| I1 | Gitleaks (공통) + 스택 검사 — `*.xcconfig`의 비밀 키 평문 값(조건부 `[sdk=…][arch=…]` 여러 개, `//` 는 어디서든 주석, `$(…)`·`${…}` 참조는 지우고 남은 평문만 판정, **키 이름만**). plist 의 평문 비밀은 Gitleaks 만 본다 | `ios.xcconfig-secret` | high |
+| I2 | 스택 검사 — `*Info.plist`(대소문자 무시, XML·바이너리)의 `NSAllowsArbitraryLoads`(high — iOS 10+ 에서 무시되는 조합, 즉 `…ForMedia`·`…InWebContent`·`NSAllowsLocalNetworking` 중 하나가 있으면 low), `…InWebContent`·`…ForMedia`(medium), 예외 도메인의 평문 허용(`NSException…`·`NSTemporaryException…`·`NSThirdPartyException…AllowsInsecureHTTPLoads`, medium)·최소 TLS 1.0·1.1(medium). `NSIncludesSubdomains`는 evidence 에 표시. 줄 번호는 `<key>…</key>`를 문서 순서대로 이어 찾고(선형), 바이너리 plist 는 키 경로로 결과를 구분 | `ios.ats-*` | high / medium / low |
+| I3 | Semgrep 커스텀 — UserDefaults(`standard`·`suiteName:`·이름이 defaults 인 변수)의 `set(…, forKey: "…token|password|secret|session_id…")` + 공식 `swift-user-defaults`. Keychain 래퍼의 같은 API 는 제외 | `custom.ios.insecure-storage` | medium |
+| I4 | Semgrep 커스텀 — `print`·`NSLog`·`debugPrint`·`os_log`·`Logger` 인자에 token·password 등(단어 경계), Objective-C `NSLog`의 형식 문자열·인자 | `custom.ios.sensitive-log(-objc)` | low |
 | I5 | OSV-Scanner (공통) — `Package.resolved`. `Podfile.lock`은 "점검되지 않음" 경고 | — | CVSS |
-| I6 | Semgrep 커스텀 — `CC_MD5`·`CC_SHA1`·`Insecure.MD5/SHA1`·`kCCAlgorithmDES/3DES`·`kCCOptionECBMode` (Swift), Objective-C 는 같은 이름 정규식 | `custom.ios.weak-crypto(-objc)` | medium |
-| I7 | Semgrep 커스텀 — `setValue(true, forKey: "allowFileAccessFromFileURLs"|"allowUniversalAccessFromFileURLs")` | `custom.ios.webview-file-access` | medium |
+| I6 | Semgrep 커스텀 — `CC_MD5`·`CC_SHA1`(`_Init` 포함)·`Insecure.MD5/SHA1`(스트리밍 포함)·`kCCAlgorithmDES/3DES/RC4/RC2`·`kCCOptionECBMode` (Swift), Objective-C 는 같은 이름 정규식(주석 줄 제외) | `custom.ios.weak-crypto(-objc)` | medium |
+| I7 | Semgrep 커스텀 — `setValue(true|1|NSNumber(value: true), forKey: "allowFileAccessFromFileURLs"|"allowUniversalAccessFromFileURLs")`, Objective-C `setValue:@YES forKey:@"…"` | `custom.ios.webview-file-access(-objc)` | medium |
 
 - Semgrep 은 Objective-C 를 지원하지 않아 `*.m`·`*.mm`은 `generic` 언어 정규식으로만 본다.
 - Semgrep 1.182.0 Swift 에서 문자열 리터럴 메타변수(`forKey: $K`)에 `metavariable-regex` 가 맞지 않아 키 이름은 `pattern-regex` 로 확인한다 (실측). `patterns` 안의 정규식 여러 개는 매칭 범위가 겹쳐야 해서 한 정규식으로 쓴다.
-- plist 는 표준 `plistlib`로 읽는다(XML 엔티티 선언을 거부). JS 브리지(`WKScriptMessageHandler`)는 정상 사용이 많아 아직 다루지 않는다.
+- plist 는 표준 `plistlib`로 읽는다(XML 엔티티 선언을 거부). 100자리 넘는 `<integer>`는 파싱 전에 거른다(Python 3.8·3.9 초기 버전의 int 변환 이차 시간). JS 브리지(`WKScriptMessageHandler`)는 정상 사용이 많아 아직 다루지 않는다.
 
 ## Semgrep 규칙
 - 공식: `semgrep-rules/swift` (규칙 수가 적음), `generic`

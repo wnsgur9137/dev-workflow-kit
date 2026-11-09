@@ -19,6 +19,12 @@ rules:
       - pattern: kCCAlgorithmDES
       - pattern: kCCAlgorithm3DES
       - pattern: kCCOptionECBMode
+      - pattern: kCCAlgorithmRC4
+      - pattern: kCCAlgorithmRC2
+      - pattern: Insecure.MD5()
+      - pattern: Insecure.SHA1()
+      - pattern: CC_MD5_Init(...)
+      - pattern: CC_SHA1_Init(...)
   - id: weak-crypto-objc
     message: >-
       MD5·SHA1·DES·ECB 모드는 충돌·복호화 공격에 취약합니다. SHA-256 이상, AES-GCM 을 쓰세요.
@@ -30,4 +36,5 @@ rules:
       category: security
       cwe: ["CWE-327: Use of a Broken or Risky Cryptographic Algorithm"]
       stack: ios
-    pattern-regex: '\b(CC_MD5|CC_SHA1|kCCAlgorithmDES|kCCAlgorithm3DES|kCCOptionECBMode)\b'
+    # 주석 줄은 건너뛴다 (줄 단위, 선형)
+    pattern-regex: '(?m)^(?![ \t]*//)[^\n]{0,2000}\b((CC_MD5|CC_SHA1)(_Init|_Update|_Final)?|kCCAlgorithm(DES|3DES|RC4|RC2)|kCCOptionECBMode)\b'

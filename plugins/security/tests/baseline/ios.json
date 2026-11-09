@@ -12,5 +12,8 @@
     {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/Crypto.m", "note": "I6 Objective-C"},
     {"tool": "semgrep", "rule_suffix": "webview-file-access", "file": "App/Sources/Web.swift", "note": "I7"},
     {"tool": "osv-scanner", "package": "github.com/apple/swift-nio-http2@1.19.1", "file": "Package.resolved", "note": "I5"}
+  ],
+  "must_not_find": [
+    {"file": "App/Sources/SecureStore.swift", "rule_suffix": "insecure-storage", "note": "Keychain 래퍼"}
   ]
 }

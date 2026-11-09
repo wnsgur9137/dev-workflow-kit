@@ -1,4 +1,4 @@
-# I4 — print·NSLog·os_log 로 민감 정보 출력 (docs/security/07 스택별 설계/iOS.md)
+# I4 — print·NSLog·os_log·Logger 로 민감 정보 출력 (docs/security/07 스택별 설계/iOS.md)
 rules:
   - id: sensitive-log
     message: >-
@@ -16,7 +16,13 @@ rules:
           - pattern: print(...)
           - pattern: NSLog(...)
           - pattern: debugPrint(...)
-      - pattern-regex: (?i)(token|password|passwd|secret|credential)
+          - pattern: os_log(...)
+          - pattern: $L.info(...)
+          - pattern: $L.debug(...)
+          - pattern: $L.notice(...)
+          - pattern: $L.log(...)
+      # 단어 경계 — Tokenizer·secretary 같은 이름은 잡지 않는다
+      - pattern-regex: (?i)\b(token|access_?token|password|passwd|secret|credential)s?\b
   - id: sensitive-log-objc
     message: >-
       토큰·비밀번호로 보이는 값을 NSLog 로 출력합니다. 릴리스 빌드에서 제거하세요.
@@ -28,4 +34,5 @@ rules:
       category: security
       cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
       stack: ios
-    pattern-regex: '(?i)\bNSLog\(@"[^"\n]{0,200}(token|password|passwd|secret|credential)'
+    # 형식 문자열이나 인자에 키워드 (구간 길이 제한으로 선형)
+    pattern-regex: '(?i)\bNSLog\(@"[^"\n]{0,200}("[^;\n]{0,200})?\b(token|password|passwd|secret|credential)'
