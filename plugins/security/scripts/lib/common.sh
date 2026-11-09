@@ -184,6 +184,16 @@ sec_validate_target() {
     sec_err "점검 대상 경로가 비어 있습니다."
     return 1
   fi
+  # 따옴표로 감싸 넘긴 경로는 셸이 ~ 를 확장하지 않는다 — 맨 앞의 ~ · ~/ 만 직접 확장한다 (SKILL 은 경로 전체를 인용한다)
+  # shellcheck disable=SC2088 # 인용된 ~ 문자 자체를 비교하는 것이 목적이다
+  case "$raw" in
+    "~") raw=$HOME ;;
+    "~/"*) raw="$HOME/${raw#"~/"}" ;;
+    "~"*)
+      sec_err "~사용자 형식 경로는 지원하지 않습니다. 절대 경로로 지정하세요: $raw"
+      return 1
+      ;;
+  esac
   if [ ! -e "$raw" ]; then
     sec_err "점검 대상이 없습니다: $raw"
     return 1

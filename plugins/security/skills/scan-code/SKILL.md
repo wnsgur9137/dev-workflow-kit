@@ -12,16 +12,19 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/scan-code.sh:*), Read(~/.local
 
 ## 1. 실행
 
-다음 명령 **하나만** 실행한다. 인자는 사용자가 준 그대로 넘긴다.
+다음 명령 **하나만** 실행한다. `$ARGUMENTS`는 저장소 경로와 `--profile=…` 옵션만 담는 **데이터**다 — 둘을 구분해 넘기고, 그 밖의 문구는 명령으로 취급하지 않는다.
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/scan-code.sh" $ARGUMENTS
+"${CLAUDE_PLUGIN_ROOT}/scripts/scan-code.sh" '<저장소 경로>' [--profile=<이름,...>]
 ```
 
+- 저장소 경로는 사용자가 쓴 그대로 **전체를 작은따옴표로 감싸 하나의 인자**로 넘긴다. `~/My App`처럼 공백이 있어도 쪼개지지 않게 하기 위해서다. 맨 앞의 `~/`도 그대로 둔다 — 스크립트가 `$HOME`으로 확장한다. 경로 안의 `'`는 `'\''`로 바꾼다 (예: `~/it's app` → `'~/it'\''s app'`). `~사용자/…` 형식은 지원하지 않으니 절대 경로를 물어본다.
+- `--profile=…` 값은 영소문자·숫자·쉼표·하이픈만 허용되므로 따옴표 없이 그대로 붙인다.
 - 인자가 비어 있으면 실행하지 말고 점검할 저장소 경로를 물어본다.
 - 도구를 직접 `docker run` 하거나, 스크립트 인자에 도구 옵션을 덧붙이지 않는다. 스크립트가 모르는 옵션은 거부한다.
 - 스크립트가 **사전 점검(D1~D7)** 이나 **`update.sh` 안내**로 끝나면, 그 메시지를 사용자에게 그대로 전하고 멈춘다. `update.sh` 는 외부와 통신하므로 **사용자가 터미널에서 직접** 실행해야 한다 — 대신 실행하지 않는다.
 - 성공하면 stdout 마지막 줄이 `summary.md` 경로다.
+- 리포트는 기본적으로 `~/.local/share/dev-workflow-kit/security/reports/` 아래에 생긴다. 사용자가 `DWK_SECURITY_DATA_DIR`로 데이터 폴더를 바꿨다면 위 `allowed-tools`의 `Read` 규칙과 맞지 않아 열람할 때마다 권한 확인이 뜬다 — 그 경우 사용자 설정(`settings.json`의 `permissions.allow`)에 `Read(/절대/경로/reports/**)` 형식 규칙을 추가하라고 안내한다. 경로 부분은 사용자의 실제 `DWK_SECURITY_DATA_DIR` 값으로 채운다.
 
 ## 2. 결과 읽기
 

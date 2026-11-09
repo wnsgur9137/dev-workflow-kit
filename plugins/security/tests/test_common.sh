@@ -39,6 +39,21 @@ test_validate_rejects_home_root_and_parents() {
   assert_status 1 sec_validate_target / dir
 }
 
+test_validate_expands_quoted_tilde_path() {
+  load_common
+  # 따옴표로 감싸 넘긴 '~/…' 는 스크립트가 확장한다 (PR #23 리뷰: SKILL 이 경로 전체를 작은따옴표로 인용)
+  mkdir -p "$HOME/My App"
+  local got
+  # shellcheck disable=SC2088
+  got=$(sec_validate_target '~/My App' dir) || fail "'~/My App' 거부: $got"
+  assert_eq "$got" "$(cd -P "$HOME/My App" && pwd -P)"
+  # shellcheck disable=SC2088
+  assert_status 1 sec_validate_target '~' dir
+  assert_contains "$OUT" "홈 디렉터리"
+  assert_status 1 sec_validate_target '~root/x' dir
+  assert_contains "$OUT" "절대 경로로 지정하세요"
+}
+
 test_validate_rejects_tilde_style_home() {
   load_common
   # /security:scan-code ~ 는 셸이 확장해 홈 경로가 들어온다
