@@ -27,6 +27,7 @@ sequenceDiagram
     S->>D: Gitleaks (git + dir, --redact)
     S->>D: Semgrep (로컬 규칙)
     S->>D: OSV-Scanner (오프라인 DB)
+    S->>S: 스택 검사 checks.py (호스트, 읽기만)
     S->>S: normalize.py → findings.json, summary.md
     S-->>C: summary.md 경로
     C->>C: summary 분석, 필요 시 해당 소스 파일 열람
