@@ -343,9 +343,24 @@ sec_validate_rules_lock() {
       if ($2 !~ /^https:\/\//) { printf "rules.lock:%d: https URL 이 아닙니다: %s\n", NR, $2; bad=1 }
       if ($3 !~ /^[0-9a-f]+$/ || length($3) != 40) { printf "rules.lock:%d: 커밋 해시 형식 오류: %s\n", NR, $3; bad=1 }
       if (seen[$1]++) { printf "rules.lock:%d: 이름 중복: %s\n", NR, $1; bad=1 }
+      # name 은 $DATA/data/<name> 이 되어 rm -rf·mv 에 쓰인다 — 경로 문자·예약 이름(osv) 금지
+      if ($1 !~ /^[a-z0-9][a-z0-9_-]*$/) { printf "rules.lock:%d: 이름은 영소문자·숫자·_·- 만 씁니다: %s\n", NR, $1; bad=1 }
+      if ($1 == "osv") { printf "rules.lock:%d: osv 는 OSV DB 폴더 이름이라 쓸 수 없습니다\n", NR; bad=1 }
     }
     END { exit bad }
   ' "$SEC_RULES_LOCK" >&2
+}
+
+# sec_rules_lock_entry <name> — rules.lock 의 해당 항목을 "<commit> <paths>" 로 출력 (없으면 1)
+sec_rules_lock_entry() {
+  awk -v n="$1" '!/^[[:space:]]*(#|$)/ && $1 == n { print $3, $4; found=1; exit } END { exit !found }' "$SEC_RULES_LOCK"
+}
+
+# sec_rules_installed_match <설치 폴더> <commit> <paths> — 설치된 .commit 이 같은 커밋·paths 인지
+sec_rules_installed_match() {
+  local f="$1/.commit"
+  [ -f "$f" ] || return 1
+  [ "$(sed -n 1p "$f")" = "$2" ] && [ "$(sed -n 3p "$f")" = "$3" ]
 }
 
 # ---------------------------------------------------------------------------
