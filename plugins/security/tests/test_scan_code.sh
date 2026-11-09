@@ -73,6 +73,31 @@ test_d7_invisible_mount_stops_before_scanning() {
   assert_contains "$(cat "$FAKE_LOG")" "--network none"
 }
 
+test_rules_mismatch_with_lock_is_warned() {
+  setup_fake
+  fake_data
+  export FAKE_RUN_OUTPUT="a.py"
+  local summary
+  # PR #19 W7: 설치된 규칙(.commit)이 rules.lock 과 다르면 경고한다 (fake_data 의 커밋은 deadbeef)
+  summary=$("$SCAN" "$HOME/proj" 2>/dev/null | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음"
+  assert_contains "$(cat "$(dirname "$summary")/raw/warnings.txt")" "rules.lock 과 다릅니다"
+  local lock_commit lock_url lock_paths
+  read -r lock_commit lock_url lock_paths <<<"$(awk '!/^[[:space:]]*(#|$)/ && $1 == "semgrep-rules" { print $3, $2, $4 }' "$PLUGIN_DIR/rules.lock")"
+  # 커밋은 같고 paths 만 다르면 경고한다 (W7 의 핵심 경우), 이전 버전의 2줄 .commit 도 경고한다
+  for content in "$lock_commit\n$lock_url\nother" "$lock_commit\n$lock_url"; do
+    printf '%b\n' "$content" >"$DWK_SECURITY_DATA_DIR/data/semgrep-rules/.commit"
+    summary=$("$SCAN" "$HOME/proj" 2>/dev/null | tail -n 1)
+    [ -f "$summary" ] || fail "summary 없음"
+    assert_contains "$(cat "$(dirname "$summary")/raw/warnings.txt")" "rules.lock 과 다릅니다"
+  done
+  # 커밋·paths 가 같으면 경고하지 않는다
+  printf '%s\n%s\n%s\n' "$lock_commit" "$lock_url" "$lock_paths" >"$DWK_SECURITY_DATA_DIR/data/semgrep-rules/.commit"
+  summary=$("$SCAN" "$HOME/proj" 2>/dev/null | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음"
+  assert_not_contains "$(cat "$(dirname "$summary")/raw/warnings.txt")" "rules.lock 과 다릅니다"
+}
+
 test_d7_probe_failure_is_not_blamed_on_mount_sharing() {
   setup_fake
   fake_data

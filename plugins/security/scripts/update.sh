@@ -57,10 +57,12 @@ fi
 # docker/osv-seed/ 의 씨앗이 받아야 하는 생태계 (OSV 디렉터리 이름)
 OSV_ECOSYSTEMS="npm PyPI Go Maven Pub SwiftURL crates.io RubyGems Packagist NuGet"
 
-TMP_ROOT="$SEC_DATA/data/.tmp-update-$$"
+# 강제 종료(SIGKILL 등)로 trap 이 돌지 않아 남은 하루 지난 작업 폴더를 지운다 (이전 형식 .tmp-update-<pid> 포함)
+find "$SEC_DATA/data" -mindepth 1 -maxdepth 1 -type d -name '.tmp-update*' -mmin +1440 -exec rm -rf {} + 2>/dev/null
+# PID 로 이름을 만들면 강제 종료로 trap 이 돌지 않은 이전 실행의 잔여물과 섞일 수 있다
+TMP_ROOT=$(mktemp -d "$SEC_DATA/data/.tmp-update.XXXXXX") || sec_die "임시 폴더를 만들 수 없습니다: $SEC_DATA/data"
 cleanup() { rm -rf "$TMP_ROOT"; }
 trap cleanup EXIT
-mkdir -p "$TMP_ROOT"
 failed=0
 
 # ---------------------------------------------------------------------------
@@ -107,7 +109,8 @@ update_rules() {
   while read -r name url commit paths; do
     case "$name" in '' | \#*) continue ;; esac
     dest="$SEC_DATA/data/$name"
-    if [ -f "$dest/.commit" ] && [ "$(head -n 1 "$dest/.commit")" = "$commit" ]; then
+    # .commit: 1행 커밋, 2행 URL, 3행 paths — 같은 커밋이라도 paths 가 바뀌면 다시 받는다
+    if sec_rules_installed_match "$dest" "$commit" "$paths"; then
       sec_log "규칙 최신: $name ${commit:0:12}"
       continue
     fi
@@ -128,44 +131,12 @@ update_rules() {
       failed=1
       continue
     fi
-    if ! python3 - "$work/src.tgz" "$work/out" "$paths" <<'PY'; then
-import os, re, sys, tarfile
-src, out, paths = sys.argv[1], sys.argv[2], [p.strip("/") for p in sys.argv[3].split(",") if p.strip()]
-RULE_TOP = re.compile(r"^rules\s*:", re.M)
-count = 0
-with tarfile.open(src, "r:gz") as tf:
-    for m in tf:
-        # 안전한 추출: 일반 파일만, 절대 경로·상위 경로 금지, 심볼릭 링크 금지
-        if not m.isfile():
-            continue
-        parts = m.name.split("/")
-        if len(parts) < 2 or m.name.startswith("/") or ".." in parts:
-            continue
-        rel = "/".join(parts[1:])  # 최상위 <repo>-<commit>/ 제거
-        if paths != ["."] and not any(rel == p or rel.startswith(p + "/") for p in paths):
-            continue
-        if not rel.endswith((".yaml", ".yml")) or "/.github/" in "/" + rel:
-            continue
-        if m.size > 2_000_000:
-            continue
-        data = tf.extractfile(m).read()
-        text = data.decode("utf-8", "replace")
-        # 규칙 파일만 (테스트용 YAML 대상 파일 제외)
-        if not RULE_TOP.search(text):
-            continue
-        dst = os.path.join(out, rel)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        with open(dst, "wb") as f:
-            f.write(data)
-        count += 1
-if count == 0:
-    sys.exit("규칙 파일이 하나도 없습니다")
-PY
+    if ! python3 "$SELF_DIR/lib/extract_rules.py" "$work/src.tgz" "$work/out" "$paths" "$commit" "${repo##*/}"; then
       sec_err "규칙 추출 실패: $name"
       failed=1
       continue
     fi
-    printf '%s\n%s\n' "$commit" "$url" >"$work/out/.commit"
+    printf '%s\n%s\n%s\n' "$commit" "$url" "$paths" >"$work/out/.commit"
     rm -rf "$dest.old"
     [ -d "$dest" ] && mv "$dest" "$dest.old"
     mv "$work/out" "$dest" && rm -rf "$dest.old"
