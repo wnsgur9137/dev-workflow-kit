@@ -1,0 +1,4 @@
+// 빌드 설정 (픽스처)
+API_BASE_URL = https:/$()/api.example.com
+API_SECRET = fixture-xcconfig-secret
+SWIFT_VERSION = 5.0

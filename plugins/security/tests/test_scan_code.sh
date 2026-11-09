@@ -413,3 +413,22 @@ test_real_scan_code_android_baseline() {
     fail "서명 비밀번호 값이 리포트에 남음"
   fi
 }
+
+# S-iOS: iOS 픽스처 기준선 (I1~I7)
+test_real_scan_code_ios_baseline() {
+  _real_ready || exit 77
+  mkdir -p "$HOME/.cache/dev-workflow-kit-tests"
+  IOS_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/ios.XXXXXX")
+  trap 'rm -rf "$IOS_DIR"; [ -n "${IOS_RUN:-}" ] && rm -rf "$IOS_RUN"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+  cp -R "$TESTS_DIR/fixtures/ios/." "$IOS_DIR/"
+  mv "$IOS_DIR/Package.resolved.fixture" "$IOS_DIR/Package.resolved"
+  local summary
+  summary=$("$SCAN" "$IOS_DIR" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  IOS_RUN=$(dirname "$summary")
+  assert_eq "$(awk -F '\t' '$2 != "ok" && $1 != "gitleaks-git"' "$IOS_RUN/raw/status.tsv")" "" "(도구 실패)"
+  _check_baseline "$IOS_RUN/findings.json" "$TESTS_DIR/baseline/ios.json"
+  if grep -rqF "fixture-xcconfig-secret" "$IOS_RUN"; then
+    fail "xcconfig 비밀 값이 리포트에 남음"
+  fi
+}

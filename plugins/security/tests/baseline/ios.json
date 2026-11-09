@@ -1,0 +1,16 @@
+{
+  "_doc": "tests/fixtures/ios 를 /security:scan-code 로 점검했을 때 반드시 나와야 하는 결과 (S-iOS 기준선, 점검 항목 I1~I7 은 docs/security/07 스택별 설계/iOS.md). 하나라도 빠지면 회귀다.",
+  "must_find": [
+    {"tool": "toolkit", "rule_id": "ios.xcconfig-secret", "file": "App/Config.xcconfig", "severity": "high", "note": "I1"},
+    {"tool": "toolkit", "rule_id": "ios.ats-arbitrary-loads", "file": "App/Info.plist", "severity": "high", "note": "I2"},
+    {"tool": "toolkit", "rule_id": "ios.ats-insecure-http-exception", "file": "App/Info.plist", "note": "I2"},
+    {"tool": "toolkit", "rule_id": "ios.ats-weak-tls", "file": "App/Info.plist", "note": "I2"},
+    {"tool": "semgrep", "rule_suffix": "insecure-storage", "file": "App/Sources/Session.swift", "note": "I3"},
+    {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/Session.swift", "note": "I4"},
+    {"tool": "semgrep", "rule_suffix": "sensitive-log-objc", "file": "App/Legacy/Crypto.m", "note": "I4 Objective-C"},
+    {"tool": "semgrep", "rule_suffix": "weak-crypto", "file": "App/Sources/Hash.swift", "note": "I6"},
+    {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/Crypto.m", "note": "I6 Objective-C"},
+    {"tool": "semgrep", "rule_suffix": "webview-file-access", "file": "App/Sources/Web.swift", "note": "I7"},
+    {"tool": "osv-scanner", "package": "github.com/apple/swift-nio-http2@1.19.1", "file": "Package.resolved", "note": "I5"}
+  ]
+}
