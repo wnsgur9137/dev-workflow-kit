@@ -374,3 +374,23 @@ test_real_scan_code_web_baseline() {
     fail ".env 값이 리포트에 남음"
   fi
 }
+
+# S-Server: 서버 픽스처 기준선 (S1~S7) — 하위 경로 서버 3개(api·gosvc·web) + 저장소 루트 Dockerfile·compose
+test_real_scan_code_server_baseline() {
+  _real_ready || exit 77
+  mkdir -p "$HOME/.cache/dev-workflow-kit-tests"
+  SRV_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/server.XXXXXX")
+  trap 'rm -rf "$SRV_DIR"; [ -n "${SRV_RUN:-}" ] && rm -rf "$SRV_RUN"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+  cp -R "$TESTS_DIR/fixtures/server/." "$SRV_DIR/"
+  mv "$SRV_DIR/requirements.txt.fixture" "$SRV_DIR/web/requirements.txt"
+  local summary
+  summary=$("$SCAN" "$SRV_DIR" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  SRV_RUN=$(dirname "$summary")
+  assert_eq "$(awk -F '\t' '$2 != "ok" && $1 != "gitleaks-git"' "$SRV_RUN/raw/status.tsv")" "" "(도구 실패)"
+  _check_baseline "$SRV_RUN/findings.json" "$TESTS_DIR/baseline/server.json"
+  # 설정 파일의 평문 비밀번호 값은 리포트 어디에도 없다 (키 이름만)
+  if grep -rqF "fixture-plaintext-pw" "$SRV_RUN"; then
+    fail "설정 파일 비밀번호 값이 리포트에 남음"
+  fi
+}

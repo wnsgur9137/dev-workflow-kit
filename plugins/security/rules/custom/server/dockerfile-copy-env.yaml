@@ -1,0 +1,27 @@
+# S5 — .env 파일을 이미지에 복사 (docs/security/07 스택별 설계/Server.md)
+rules:
+  - id: dockerfile-copy-env
+    message: >-
+      .env 파일을 이미지에 복사합니다. 이미지 레이어에 비밀 값이 남아 레지스트리에서 누구나 꺼낼 수 있습니다.
+      런타임에 환경 변수·시크릿으로 주입하고 .dockerignore 에 .env 를 넣으세요.
+    severity: ERROR
+    # generic + 경로 지정: dockerfile 언어는 Dockerfile.prod·Containerfile 을 대상으로 삼지 않는다 (PR #25 리뷰 실측)
+    languages: [generic]
+    paths:
+      include:
+        - "Dockerfile*"
+        - "dockerfile*"
+        - "Containerfile*"
+        - "*.Dockerfile"
+        - "*.dockerfile"
+      exclude:
+        - "*.md"
+        - "*.txt"
+    metadata:
+      category: security
+      cwe: ["CWE-538: Insertion of Sensitive Information into Externally-Accessible File or Directory"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      stack: server
+    # 줄 단위 정규식 (dockerfile 언어의 $...ARGS 바인딩이 1.182.0 에서 매칭되지 않음을 실측).
+    # 예시 파일(.env.example·.env.local.example 등)은 토큰 단위로 제외하고, 마지막 인자(대상 경로)의 .env 는 보지 않는다 — 뒤에 인자가 더 있어야 한다.
+    pattern-regex: '(?im)^[ \t]*(COPY|ADD)\b[^\n]*[\s/"'']\.env(?![\w.-]*\.(example|sample|template|dist)\b)([.-][\w.-]+)?(["''][ \t]*,[ \t]*["'']|["''][ \t]+["'']?|[ \t]+)(?=[^\s"'',\]])'

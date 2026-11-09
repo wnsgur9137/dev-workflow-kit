@@ -13,7 +13,8 @@ detect:
 exclude_if: [android]        # 같은 하위 프로젝트가 Android 이면 server 는 적용하지 않는다
 exclude_paths: ["**/node_modules/**", "**/.venv/**", "**/venv/**", "**/target/**", "**/build/**", "**/dist/**", "**/__pycache__/**"]
 semgrep:
-  rulesets: [python, go, java, kotlin, javascript, typescript]
+  rulesets: [python, go, java, kotlin, javascript, typescript, dockerfile]
+  custom: [server]
 sca:
   lockfiles:
     - "**/poetry.lock"
@@ -28,4 +29,5 @@ sca:
     - "**/yarn.lock"
     - "**/pnpm-lock.yaml"
   missing_lockfile_hint: "poetry.lock / uv.lock / go.sum / package-lock.json 등 lockfile 을 커밋하세요"
+checks: [compose, spring-config-secret]
 checklist: server
