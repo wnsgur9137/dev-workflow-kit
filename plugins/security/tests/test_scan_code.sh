@@ -91,10 +91,14 @@ _status_row() {
   awk -F '\t' -v t="$tool" '$1 == t' "$(dirname "$summary")/raw/status.tsv"
 }
 
+# 전제: 테스트 임시 폴더(TMPDIR)가 git 저장소 안에 있지 않다 (있으면 "git 저장소가 아님" 대신 하위 폴더 안내가 나온다)
 test_history_skip_reason_for_worktree_and_subfolder() {
   setup_fake
   fake_data
   export FAKE_RUN_OUTPUT="a.py"
+  # 호스트 git 을 실행하지 않는다 (위협 모델 T5) — 호출되면 기록되는 가짜 git
+  printf '#!/bin/sh\necho "git $*" >>"%s"\nexit 1\n' "$SEC_TMP/git.log" >"$SEC_TMP/bin/git"
+  chmod +x "$SEC_TMP/bin/git"
   # PR #19 W8: worktree·서브모듈(.git 이 파일)과 저장소 하위 폴더를 "git 저장소 아님"으로 안내하지 않는다
   printf 'gitdir: /elsewhere/.git/worktrees/proj\n' >"$HOME/proj/.git"
   assert_contains "$(_status_row "$HOME/proj" gitleaks-git)" "git worktree 또는 서브모듈입니다"
@@ -103,6 +107,15 @@ test_history_skip_reason_for_worktree_and_subfolder() {
   echo 'print(1)' >"$HOME/repo/sub/a.py"
   assert_contains "$(_status_row "$HOME/repo/sub" gitleaks-git)" "최상위 경로($(cd -P "$HOME/repo" && pwd -P))로 실행하면"
   assert_contains "$(_status_row "$HOME/proj" gitleaks-git)" "git 저장소가 아님"
+  # 서브모듈의 하위 폴더는 처음부터 worktree·서브모듈로 안내한다
+  mkdir -p "$HOME/sm/sub"
+  printf 'gitdir: ../.git/modules/sm\n' >"$HOME/sm/.git"
+  echo 'print(1)' >"$HOME/sm/sub/a.py"
+  assert_contains "$(_status_row "$HOME/sm/sub" gitleaks-git)" "worktree 또는 서브모듈("
+  # 상위 .git 이 홈 디렉터리면(점검 대상으로 받지 않는 경로) 안내하지 않는다
+  mkdir -p "$HOME/.git"
+  assert_contains "$(_status_row "$HOME/proj" gitleaks-git)" "git 저장소가 아님"
+  [ ! -s "$SEC_TMP/git.log" ] || fail "호스트 git 이 실행됨: $(cat "$SEC_TMP/git.log")"
 }
 
 test_oom_kill_is_named_in_failure_note() {

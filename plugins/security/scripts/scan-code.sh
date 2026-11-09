@@ -91,10 +91,12 @@ DOCKER_HARDEN=(--rm --network none --read-only --cap-drop ALL --security-opt no-
 #      "결과 0건" 으로 조용히 끝난다 (Colima 기본 설정은 홈 디렉터리만 공유).
 if [ -n "$(ls -A "$TARGET" 2>/dev/null)" ]; then
   probe_err=$(mktemp "${TMPDIR:-/tmp}/sec-d7.XXXXXX") || sec_die "임시 파일을 만들 수 없습니다."
+  trap 'rm -f "$probe_err"' EXIT
   seen=$(docker run "${DOCKER_HARDEN[@]}" --tmpfs /tmp:rw,size=8m -v "$TARGET:/src:ro" --entrypoint sh "$IMG_GITLEAKS" -c 'ls -A /src | head -n 1' 2>"$probe_err")
   probe_rc=$?
   probe_msg=$(tail -n 3 "$probe_err" | tr '\n' ' ' | cut -c1-300)
   rm -f "$probe_err"
+  trap - EXIT
   # 컨테이너 자체가 실패한 경우(이미지·런타임 오류)를 마운트 공유 문제로 잘못 안내하지 않는다
   if [ $probe_rc -ne 0 ]; then
     sec_err "[D7] 대상 폴더 확인용 컨테이너를 실행하지 못했습니다 (종료코드 $probe_rc): ${probe_msg:-출력 없음}"
@@ -254,10 +256,12 @@ run_osv() {
 }
 
 # 상위 폴더에서 .git 을 찾는다. 대상 저장소의 git 설정을 읽지 않도록 호스트 git 은 실행하지 않는다 (위협 모델 T5)
+# 홈 디렉터리와 그 위는 점검 대상으로 받지 않으므로(sec_validate_target) 거기서 멈춘다
 git_toplevel_above() {
-  local d
+  local d home
+  home=$(cd -P "$HOME" 2>/dev/null && pwd -P) || home=$HOME
   d=$(dirname "$1")
-  while [ -n "$d" ] && [ "$d" != / ]; do
+  while [ -n "$d" ] && [ "$d" != / ] && [ "$d" != "$home" ]; do
     if [ -e "$d/.git" ]; then
       printf '%s\n' "$d"
       return 0
@@ -277,7 +281,10 @@ if [ -d "$TARGET/.git" ]; then
 elif [ -f "$TARGET/.git" ]; then
   # worktree·서브모듈은 .git 이 gitdir 를 가리키는 파일이다. gitdir 는 마운트 밖이라 컨테이너에서 읽을 수 없다
   record gitleaks-git skipped - "git worktree 또는 서브모듈입니다 (.git 이 파일) — 히스토리가 대상 폴더 밖에 있어 점검을 생략했습니다. 원본 저장소 경로로 다시 실행하면 히스토리도 점검합니다"
-elif top=$(git_toplevel_above "$TARGET") && [ -n "$top" ]; then
+elif top=$(git_toplevel_above "$TARGET") && [ -n "$top" ] && [ -f "$top/.git" ]; then
+  # 서브모듈·worktree 의 하위 폴더 — 그 최상위로 다시 실행해도 히스토리는 마운트 밖이다
+  record gitleaks-git skipped - "git worktree 또는 서브모듈($top)의 하위 폴더입니다 — 히스토리가 대상 폴더 밖에 있어 점검을 생략했습니다. 원본 저장소 경로로 다시 실행하면 히스토리도 점검합니다"
+elif [ -n "${top:-}" ]; then
   record gitleaks-git skipped - "저장소의 하위 폴더입니다 — 히스토리 점검을 생략했습니다. 최상위 경로($top)로 실행하면 히스토리도 점검합니다"
 else
   record gitleaks-git skipped - "git 저장소가 아님 (.git 없음) — 히스토리 점검 생략"
