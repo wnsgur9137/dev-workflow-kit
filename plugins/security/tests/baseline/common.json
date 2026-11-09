@@ -1,0 +1,12 @@
+{
+  "_doc": "tests/fixtures/common 을 /security:scan-code 로 점검했을 때 반드시 나와야 하는 결과 (V2 회귀 기준선). 규칙·DB 를 갱신한 뒤 하나라도 빠지면 회귀다. 새로 늘어난 결과는 테스트 로그에 정보로만 표시한다.",
+  "must_find": [
+    {"tool": "gitleaks", "rule_id": "aws-access-token", "file": "config.py", "severity": "critical", "note": "히스토리(삭제된 파일)"},
+    {"tool": "gitleaks", "rule_id": "github-pat", "file": ".env.local", "severity": "high", "note": "작업 트리(미커밋)"},
+    {"tool": "semgrep", "rule_suffix": "subprocess-shell-true", "file": "src/app.py"},
+    {"tool": "semgrep", "rule_suffix": "formatted-sql-query", "file": "src/app.py"},
+    {"tool": "semgrep", "rule_suffix": "insecure-innerhtml", "file": "web/render.js"},
+    {"tool": "osv-scanner", "package": "lodash@4.17.20", "file": "package-lock.json"},
+    {"tool": "osv-scanner", "package": "requests@2.19.0", "file": "requirements.txt"}
+  ]
+}

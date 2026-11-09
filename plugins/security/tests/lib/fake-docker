@@ -6,6 +6,7 @@
 #   FAKE_MEM=<bytes>          docker info MemTotal
 #   FAKE_IMAGES=<ref ...>     docker image inspect 가 성공하는 이미지
 #   FAKE_LOG=<파일>           호출 기록
+#   FAKE_RUN_OUTPUT=<문자열>  docker run 이 출력할 내용 (설정하지 않으면 run 은 실패 99)
 [ -n "${FAKE_LOG:-}" ] && echo "docker $*" >>"$FAKE_LOG"
 case "$1" in
   info)
@@ -22,6 +23,14 @@ case "$1" in
     for r in ${FAKE_IMAGES:-}; do [ "$r" = "$3" ] && exit 0; done
     exit 1
     ;;
-  run | pull) echo "가짜 docker 로 $1 을 실행하면 안 됩니다" >&2; exit 99 ;;
+  run)
+    if [ -n "${FAKE_RUN_OUTPUT+x}" ]; then
+      printf '%s' "$FAKE_RUN_OUTPUT"
+      exit 0
+    fi
+    echo "가짜 docker 로 run 을 실행하면 안 됩니다" >&2
+    exit 99
+    ;;
+  pull) echo "가짜 docker 로 $1 을 실행하면 안 됩니다" >&2; exit 99 ;;
   *) exit 0 ;;
 esac
