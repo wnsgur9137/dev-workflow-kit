@@ -168,7 +168,7 @@ def strip_js_comments(text):
         if c in "'\"`":
             quote = c
             out.append(c)
-            prev = c
+            prev, prev_word, in_word = c, "", False
             i += 1
         elif text.startswith("//", i):
             j = text.find("\n", i)
@@ -910,7 +910,7 @@ ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 TOOLS_NODE = "{http://schemas.android.com/tools}node"
 COMPONENTS = ("activity", "activity-alias", "service", "receiver", "provider")
 # 디버그·테스트 소스셋의 Manifest 는 일부러 debuggable·cleartext 를 켜는 경우가 흔하다 — low 로 낮춘다
-ANDROID_DEBUG_SOURCESET = re.compile(r"(^|/)src/(debug|androidTest|test)[^/]*/")
+ANDROID_DEBUG_SOURCESET = re.compile(r"(^|/)src/(?:debug|androidTest\w*|test\w*|\w+Debug)/")
 RES_NAME = re.compile(r"[A-Za-z0-9_]+")
 
 
@@ -938,8 +938,15 @@ class _LineCursor:
 
     def find(self, needle):
         k = self.text.find(needle, self.pos)
+        return self._move(k)
+
+    def find_re(self, rx):
+        m = rx.search(self.text, self.pos)
+        return self._move(m.start() if m else -1)
+
+    def _move(self, k):
         if k < 0:
-            return None
+            return None                      # 못 찾으면 커서를 움직이지 않는다 (뒤 요소를 놓치지 않게)
         self.line += self.text.count("\n", self.pos, k)
         self.pos = k
         return self.line
@@ -1008,7 +1015,8 @@ def check_android_manifest(ctx):
             if el.tag not in COMPONENTS:
                 continue
             name = _attr(el, "name") or "?"
-            line = cur.find(f'"{name}"') if name != "?" else None
+            # 요소의 android:name= 속성 위치 (작은·큰따옴표 모두) — 다른 속성의 같은 값(targetActivity 등)으로 앞질러 가지 않게
+            line = cur.find_re(re.compile(r"\bandroid:name[ \t\r\n]*=[ \t\r\n]*[\"']" + re.escape(name) + r"[\"']")) if name != "?" else None
             if _attr(el, "exported") != "true" or el.get(TOOLS_NODE) in ("remove", "removeAll"):
                 continue
             if el.tag in ("activity", "activity-alias") and _is_launcher(el):
@@ -1039,7 +1047,7 @@ def check_android_manifest(ctx):
 
 def _check_nsc(ctx, rel, full, debug_set=False):
     """network_security_config — base-config·domain-config 의 평문 허용과 사용자 CA (debug-overrides 는 디버그 빌드 전용이라 제외)."""
-    out, seen = [], set()
+    out = []
     root, text = parse_xml(ctx, rel, full)
     if root is None:
         return out
@@ -1048,8 +1056,7 @@ def _check_nsc(ctx, rel, full, debug_set=False):
         if el.tag not in ("base-config", "domain-config"):
             continue
         line = cur.find("<" + el.tag)
-        if el.get("cleartextTrafficPermitted") == "true" and ("cleartext", line) not in seen:
-            seen.add(("cleartext", line))
+        if el.get("cleartextTrafficPermitted") == "true":
             scope = "전체" if el.tag == "base-config" else "일부 도메인"
             normal = "high" if el.tag == "base-config" else "medium"
             out.append(ctx.finding(
@@ -1059,8 +1066,7 @@ def _check_nsc(ctx, rel, full, debug_set=False):
                 fix_hint="평문이 꼭 필요한 개발용 도메인만 domain-config 로 허용하고 base-config 는 false 로 두세요.",
                 references=["CWE-319"]))
         for anchors in el.findall("trust-anchors"):
-            if any(c.get("src") == "user" for c in anchors.findall("certificates")) and ("user", line) not in seen:
-                seen.add(("user", line))
+            if any(c.get("src") == "user" for c in anchors.findall("certificates")):
                 out.append(ctx.finding(
                     "android-manifest", "android.nsc-user-certs", "low" if debug_set else "medium", "mobile", rel, line,
                     "network_security_config 가 사용자 설치 CA 를 신뢰합니다 — 중간자 공격 프록시가 TLS 를 가로챌 수 있습니다",
@@ -1070,8 +1076,13 @@ def _check_nsc(ctx, rel, full, debug_set=False):
 
 
 GRADLE_FILE = re.compile(r"(^|/)build\.gradle(\.kts)?$")
-APP_PLUGIN_LINE = re.compile(r"com\.android\.application|libs\.plugins\.android\.application|android\.application")
-RELEASE_BLOCK = re.compile(r"(?:\brelease|\b(?:getByName|named|maybeCreate|create)\([ \t]*[\"']release[\"'][ \t]*\)(?:\.apply)?)[ \t]*\{")
+# 플러그인 선언 형태만 (namespace = "org.android.application.core" 같은 문자열은 아니다)
+APP_PLUGIN_LINE = re.compile(
+    r"\bid[ \t]*\(?[ \t]*[\"']com\.android\.application[\"']"
+    r"|\bapply[ \t]+plugin[ \t]*:[ \t]*[\"']com\.android\.application[\"']"
+    r"|\blibs\.plugins\.android\.application\b|\blibs\.plugins\.androidApplication\b")
+RELEASE_BLOCK = re.compile(r"(?:\brelease|\b(?:getByName|named|maybeCreate|create)\([ \t]*[\"']release[\"'][ \t]*\)(?:\.apply|\.configure)?)(?:[ \t]*\n)?[ \t]*\{")
+BUILD_TYPES = re.compile(r"\bbuildTypes(?:[ \t]*\n)?[ \t]*\{")     # 공백 수량자가 연달아 붙지 않게
 MINIFY_ON = re.compile(r"\b(?:is)?[mM]inifyEnabled[ \t]*(?:=[ \t]*|\([ \t]*)?true\b")
 
 
@@ -1102,7 +1113,11 @@ def _brace_block(code, start):
 def _is_android_app_module(text):
     """앱 모듈 빌드 파일인지 — 플러그인 선언 줄에 apply false 가 붙은 루트 빌드 파일은 아니다 (원문에서 먼저 거른다)."""
     for line in text.splitlines():
-        if APP_PLUGIN_LINE.search(line) and "apply false" not in line and "apply(false)" not in line:
+        st = line.strip()
+        if len(line) > MAX_LINE or st.startswith(("//", "/*", "*")):
+            continue                                   # 주석 줄 (블록 주석 안의 줄은 * 로 시작하는 관례만 거른다)
+        code = line.split(" //", 1)[0]
+        if APP_PLUGIN_LINE.search(code) and "apply false" not in code and "apply(false)" not in code:
             return True
     return False
 
@@ -1118,7 +1133,10 @@ def check_android_gradle_release(ctx):
         if not re.search(r"\bandroid[ \t]*\{", code):
             continue
         release, line = None, 1
-        for m in re.finditer(r"\bbuildTypes[ \t]*\n?[ \t]*\{", code):   # 문자열 안 'buildTypes {' 같은 가짜 일치를 건너뛴다
+        # 문자열 안 'buildTypes {' 같은 가짜 일치를 건너뛰되, 닫히지 않은 블록이 반복돼도 이차 시간이 되지 않게 시도 횟수를 제한한다
+        for attempt, m in enumerate(BUILD_TYPES.finditer(code)):
+            if attempt >= 5:
+                break
             types = _brace_block(code, m.end() - 1)
             if types is None:
                 continue
@@ -1140,8 +1158,15 @@ def check_android_gradle_release(ctx):
 
 
 GRADLE_PROPS = re.compile(r"(^|/)(gradle|local|keystore|signing)\.properties$")
-# 끝을 고정한다 — TOKEN_URL·secretsPropertiesFile·keystorePasswordFile 같은 위치 키를 비밀로 보지 않게
-ANDROID_SECRET_KEY = re.compile(r"(password|passwd|pwd|secret|token|api[-_]?key|private[-_]?key)$", re.I)
+SECRET_KEYWORD = re.compile(r"(password|passwd|pwd|secret|token|api[-_]?key|private[-_]?key|access[-_]?key)", re.I)
+# 위치·설정을 뜻하는 접미사 — TOKEN_URL·secretsPropertiesFile·keystorePasswordFile 같은 키는 비밀 값이 아니다
+LOCATION_SUFFIX = re.compile(r"(url|uri|file|path|dir|directory|name|host|endpoint|enabled|alias|type|header)$", re.I)
+
+
+def is_secret_key(key):
+    """properties·xcconfig 키가 비밀 값을 담는 키인지 — 키워드는 어디에 있어도 되고(SECRET_KEY·AUTH_TOKEN_DEV),
+    위치·설정을 뜻하는 접미사로 끝나면 제외한다."""
+    return bool(SECRET_KEYWORD.search(key)) and not LOCATION_SUFFIX.search(key)
 
 
 def check_android_properties_secret(ctx):
@@ -1161,7 +1186,7 @@ def check_android_properties_secret(ctx):
                 continue
             key = m.group(1).replace("\\", "")
             ok, _note = _secret_value(m.group(2).strip(), key)
-            if ANDROID_SECRET_KEY.search(key) and ok:
+            if is_secret_key(key) and ok:
                 out.append(ctx.finding(
                     "android-properties-secret", "android.properties-secret", "high", "secret", rel, n,
                     "properties 파일의 비밀 키에 평문 값이 있습니다 (서명 키 비밀번호 등)",

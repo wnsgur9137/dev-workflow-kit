@@ -597,6 +597,54 @@ class ChecksTest(unittest.TestCase):
                                ("android.manifest-exported-component", "lib/src/main/AndroidManifest.xml", "high")])
         self.assertTrue(any("리소스 이름 형식" in w for w in report["warnings"]))
 
+    def test_android_rereview_cases(self):
+        """PR #26 재리뷰: 작은따옴표 이름·targetActivity 로 커서 앞지름, 모듈 판정 오탐, 비밀 키 판정, 한 줄 nsc, flavor 디버그 소스셋"""
+        _w(os.path.join(self.t, "app/src/main/AndroidManifest.xml"), "\n".join([
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+            "  <application>",
+            "    <activity android:name='.A' android:exported='true'/>",
+            '    <service android:name=".B" android:exported="true"/>',
+            '    <service android:name=".C" android:exported="true"/>',
+            '    <activity-alias android:name=".Alias" android:targetActivity=".A" android:exported="true"/>',
+            '    <receiver android:name=".D" android:exported="true"/>',
+            "  </application>",
+            "</manifest>"]))
+        lines = sorted(r["line"] for r in checks.run(self.t, [("android", ".", [])], self.defs)["results"])
+        self.assertEqual(lines, [3, 4, 5, 6, 7])
+        os.remove(os.path.join(self.t, "app/src/main/AndroidManifest.xml"))
+        _w(os.path.join(self.t, "lib/build.gradle"), "plugins { id 'com.android.library' }\n// was: id 'com.android.application'\nandroid { }\n")
+        _w(os.path.join(self.t, "core/build.gradle.kts"), 'plugins { id("com.android.library") }\nandroid { namespace = "org.android.application.core" }\n')
+        _w(os.path.join(self.t, "src/stagingDebug/res/xml/n.xml"), "x")
+        _w(os.path.join(self.t, "flav/src/freeDebug/AndroidManifest.xml"),
+           '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:debuggable="true"/></manifest>')
+        _w(os.path.join(self.t, "one/src/main/AndroidManifest.xml"),
+           '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:networkSecurityConfig="@xml/n"/></manifest>')
+        _w(os.path.join(self.t, "one/src/main/res/xml/n.xml"),
+           '<network-security-config><base-config cleartextTrafficPermitted="true"/><domain-config cleartextTrafficPermitted="true"><domain>a</domain></domain-config></network-security-config>')
+        got = sorted((r["rule_id"], r["severity"]) for r in checks.run(self.t, [("android", ".", [])], self.defs)["results"])
+        self.assertEqual(got, [("android.manifest-debuggable", "low"), ("android.nsc-cleartext", "high"), ("android.nsc-cleartext", "medium")])
+        for key, want in {"SECRET_KEY": True, "AWS_SECRET_ACCESS_KEY": True, "secretKey": True, "ACCESS_KEY": True,
+                          "apiKeyRelease": True, "AUTH_TOKEN_DEV": True, "clientSecretProd": True, "storePassword": True,
+                          "TOKEN_URL": False, "secretsPropertiesFile": False, "keystorePasswordFile": False,
+                          "RELEASE_KEY_ALIAS": False, "org.gradle.jvmargs": False}.items():
+            self.assertEqual(checks.is_secret_key(key), want, key)
+
+    def test_android_build_types_unclosed_is_linear(self):
+        """PR #26 재리뷰 HIGH: 닫히지 않은 buildTypes { 가 반복돼도 이차 시간이 되지 않는다"""
+        times = []
+        for n in (3000, 6000):
+            _w(os.path.join(self.t, "app/build.gradle"),
+               "plugins { id 'com.android.application' }\nandroid {\n" + "buildTypes{\n" * n)
+            t0 = time.time()
+            rs = checks.run(self.t, [("android", ".", [])], self.defs)["results"]
+            times.append(time.time() - t0)
+            self.assertTrue(rs)
+        self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+        _w(os.path.join(self.t, "app/build.gradle"), ("buildTypes" + " " * 3900 + "\n") * 200 + "plugins { id 'com.android.application' }\nandroid {}\n")
+        t0 = time.time()
+        checks.run(self.t, [("android", ".", [])], self.defs)
+        self.assertLess(time.time() - t0, 1.5)
+
     def test_android_manifest_lines_are_linear(self):
         def manifest(n):
             comps = "".join(f'<service android:name=".S{i}" android:exported="true"/>\n' for i in range(n))
@@ -613,7 +661,8 @@ class ChecksTest(unittest.TestCase):
     def test_strip_js_comments_word_runs_are_linear(self):
         """PR #26 리뷰: prev_word 가 공백에서 초기화되지 않아 'a a a …' 에서 이차였다"""
         f = checks.strip_js_comments
-        self.assertEqual(f("x = 1\nreturn /re/ // c"), "x = 1\nreturn /re/ ")
+        self.assertEqual(f("a = b\nin /x*/.test(y) /* c */"), "a = b\nin /x*/.test(y) ")   # 이전 코드는 prev_word 가 'bin' 이 되어 실패
+        self.assertEqual(f('foo"x"return /a*/ //c'), 'foo"x"return /a*/ ')
         times = []
         for n in (100_000, 200_000):
             t0 = time.time()

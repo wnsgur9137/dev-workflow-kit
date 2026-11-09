@@ -278,6 +278,17 @@ class ParserTest(unittest.TestCase):
         f, summary = self.run_normalize()
         self.assertNotIn(tok, json.dumps(f) + summary)
 
+    def test_identifiers_are_not_damaged_by_masking(self):
+        """PR #26 재리뷰: 키=값 패턴이 Maven 좌표·`파일:줄` 을 가리면 안 된다"""
+        self.raw("checks.json", {"results": [
+            {"rule_id": "x", "severity": "info", "category": "dependency", "file": "app/gradle.lockfile", "line": None,
+             "title": "t", "package": "io.jsonwebtoken:jjwt-api@0.11.5"},
+            {"rule_id": "y", "severity": "high", "category": "sast", "file": "app/src/main/java/AuthController.kt",
+             "line": 1024, "title": "t"}]})
+        f, summary = self.run_normalize()
+        self.assertIn("io.jsonwebtoken:jjwt-api@0.11.5", summary)
+        self.assertIn("app/src/main/java/AuthController.kt:1024", summary)
+
     def test_tool_failures_and_warnings_are_not_hidden(self):
         _w(os.path.join(self.run, "raw", "status.tsv"),
            "semgrep\tfailed\t2\tFatal error\ngitleaks-git\tskipped\t-\tgit 저장소가 아님\nosv-scanner\tok\t0\t\n")
