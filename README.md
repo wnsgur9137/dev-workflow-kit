@@ -9,7 +9,7 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 | 플러그인 | 상태 | 커맨드 | 설명 |
 |---|---|---|---|
 | `workflow` | ✅ 사용 가능 | `/workflow:commit` `/workflow:create-pr` `/workflow:pr-review` `/workflow:apply-review` `/workflow:pipeline` | 커밋부터 병합까지 |
-| `security` | 🚧 구현 중 (P0 기반) | `/security:scan-code` `/security:scan-app` `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
+| `security` | 🚧 구현 중 (P1 scan-code) | `/security:scan-code`, `/security:scan-app` `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
 
 ## 목차
 
@@ -117,7 +117,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 
 ## security 플러그인
 
-> 🚧 **구현 중** — 현재는 기반(경로 검증, Docker 사전 점검, 스택 감지)만 들어 있고 `/security:scan-*` 커맨드는 아직 없습니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
+> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성)를 쓸 수 있습니다. 스택별 커스텀 규칙, `/security:scan-app`·`/security:scan-web`은 아직 없습니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
 
 개인 앱·웹 프로젝트를 **Claude Code 안에서, 외부 전송 없이** 점검합니다. 모든 도구는 네트워크가 차단된 컨테이너에서 실행되고, Claude는 정규화된 요약 리포트만 읽습니다. 설계: [보안 툴킷](docs/security/보안%20툴킷.md)
 
@@ -136,9 +136,33 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
    | D3 | Compose v2 이상 | compose 플러그인 안내 |
    | D4 | dockerd(moby) 엔진 | Podman 미지원 안내 |
    | D5 | VM 메모리 권장치 이상 | 경고만 |
-   | D6 | 고정 digest 이미지 존재 | `update.sh` 실행 안내 (스캔은 다운로드하지 않음) |
+   | D6 | 고정 digest 이미지·규칙·OSV DB 존재 | `update.sh` 실행 안내 (스캔은 다운로드하지 않음) |
+   | D7 | 컨테이너에서 대상 폴더가 보임 | 런타임 공유 경로 설정 안내 (Colima 기본값은 홈 아래만 공유) |
 
 2. **python3 3.8 이상** — 스택 감지·리포트 정규화에 씁니다 (표준 라이브러리만 사용).
+3. **도구 데이터 받기** — 이미지·규칙·OSV DB는 툴킷에서 외부와 통신하는 유일한 스크립트인 `update.sh`로 받습니다. Claude에게 맡기지 말고 **터미널에서 직접** 실행하세요.
+
+   ```bash
+   ~/.claude/plugins/cache/dev-workflow-kit/security/<버전>/scripts/update.sh          # 전부
+   ~/.claude/plugins/cache/dev-workflow-kit/security/<버전>/scripts/update.sh --osv    # OSV DB만 (주 1회 권장)
+   ```
+
+   이미지는 `images.lock`의 digest, 규칙은 `rules.lock`의 커밋으로 고정해 받습니다.
+
+### 사용법
+
+```
+/security:scan-code ~/develop/my-app
+/security:scan-code ~/develop/my-app --profile=web,server   # 스택 감지 대신 지정
+```
+
+| 도구 | 점검 | 비고 |
+|---|---|---|
+| Gitleaks | 하드코딩 시크릿 (작업 트리 + git 히스토리) | 리포트에는 시크릿 원문을 남기지 않음 |
+| Semgrep | 취약 코드 패턴 | `generic` + 감지된 스택의 언어 규칙셋 |
+| OSV-Scanner | 취약 의존성 (lockfile) | 오프라인 DB 사용, DB가 오래되면 경고. npm·PyPI·Go·Maven·Pub·SwiftPM·crates.io·RubyGems·Packagist·NuGet (CocoaPods 미지원) |
+
+모든 컨테이너는 `--network none`·읽기 전용 루트·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.
 
 ### 권한 설정
 

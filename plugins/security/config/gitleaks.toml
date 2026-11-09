@@ -1,0 +1,4 @@
+# 툴킷 고정 gitleaks 설정 — 점검 대상 저장소의 .gitleaks.toml 대신 항상 이 파일을 쓴다.
+# 대상 저장소의 allowlist 가 탐지를 조용히 끄지 못하게 하기 위함 (위협 모델 T5).
+[extend]
+useDefault = true

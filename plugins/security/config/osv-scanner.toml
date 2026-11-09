@@ -1,0 +1,2 @@
+# 툴킷 고정 osv-scanner 설정 (비어 있음) — 점검 대상 저장소의 osv-scanner.toml 대신 항상 이 파일을 쓴다.
+# 대상 저장소의 IgnoredVulns·PackageOverrides 가 결과를 조용히 지우지 못하게 하기 위함 (위협 모델 T5).

@@ -69,6 +69,7 @@ docker info && docker compose version   # 둘 다 성공해야 함
 | D4 | 엔진이 dockerd(moby) | Podman 등 미지원 런타임 안내 |
 | D5 | VM 메모리가 해당 스캔 권장치 이상 | 경고만 (계속 진행) |
 | D6 | 필요한 이미지가 `images.lock` digest로 존재 | `update.sh` 실행 안내 (스캔 스크립트는 다운로드하지 않음) |
+| D7 | 컨테이너에서 대상 폴더가 비어 보이지 않음 (P1 추가, `scan-code.sh`) | 런타임 공유 경로 안내 — 공유되지 않은 경로는 빈 폴더로 보여 "0건"으로 조용히 끝나기 때문 |
 
 ## 로컬 서버 점검 시 호스트 주소
 `/security:scan-web`으로 내 Mac에서 띄운 서버(`localhost:3000`)를 점검할 때 컨테이너에서 보는 호스트 주소가 런타임마다 다를 수 있다.

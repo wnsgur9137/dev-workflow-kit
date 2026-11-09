@@ -11,3 +11,6 @@
 # 갱신은 레포 관리자만 PR 로 한다. docs/security/03 워크플로/업데이트 절차.md
 #
 # 항목은 P1(semgrep-rules)·P4(nuclei-templates, 선택)에서 추가한다.
+
+# --- P1 (2026-10-21 커밋 add php docker rule (#4114), 공개 후 7일 이상) ---
+semgrep-rules  https://github.com/semgrep/semgrep-rules  16b9e6d45f10649f6a531ec4838ed9924372c3bc  generic,javascript,typescript,python,go,java,kotlin,swift,dockerfile
