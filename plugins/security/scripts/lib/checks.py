@@ -1108,6 +1108,114 @@ def check_android_properties_secret(ctx):
 
 
 # ---------------------------------------------------------------------------
+# ios
+# ---------------------------------------------------------------------------
+WEAK_TLS = ("TLSv1.0", "TLSv1.1")
+
+
+def _load_plist(ctx, rel, full):
+    """Info.plist(XML·바이너리)를 표준 plistlib 로 읽는다 — XML 엔티티 선언은 plistlib 이 거부한다."""
+    import plistlib
+    real = os.path.realpath(full)
+    if not real.startswith(ctx.target + os.sep):
+        return None, None
+    try:
+        fd = os.open(real, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None, None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_FILE:
+            return None, None
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            data = f.read(MAX_FILE + 1)
+    except OSError:
+        return None, None
+    finally:
+        os.close(fd)
+    try:
+        return plistlib.loads(data), data.decode("utf-8", "replace") if data[:6] != b"bplist" else ""
+    except Exception:  # noqa: BLE001 — 대상 파일은 신뢰하지 않는 입력이다
+        ctx.warn(f"{rel}: plist 를 해석하지 못했습니다")
+        return None, None
+
+
+def check_ios_ats(ctx):
+    """I2 — Info.plist 의 ATS 예외: NSAllowsArbitraryLoads(전체 평문 허용), 웹 콘텐츠·미디어 예외,
+    예외 도메인의 평문 허용·낮은 최소 TLS 버전."""
+    out = []
+    for rel, full in ctx.files(lambda rel, name: name.endswith("Info.plist")):
+        data, text = _load_plist(ctx, rel, full)
+        if not isinstance(data, dict):
+            continue
+        ats = data.get("NSAppTransportSecurity")
+        if not isinstance(ats, dict):
+            continue
+
+        def line_of(key):
+            return _xml_line(text, key) if text else None
+
+        if ats.get("NSAllowsArbitraryLoads") is True:
+            out.append(ctx.finding(
+                "ios-ats", "ios.ats-arbitrary-loads", "high", "mobile", rel, line_of("NSAllowsArbitraryLoads"),
+                "ATS 가 꺼져 있습니다 (NSAllowsArbitraryLoads = true) — 모든 도메인에 평문 HTTP 를 허용합니다",
+                evidence="NSAppTransportSecurity.NSAllowsArbitraryLoads = true",
+                fix_hint="키를 지우고, 평문이 꼭 필요한 도메인만 NSExceptionDomains 로 좁히세요.", references=["CWE-319"]))
+        for key in ("NSAllowsArbitraryLoadsInWebContent", "NSAllowsArbitraryLoadsForMedia"):
+            if ats.get(key) is True:
+                out.append(ctx.finding(
+                    "ios-ats", "ios.ats-arbitrary-loads-partial", "medium", "mobile", rel, line_of(key),
+                    f"ATS 부분 예외가 켜져 있습니다 ({key} = true)", evidence=f"NSAppTransportSecurity.{key} = true",
+                    fix_hint="필요한 경우가 아니면 지우세요.", references=["CWE-319"]))
+        domains = ats.get("NSExceptionDomains")
+        for domain, conf in (domains.items() if isinstance(domains, dict) else []):
+            if not isinstance(conf, dict):
+                continue
+            d = str(domain)[:120]
+            if conf.get("NSExceptionAllowsInsecureHTTPLoads") is True or conf.get("NSTemporaryExceptionAllowsInsecureHTTPLoads") is True:
+                out.append(ctx.finding(
+                    "ios-ats", "ios.ats-insecure-http-exception", "medium", "mobile", rel, line_of(d) if text else None,
+                    "ATS 예외 도메인에 평문 HTTP 를 허용합니다", evidence=f"도메인 {d}: NSExceptionAllowsInsecureHTTPLoads = true",
+                    fix_hint="서버를 HTTPS 로 옮기고 예외를 지우세요.", references=["CWE-319"]))
+            tls = conf.get("NSExceptionMinimumTLSVersion") or conf.get("NSTemporaryExceptionMinimumTLSVersion")
+            if isinstance(tls, str) and tls in WEAK_TLS:
+                out.append(ctx.finding(
+                    "ios-ats", "ios.ats-weak-tls", "medium", "mobile", rel, line_of(d) if text else None,
+                    "ATS 예외 도메인의 최소 TLS 버전이 낮습니다", evidence=f"도메인 {d}: 최소 TLS {tls}",
+                    fix_hint="TLS 1.2 이상만 허용하세요.", references=["CWE-326"]))
+    return out
+
+
+XCCONFIG_ASSIGN = re.compile(r"[ \t]*([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]\n]{0,100}\])?[ \t]*=(.*)")
+
+
+def check_ios_xcconfig_secret(ctx):
+    """I1 보강 — *.xcconfig 의 비밀 키 평문 값 (빌드 설정은 Info.plist·바이너리로 들어간다). 값은 기록하지 않는다."""
+    out = []
+    for rel, full in ctx.files(lambda rel, name: name.endswith(".xcconfig")):
+        text = ctx.read(full)
+        if text is None:
+            continue
+        for n, line in _lines(text):
+            if line.lstrip().startswith(("//", "#include")):
+                continue
+            m = XCCONFIG_ASSIGN.fullmatch(line)
+            if not m:
+                continue
+            # 줄 끝 주석은 공백 뒤 // 만 (URL 의 :// 는 값이다)
+            key, value = m.group(1), m.group(2).split(" //", 1)[0].strip()
+            ok, _note = _secret_value(value, key)
+            if ANDROID_SECRET_KEY.search(key) and ok and not value.startswith("$("):
+                out.append(ctx.finding(
+                    "ios-xcconfig-secret", "ios.xcconfig-secret", "high", "secret", rel, n,
+                    "xcconfig 의 비밀 키에 평문 값이 있습니다 — 앱 번들(Info.plist·바이너리)에 들어갈 수 있습니다",
+                    evidence=f"키: {key} — 값은 리포트에 남기지 않습니다",
+                    fix_hint="저장소 밖 xcconfig(gitignore)나 CI 시크릿으로 옮기고, 앱에 넣어야 하는 키라면 서버를 거쳐 발급받으세요.",
+                    references=["CWE-798"]))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 등록부
 # ---------------------------------------------------------------------------
 CHECKS = {
@@ -1120,6 +1228,8 @@ CHECKS = {
     "android-manifest": check_android_manifest,
     "android-gradle-release": check_android_gradle_release,
     "android-properties-secret": check_android_properties_secret,
+    "ios-ats": check_ios_ats,
+    "ios-xcconfig-secret": check_ios_xcconfig_secret,
 }
 # 저장소 전체를 보는 검사 — 인프라 설정처럼 프로파일 하위 경로가 아니라 저장소 루트에 있는 경우가 많은 것.
 # 감지된 프로파일 중 하나라도 이 검사를 쓰면 대상 루트 기준으로 한 번만 실행한다.

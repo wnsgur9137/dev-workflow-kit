@@ -582,6 +582,50 @@ class ChecksTest(unittest.TestCase):
             ("android.properties-secret", "gradle.properties"),
         ])
 
+    def test_ios_ats_xml_and_binary_plist(self):
+        import plistlib
+        conf = {"NSAppTransportSecurity": {"NSAllowsArbitraryLoadsInWebContent": True, "NSExceptionDomains": {
+            "a.example.com": {"NSTemporaryExceptionAllowsInsecureHTTPLoads": True},
+            "b.example.com": {"NSExceptionMinimumTLSVersion": "TLSv1.2"}}}}
+        os.makedirs(os.path.join(self.t, "App"), exist_ok=True)
+        with open(os.path.join(self.t, "App/Info.plist"), "wb") as f:
+            f.write(plistlib.dumps(conf, fmt=plistlib.FMT_BINARY))
+        with open(os.path.join(self.t, "App/Ext-Info.plist"), "wb") as f:
+            f.write(plistlib.dumps({"NSAppTransportSecurity": {"NSAllowsArbitraryLoads": False}}))
+        got = sorted((r["file"], r["rule_id"]) for r in self.run_checks([("ios", ".", [])])["results"])
+        self.assertEqual(got, [("App/Info.plist", "ios.ats-arbitrary-loads-partial"),
+                               ("App/Info.plist", "ios.ats-insecure-http-exception")])
+
+    def test_ios_plist_entity_declaration_is_refused(self):
+        _w(os.path.join(self.t, "Info.plist"), '<?xml version="1.0"?><!DOCTYPE plist [<!ENTITY a "x">]>'
+           '<plist><dict><key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict></dict></plist>')
+        report = self.run_checks([("ios", ".", [])])
+        self.assertEqual(report["results"], [])
+        self.assertTrue(any("plist 를 해석하지 못했습니다" in w for w in report["warnings"]))
+
+    def test_ios_xcconfig_secret(self):
+        value = "Zq9" + "xcsecret"
+        _w(os.path.join(self.t, "Config/Release.xcconfig"),
+           f"API_URL = https:/$()/x.example.com\nAPI_TOKEN = {value} // 주석\nCLIENT_SECRET = $(INHERITED_SECRET)\n"
+           f"// OLD_SECRET = {value}\nSWIFT_VERSION = 5.0\nSIGN_PASSWORD[config=Release] = {value}\n")
+        rs = self.run_checks([("ios", ".", [])])["results"]
+        self.assertEqual([(r["line"], r["evidence"].split(" ")[1]) for r in rs], [(2, "API_TOKEN"), (6, "SIGN_PASSWORD")])
+        self.assertNotIn(value, json.dumps(rs))
+
+    def test_ios_fixture_expectations(self):
+        import shutil
+        shutil.copytree(os.path.join(HERE, "fixtures", "ios"), self.t, dirs_exist_ok=True)
+        detected = profiles.detect_full(self.t, self.defs)
+        self.assertEqual([(n, r) for n, r, _ in detected], [("ios", ".")])
+        report = checks.run(self.t, detected, self.defs)
+        self.assertEqual(report["errors"], [])
+        self.assertEqual(self.rules(report), [
+            ("ios.ats-arbitrary-loads", "App/Info.plist"),
+            ("ios.ats-insecure-http-exception", "App/Info.plist"),
+            ("ios.ats-weak-tls", "App/Info.plist"),
+            ("ios.xcconfig-secret", "App/Config.xcconfig"),
+        ])
+
     def test_web_fixture_expectations(self):
         """tests/fixtures/web 의 README 표와 같은 결과 (env·lockfile 은 테스트에서 실제 이름으로 복사)"""
         import shutil
