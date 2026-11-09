@@ -270,6 +270,25 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(x["location"]["file"], path)
         self.assertIn(path, summary)
 
+    def test_identifiers_keep_credential_masking(self):
+        """PR #26 리뷰: 식별자는 고엔트로피 마스킹만 빼고 URL 자격증명·접두사 토큰은 계속 가린다"""
+        tok = "ghp" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+        self.raw("checks.json", {"results": [{"rule_id": "x", "severity": "info", "category": "dependency", "file": "a",
+                                              "line": 1, "title": "t", "package": f"https://u:{tok}@git.example.com/p@1.0"}]})
+        f, summary = self.run_normalize()
+        self.assertNotIn(tok, json.dumps(f) + summary)
+
+    def test_identifiers_are_not_damaged_by_masking(self):
+        """PR #26 재리뷰: 키=값 패턴이 Maven 좌표·`파일:줄` 을 가리면 안 된다"""
+        self.raw("checks.json", {"results": [
+            {"rule_id": "x", "severity": "info", "category": "dependency", "file": "app/gradle.lockfile", "line": None,
+             "title": "t", "package": "io.jsonwebtoken:jjwt-api@0.11.5"},
+            {"rule_id": "y", "severity": "high", "category": "sast", "file": "app/src/main/java/AuthController.kt",
+             "line": 1024, "title": "t"}]})
+        f, summary = self.run_normalize()
+        self.assertIn("io.jsonwebtoken:jjwt-api@0.11.5", summary)
+        self.assertIn("app/src/main/java/AuthController.kt:1024", summary)
+
     def test_tool_failures_and_warnings_are_not_hidden(self):
         _w(os.path.join(self.run, "raw", "status.tsv"),
            "semgrep\tfailed\t2\tFatal error\ngitleaks-git\tskipped\t-\tgit 저장소가 아님\nosv-scanner\tok\t0\t\n")
