@@ -243,3 +243,29 @@ test_real_n0_containers_cannot_reach_network() {
     fail "semgrep 이미지가 --network none 에서 외부에 접속함"
   fi
 }
+
+# PR #22: exclude_paths 를 하위 경로로 한정한 Semgrep --exclude 가 실제로 의도한 경로만 뺀다
+test_real_exclude_paths_are_scoped_to_profile_root() {
+  _real_ready || exit 77
+  mkdir -p "$HOME/.cache/dev-workflow-kit-tests"
+  EXCL_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/excl.XXXXXX")
+  trap 'rm -rf "$EXCL_DIR"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+  local f img scanned
+  for f in macos/a.py ios/macos/b.py macos/Pods/c.py x/ios/Pods/d.py 'a[1]/macos/e.py' a1/macos/g.py; do
+    mkdir -p "$EXCL_DIR/src/$(dirname "$f")"
+    echo 'eval(x)' >"$EXCL_DIR/src/$f"
+  done
+  mkdir -p "$EXCL_DIR/rules"
+  printf 'rules:\n- id: ev\n  pattern: eval(...)\n  message: m\n  languages: [python]\n  severity: ERROR\n' >"$EXCL_DIR/rules/r.yaml"
+  printf 'flutter\t.\t\nios\tios\t\nreact-native\t.\t\nios\ta[1]\t\n' >"$EXCL_DIR/profiles.tsv"
+  local -a args=()
+  while IFS="$(printf '\t')" read -r kind value; do
+    [ "$kind" = exclude ] && args+=(--exclude "$value")
+  done < <(python3 "$PLUGIN_DIR/scripts/lib/profiles.py" plan "$EXCL_DIR/profiles.tsv" --rules-dir "$EXCL_DIR/none" --custom-dir "$EXCL_DIR/none")
+  img=$(sec_image_ref semgrep)
+  scanned=$(docker run --rm --network none -v "$EXCL_DIR/src:/src:ro" -v "$EXCL_DIR/rules:/r:ro" "$img" \
+    semgrep scan --config /r --metrics=off --disable-version-check --json "${args[@]}" /src 2>/dev/null |
+    python3 -c 'import json,sys; print(" ".join(sorted(p.replace("/src/","") for p in json.load(sys.stdin)["paths"]["scanned"])))')
+  # 루트 macos 러너·이름만 비슷한 a1/ 은 점검, 나머지는 제외
+  assert_eq "$scanned" "a1/macos/g.py macos/a.py" "(제외 결과)"
+}

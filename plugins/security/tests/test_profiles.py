@@ -160,11 +160,23 @@ class PlanExcludeTest(unittest.TestCase):
         self.assertIn("backend/**/node_modules", ex)
         self.assertIn("build", ex)            # flutter(.) 자체의 제외는 전체 적용
         self.assertNotIn("node_modules", ex)  # server 는 backend/ 에서만 감지됨
+        self.assertIn("Pods", ex)             # 어느 프로파일에도 속하지 않는 macos/Pods 도 전역 제외 (PR #22 리뷰)
+
+    def test_root_pattern_with_separator_applies_at_any_depth(self):
+        """PR #22 리뷰: gitignore 에서 가운데 / 가 있는 패턴은 루트에 고정되므로 **/ 를 붙인다"""
+        ex = self.excludes([("react-native", ".")])
+        self.assertIn("**/ios/Pods", ex)
+        self.assertIn("**/android/build", ex)
+        self.assertEqual(profiles.scoped_exclude("**/Carthage/Build/**", "."), "**/Carthage/Build")
+        self.assertEqual(profiles.scoped_exclude("**/gen/**", "./pkg"), "pkg/**/gen")
 
     def test_subpath_glob_characters_are_escaped(self):
-        self.assertEqual(profiles.scoped_excludes("**/build/**", "apps/a[1]"), "apps/a\\[1\\]/**/build")
-        self.assertEqual(profiles.scoped_excludes("**/*.g.dart", "!pkg"), "\\!pkg/**/*.g.dart")
-        self.assertEqual(profiles.scoped_excludes("**/x/**", "."), "x")
+        self.assertEqual(profiles.scoped_exclude("**/build/**", "apps/a[1]"), "apps/a\\[1\\]/**/build")
+        self.assertEqual(profiles.scoped_exclude("**/*.g.dart", "!pkg"), "\\!pkg/**/*.g.dart")
+        self.assertEqual(profiles.scoped_exclude("**/gen/**", "#h"), "\\#h/**/gen")
+        self.assertEqual(profiles.scoped_exclude("**/gen/**", "q?"), "q\\?/**/gen")
+        self.assertEqual(profiles.scoped_exclude("**/gen/**", "back\\sl"), "back\\\\sl/**/gen")
+        self.assertEqual(profiles.scoped_exclude("**/x/**", "."), "x")
 
 
 class DetectTest(unittest.TestCase):
