@@ -1,0 +1,21 @@
+# I3 — UserDefaults 에 토큰·비밀번호 저장 (docs/security/07 스택별 설계/iOS.md)
+rules:
+  - id: insecure-storage
+    message: >-
+      UserDefaults 는 암호화되지 않은 plist 로 저장되어 백업·탈옥 기기에서 그대로 읽힙니다. 토큰·비밀번호는
+      Keychain(kSecAttrAccessibleWhenUnlockedThisDeviceOnly 등)에 저장하세요.
+    severity: WARNING
+    languages: [swift]
+    metadata:
+      category: security
+      cwe: ["CWE-312: Cleartext Storage of Sensitive Information"]
+      owasp: ["M2: Insecure Data Storage"]
+      stack: ios
+    # Swift 문자열 리터럴 메타변수에는 metavariable-regex 가 맞지 않아(1.182.0 실측) 키 이름은 pattern-regex 로 본다
+    patterns:
+      - pattern-either:
+          - pattern: UserDefaults.standard.set(...)
+          - pattern: UserDefaults.standard.setValue(...)
+          - pattern: |
+              $D.set($V, forKey: $K)
+      - pattern-regex: (?i)forKey:\s*"[^"\n]{0,100}(token|password|passwd|secret|credential|api_?key|session)

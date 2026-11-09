@@ -1,0 +1,31 @@
+# I4 — print·NSLog·os_log 로 민감 정보 출력 (docs/security/07 스택별 설계/iOS.md)
+rules:
+  - id: sensitive-log
+    message: >-
+      토큰·비밀번호로 보이는 값을 로그로 출력합니다. 기기 로그·크래시 리포트로 새어 나갈 수 있습니다.
+      릴리스 빌드에서 제거하거나 os_log 의 privacy: .private 를 쓰세요.
+    severity: INFO
+    languages: [swift]
+    metadata:
+      category: security
+      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
+      owasp: ["M2: Insecure Data Storage"]
+      stack: ios
+    patterns:
+      - pattern-either:
+          - pattern: print(...)
+          - pattern: NSLog(...)
+          - pattern: debugPrint(...)
+      - pattern-regex: (?i)(token|password|passwd|secret|credential)
+  - id: sensitive-log-objc
+    message: >-
+      토큰·비밀번호로 보이는 값을 NSLog 로 출력합니다. 릴리스 빌드에서 제거하세요.
+    severity: INFO
+    languages: [generic]
+    paths:
+      include: ["*.m", "*.mm"]
+    metadata:
+      category: security
+      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
+      stack: ios
+    pattern-regex: '(?i)\bNSLog\(@"[^"\n]{0,200}(token|password|passwd|secret|credential)'

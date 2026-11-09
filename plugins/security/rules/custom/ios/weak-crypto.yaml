@@ -1,0 +1,33 @@
+# I6 — 약한 암호화 (MD5·SHA1·DES·ECB) (docs/security/07 스택별 설계/iOS.md)
+rules:
+  - id: weak-crypto
+    message: >-
+      MD5·SHA1·DES·ECB 모드는 충돌·복호화 공격에 취약합니다. 해시는 SHA-256 이상(CryptoKit SHA256),
+      암호화는 AES-GCM(CryptoKit AES.GCM)을 쓰세요.
+    severity: WARNING
+    languages: [swift]
+    metadata:
+      category: security
+      cwe: ["CWE-327: Use of a Broken or Risky Cryptographic Algorithm"]
+      owasp: ["M5: Insufficient Cryptography"]
+      stack: ios
+    pattern-either:
+      - pattern: CC_MD5(...)
+      - pattern: CC_SHA1(...)
+      - pattern: Insecure.MD5.hash(...)
+      - pattern: Insecure.SHA1.hash(...)
+      - pattern: kCCAlgorithmDES
+      - pattern: kCCAlgorithm3DES
+      - pattern: kCCOptionECBMode
+  - id: weak-crypto-objc
+    message: >-
+      MD5·SHA1·DES·ECB 모드는 충돌·복호화 공격에 취약합니다. SHA-256 이상, AES-GCM 을 쓰세요.
+    severity: WARNING
+    languages: [generic]
+    paths:
+      include: ["*.m", "*.mm"]
+    metadata:
+      category: security
+      cwe: ["CWE-327: Use of a Broken or Risky Cryptographic Algorithm"]
+      stack: ios
+    pattern-regex: '\b(CC_MD5|CC_SHA1|kCCAlgorithmDES|kCCAlgorithm3DES|kCCOptionECBMode)\b'
