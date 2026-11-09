@@ -40,6 +40,21 @@ profile: server
 | S6 | `docker-compose`의 `privileged: true`, 호스트 포트 `0.0.0.0` 바인딩 DB | 커스텀 검사 (YAML 파싱) | `docker-compose*.yml` | medium |
 | S7 | 취약 의존성 | OSV-Scanner | 위 lockfile | CVSS 기준 |
 
+## 구현 메모 (S-Server)
+
+| # | 구현 | 규칙·검사 ID | 심각도 |
+|---|---|---|---|
+| S1 | Gitleaks (공통) + 스택 검사 — Spring `application*`·`bootstrap*`(`.yml`·`.properties`)의 비밀 키(`password`·`secret`·`token`·`api-key` 등)에 평문 값. `${…}`·`{cipher}`·`ENC(…)`는 제외, **키 이름만** 기록 | `server.config-plaintext-secret` | high |
+| S2 | Semgrep 공식 `python`·`go`·`java`·`kotlin`·`javascript`·`typescript` | `tainted-sql-string`, `insecure-deserialization`, `dangerous-exec-command` 등 | 규칙 기준 |
+| S3 | 공식(Flask `debug-enabled`, Spring `spring-actuator-*`) + 커스텀 Django `DEBUG = True`(`settings*.py`) | `custom.server.django-debug-true` | high |
+| S4 | Semgrep 공식 | `insecure-hash-algorithm-md5`, `md5-used-as-password` 등 | 규칙 기준 |
+| S5 | 공식 `dockerfile`(`missing-user`, `avoid-latest-version` 등) + 커스텀 `COPY/ADD .env`(`.env.example` 등 제외)·`ADD <URL>`(`--checksum` 있으면 제외) | `custom.server.dockerfile-copy-env`, `custom.server.dockerfile-add-remote` | high / medium |
+| S6 | 스택 검사(저장소 전체) — `privileged: true`, docker.sock 마운트, DB·캐시 이미지의 포트를 루프백 없이 게시(짧은·긴·흐름 문법) | `server.compose-*` | medium |
+| S7 | OSV-Scanner (공통) | — | CVSS |
+
+- compose 해석은 표준 라이브러리만 쓰는 들여쓰기 기반이라 앵커·병합(`<<: *x`) 같은 고급 문법은 보이는 줄만 본다.
+- 공식 `dockerfile` 규칙셋에는 best-practice 규칙(캐시 정리 등)도 들어 있어 low 결과가 늘 수 있다.
+
 ## 동적 점검 (`/security:scan-web`)
 - API 서버도 [[OWASP ZAP]] **baseline**만 사용 (passive). OpenAPI 기반 `zap-api-scan`은 기본이 active라 사용하지 않음 → [[ADR-005 Active Scan 금지]]
 - 확인 항목: 에러 응답의 스택트레이스 노출, 보안 헤더, CORS 와일드카드, 서버 버전 헤더
@@ -56,5 +71,5 @@ profile: server
 - Terraform·Kubernetes 매니페스트 등 IaC 전용 점검 → 필요 시 별도 ADR ([[ADR-003 Trivy 제외]]의 재검토 조건)
 
 > [!warning] 검증 필요
-> - Semgrep `dockerfile` 공식 규칙 범위
+> - ~~Semgrep `dockerfile` 공식 규칙 범위~~ → `security/`(missing-user, last-user-is-root, secret-in-build-arg, dockerd-socket-mount 등)·`best-practice/`·`audit/` (semgrep-rules `16b9e6d`). `COPY .env`·`ADD <URL>`은 없어 커스텀으로 보완
 > - OSV-Scanner의 `uv.lock`·`requirements.txt`(버전 미고정 시) 처리
