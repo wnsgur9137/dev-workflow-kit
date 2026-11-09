@@ -8,13 +8,14 @@ rules:
     languages: [generic]
     paths:
       include:
-        - "Dockerfile"
-        - "Dockerfile.*"
+        - "Dockerfile*"
+        - "dockerfile*"
+        - "Containerfile*"
         - "*.Dockerfile"
         - "*.dockerfile"
-        - "dockerfile"
-        - "Containerfile"
-        - "Containerfile.*"
+      exclude:
+        - "*.md"
+        - "*.txt"
     metadata:
       category: security
       cwe: ["CWE-494: Download of Code Without Integrity Check"]
