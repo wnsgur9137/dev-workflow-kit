@@ -75,6 +75,12 @@ if [ ! -f "$RULES_DIR/.commit" ] || [ ! -f "$OSV_DB/UPDATED_AT" ]; then
   exit 1
 fi
 RULES_COMMIT=$(head -n 1 "$RULES_DIR/.commit")
+# 설치된 규칙이 rules.lock 과 다르면(플러그인 갱신 후 update.sh 미실행) 알린다 — 이미지 digest 검사(D6)와 같은 취지
+RULES_LOCK_ENTRY=$(sec_rules_lock_entry semgrep-rules 2>/dev/null) || RULES_LOCK_ENTRY=""
+RULES_MISMATCH=""
+if [ -n "$RULES_LOCK_ENTRY" ] && ! sec_rules_installed_match "$RULES_DIR" "${RULES_LOCK_ENTRY%% *}" "${RULES_LOCK_ENTRY#* }"; then
+  RULES_MISMATCH="설치된 Semgrep 규칙이 rules.lock 과 다릅니다 (커밋 또는 paths) — 사용자가 터미널에서 update.sh --rules 를 실행하세요."
+fi
 OSV_UPDATED=$(head -n 1 "$OSV_DB/UPDATED_AT")
 
 # 이미지 참조
@@ -125,6 +131,7 @@ SEMGREP_ARGS=()
 SEMGREP_MOUNTS=()
 WARNINGS_FILE="$RAW/warnings.txt"
 : >"$WARNINGS_FILE"
+[ -n "$RULES_MISMATCH" ] && printf '%s\n' "$RULES_MISMATCH" >>"$WARNINGS_FILE"
 while IFS="$(printf '\t')" read -r kind value; do
   case "$kind" in
     ruleset) SEMGREP_ARGS+=(--config "/rules/$value") ;;

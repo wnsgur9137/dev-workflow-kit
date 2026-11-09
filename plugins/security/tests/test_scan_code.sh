@@ -73,6 +73,23 @@ test_d7_invisible_mount_stops_before_scanning() {
   assert_contains "$(cat "$FAKE_LOG")" "--network none"
 }
 
+test_rules_mismatch_with_lock_is_warned() {
+  setup_fake
+  fake_data
+  export FAKE_RUN_OUTPUT="a.py"
+  local summary entry
+  # PR #19 W7: 설치된 규칙(.commit)이 rules.lock 과 다르면 경고한다 (fake_data 의 커밋은 deadbeef)
+  summary=$("$SCAN" "$HOME/proj" 2>/dev/null | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음"
+  assert_contains "$(cat "$(dirname "$summary")/raw/warnings.txt")" "rules.lock 과 다릅니다"
+  # 커밋·paths 가 같으면 경고하지 않는다
+  entry=$(awk '!/^[[:space:]]*(#|$)/ && $1 == "semgrep-rules" { print $3; print $2; print $4 }' "$PLUGIN_DIR/rules.lock")
+  printf '%s\n' "$entry" >"$DWK_SECURITY_DATA_DIR/data/semgrep-rules/.commit"
+  summary=$("$SCAN" "$HOME/proj" 2>/dev/null | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음"
+  assert_not_contains "$(cat "$(dirname "$summary")/raw/warnings.txt")" "rules.lock 과 다릅니다"
+}
+
 test_unknown_forced_profile_is_rejected() {
   setup_fake
   fake_data
