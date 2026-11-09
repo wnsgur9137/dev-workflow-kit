@@ -764,17 +764,43 @@ class ChecksTest(unittest.TestCase):
         self.assertTrue(any("긴 정수" in w for w in report["warnings"]))
 
     def test_ios_ats_lines_are_linear(self):
-        """PR #27 리뷰 CRITICAL: 예외 도메인 수를 2배로 늘려도 시간이 이차로 늘지 않는다"""
+        """PR #27 리뷰 CRITICAL: 예외 도메인 수를 2배로 늘려도 시간이 이차로 늘지 않는다.
+        결과를 내지 않는 도메인으로 채워 결과 상한(MAX_RESULTS_PER_CHECK)에서 멈추지 않게 하고, 마지막 도메인 줄로 끝까지 갔는지 본다"""
         import plistlib
         times = []
-        for n in (2000, 4000):
-            doms = {f"d{i}.example.com": {"NSExceptionAllowsInsecureHTTPLoads": True} for i in range(n)}
-            _w(os.path.join(self.t, "Info.plist"), plistlib.dumps({"NSAppTransportSecurity": {"NSExceptionDomains": doms}}).decode())
+        for n in (4000, 8000):
+            doms = {f"d{i}.example.com": {"NSIncludesSubdomains": True} for i in range(n)}
+            doms["last.example.com"] = {"NSExceptionAllowsInsecureHTTPLoads": True}
+            body = plistlib.dumps({"NSAppTransportSecurity": {"NSExceptionDomains": doms}}).decode()
+            _w(os.path.join(self.t, "Info.plist"), body)
             t0 = time.time()
             rs = self.run_checks([("ios", ".", [])])["results"]
             times.append(time.time() - t0)
-            self.assertTrue(rs)
+            want = body[:body.index("<key>last.example.com</key>")].count("\n") + 1
+            self.assertEqual([r["line"] for r in rs], [want])
         self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
+    def test_ios_rereview_cases(self):
+        """PR #27 재리뷰 재현 사례 — 한 줄짜리·긴 도메인 id, xcconfig 중첩 참조·참조 뒤 경로, CDATA 정수"""
+        import plistlib
+        conf = {"NSAppTransportSecurity": {"NSExceptionDomains": {
+            "a.com": {"NSExceptionAllowsInsecureHTTPLoads": True}, "b.com": {"NSExceptionAllowsInsecureHTTPLoads": True},
+            "x" * 120 + ".one.com": {"NSExceptionAllowsInsecureHTTPLoads": True},
+            "x" * 120 + ".two.com": {"NSExceptionAllowsInsecureHTTPLoads": True}}}}
+        _w(os.path.join(self.t, "Info.plist"), plistlib.dumps(conf).decode().replace("\n", "").replace("\t", ""))
+        rs = self.run_checks([("ios", ".", [])])["results"]
+        self.assertEqual({r["line"] for r in rs}, {1})
+        self.assertEqual(len({r["package"] for r in rs}), 4, rs)         # 한 줄이어도, 앞부분이 같아도 서로 다른 id
+        self.assertTrue(all(len(r["package"]) < 130 for r in rs))
+        os.remove(os.path.join(self.t, "Info.plist"))
+        _w(os.path.join(self.t, "C.xcconfig"),
+           "API_KEY = $(API_KEY_$(CONFIGURATION))\nCLIENT_SECRET = $(SRCROOT)/Secrets/client\n"
+           "AUTH_TOKEN = $(A_$(B_$(C_$(D_$(E)))))\nDB_PASSWORD = $(inherited) Zq9realSecret\n")
+        self.assertEqual([r["line"] for r in self.run_checks([("ios", ".", [])])["results"]], [4])
+        os.remove(os.path.join(self.t, "C.xcconfig"))
+        for body in ("<![CDATA[" + "9" * 5000 + "]]>", "&#57;" * 2000):
+            _w(os.path.join(self.t, "Info.plist"), f"<plist><dict><key>x</key><integer>{body}</integer></dict></plist>")
+            self.assertTrue(any("긴 정수" in w for w in self.run_checks([("ios", ".", [])])["warnings"]), body[:20])
 
     def test_ios_fixture_expectations(self):
         import shutil

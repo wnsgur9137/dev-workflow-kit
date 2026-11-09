@@ -1207,7 +1207,8 @@ def check_android_properties_secret(ctx):
 WEAK_TLS = ("TLSv1.0", "TLSv1.1")
 # iOS 10 이상에서 이 키 중 하나라도 있으면 NSAllowsArbitraryLoads 는 무시된다 (Apple 문서 NSAllowsArbitraryLoads)
 ATS_OVERRIDES = ("NSAllowsArbitraryLoadsForMedia", "NSAllowsArbitraryLoadsInWebContent", "NSAllowsLocalNetworking")
-HUGE_PLIST_INT = re.compile(rb"<integer>[ \t\r\n]*[-+]?[0-9]{100,}")
+# 숫자 100자 이상, 또는 CDATA·문자 참조로 쓴 정수(정규식 우회 차단 — 정상 plist 는 정수를 이렇게 쓰지 않는다)
+HUGE_PLIST_INT = re.compile(rb"<integer>[ \t\r\n]*(?:[-+]?[0-9]{100,}|<!\[CDATA\[|&#)")
 
 
 def _load_plist(ctx, rel, full):
@@ -1232,11 +1233,20 @@ def _plist_key(k):
     return f"<key>{escape(str(k))}</key>"
 
 
+def _ats_domain_id(domain):
+    """결과 표시·id 용 도메인 — 긴 이름은 잘라 해시를 붙여 앞부분이 같은 도메인끼리 겹치지 않게 한다"""
+    d = str(domain)
+    if len(d) <= 100:
+        return d
+    import hashlib
+    return d[:80] + "…#" + hashlib.sha256(d.encode("utf-8", "replace")).hexdigest()[:12]
+
+
 def check_ios_ats(ctx):
     """I2 — Info.plist 의 ATS 예외: NSAllowsArbitraryLoads(전체 평문 허용, iOS 10+ 에서 무시되는 조합이면 low),
     웹 콘텐츠·미디어 예외, 예외 도메인의 평문 허용·낮은 최소 TLS 버전.
-    줄 번호는 plist 키를 문서 순서대로 이어 찾는다(선형, plistlib 은 dict 순서를 파일 순서대로 보존). 바이너리 plist 처럼
-    줄이 없으면 키 경로(package 자리)로 결과를 구분한다."""
+    줄 번호는 plist 키를 문서 순서대로 이어 찾는다(선형, plistlib 은 dict 순서를 파일 순서대로 보존).
+    결과는 줄과 상관없이 키 경로(package 자리)로 구분한다 — 바이너리·한 줄짜리 plist 에서도 도메인마다 id 가 다르다."""
     out = []
     for rel, full in ctx.files(lambda rel, name: name.lower().endswith("info.plist")):
         data, text = _load_plist(ctx, rel, full)
@@ -1250,7 +1260,7 @@ def check_ios_ats(ctx):
 
         def add(rid, sev, line, keypath, title, evidence, hint, cwe):
             out.append(ctx.finding("ios-ats", rid, sev, "mobile", rel, line, title, evidence=evidence, fix_hint=hint,
-                                   references=[cwe], package=None if line else f"ATS:{keypath}"[:120]))
+                                   references=[cwe], package=f"ATS:{keypath}"))
 
         overrides = [k for k in ATS_OVERRIDES if k in ats]
         for key, value in ats.items():
@@ -1275,7 +1285,7 @@ def check_ios_ats(ctx):
                     dline = cur.find(_plist_key(domain)) if text else None
                     if not isinstance(conf, dict):
                         continue
-                    d = str(domain)[:120]
+                    d = _ats_domain_id(domain)
                     sub = " (하위 도메인 포함)" if conf.get("NSIncludesSubdomains") is True else ""
                     if any(conf.get(k) is True for k in ("NSExceptionAllowsInsecureHTTPLoads",
                                                          "NSTemporaryExceptionAllowsInsecureHTTPLoads",
@@ -1294,7 +1304,9 @@ def check_ios_ats(ctx):
 
 # 조건부 설정 [sdk=…][arch=…][config=…] 는 여러 개 붙을 수 있다 (구분자 [ 가 있어 백트래킹이 늘지 않는다)
 XCCONFIG_ASSIGN = re.compile(r"[ \t]*([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]\n]{0,100}\]){0,4}[ \t]*=(.*)")
-XCCONFIG_REF = re.compile(r"\$[({][^)}\n]{0,200}[)}]")
+# 안쪽 참조부터 지운다 — $(A_$(B)) 같은 중첩은 여러 번 돌려 바깥까지 지운다 (구간에 $ 가 없어 시작점마다 즉시 끝난다)
+XCCONFIG_REF = re.compile(r"\$[({][^(){}$\n]{0,200}[)}]")
+XCCONFIG_REF_ROUNDS = 4
 
 
 def check_ios_xcconfig_secret(ctx):
@@ -1312,7 +1324,16 @@ def check_ios_xcconfig_secret(ctx):
             if not m or not is_secret_key(m.group(1)):
                 continue
             key, value = m.group(1), m.group(2).split("//", 1)[0].strip()
-            plain = XCCONFIG_REF.sub("", value).strip()          # $(inherited) realSecret → realSecret
+            plain, had_ref = value, False
+            for _ in range(XCCONFIG_REF_ROUNDS):                # $(inherited) realSecret → realSecret
+                plain, n_sub = XCCONFIG_REF.subn("", plain)
+                if not n_sub:
+                    break
+                had_ref = True
+            plain = plain.strip()
+            # 다 못 지운 참조(깊은 중첩·200자 초과)와 참조 바로 뒤 경로($(SRCROOT)/Secrets/x)는 평문 비밀이 아니다
+            if "$(" in plain or "${" in plain or (had_ref and plain[:1] in ("/", ")", "}")):
+                continue
             ok, _note = _secret_value(plain, key)
             if ok:
                 out.append(ctx.finding(

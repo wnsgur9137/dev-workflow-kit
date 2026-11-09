@@ -40,12 +40,12 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 
 | # | 구현 | 규칙·검사 ID | 심각도 |
 |---|---|---|---|
-| I1 | Gitleaks (공통) + 스택 검사 — `*.xcconfig`의 비밀 키 평문 값(조건부 `[sdk=…][arch=…]` 여러 개, `//` 는 어디서든 주석, `$(…)`·`${…}` 참조는 지우고 남은 평문만 판정, **키 이름만**). plist 의 평문 비밀은 Gitleaks 만 본다 | `ios.xcconfig-secret` | high |
-| I2 | 스택 검사 — `*Info.plist`(대소문자 무시, XML·바이너리)의 `NSAllowsArbitraryLoads`(high — iOS 10+ 에서 무시되는 조합, 즉 `…ForMedia`·`…InWebContent`·`NSAllowsLocalNetworking` 중 하나가 있으면 low), `…InWebContent`·`…ForMedia`(medium), 예외 도메인의 평문 허용(`NSException…`·`NSTemporaryException…`·`NSThirdPartyException…AllowsInsecureHTTPLoads`, medium)·최소 TLS 1.0·1.1(medium). `NSIncludesSubdomains`는 evidence 에 표시. 줄 번호는 `<key>…</key>`를 문서 순서대로 이어 찾고(선형), 바이너리 plist 는 키 경로로 결과를 구분 | `ios.ats-*` | high / medium / low |
-| I3 | Semgrep 커스텀 — UserDefaults(`standard`·`suiteName:`·이름이 defaults 인 변수)의 `set(…, forKey: "…token|password|secret|session_id…")` + 공식 `swift-user-defaults`. Keychain 래퍼의 같은 API 는 제외 | `custom.ios.insecure-storage` | medium |
-| I4 | Semgrep 커스텀 — `print`·`NSLog`·`debugPrint`·`os_log`·`Logger` 인자에 token·password 등(단어 경계), Objective-C `NSLog`의 형식 문자열·인자 | `custom.ios.sensitive-log(-objc)` | low |
+| I1 | Gitleaks (공통) + 스택 검사 — `*.xcconfig`의 비밀 키 평문 값(조건부 `[sdk=…][arch=…]` 여러 개, `//` 는 어디서든 주석, `$(…)`·`${…}` 참조는 안쪽부터 지우고 남은 평문만 판정 — 다 못 지운 중첩 참조와 참조 바로 뒤 경로(`$(SRCROOT)/…`)는 제외, **키 이름만**). plist 의 평문 비밀은 Gitleaks 만 본다 | `ios.xcconfig-secret` | high |
+| I2 | 스택 검사 — `*Info.plist`(대소문자 무시, XML·바이너리)의 `NSAllowsArbitraryLoads`(high — iOS 10+ 에서 무시되는 조합, 즉 `…ForMedia`·`…InWebContent`·`NSAllowsLocalNetworking` 중 하나가 있으면 low), `…InWebContent`·`…ForMedia`(medium), 예외 도메인의 평문 허용(`NSException…`·`NSTemporaryException…`·`NSThirdPartyException…AllowsInsecureHTTPLoads`, medium)·최소 TLS 1.0·1.1(medium). `NSIncludesSubdomains`는 evidence 에 표시. 줄 번호는 `<key>…</key>`를 문서 순서대로 이어 찾고(선형), 결과는 줄과 상관없이 키 경로(package)로 구분(바이너리·한 줄짜리 plist, 긴 도메인은 해시 접미사). CDATA·문자 참조로 쓴 정수와 100자 이상 정수가 있는 plist 는 해석하지 않음 | `ios.ats-*` | high / medium / low |
+| I3 | Semgrep 커스텀 — UserDefaults(`standard`·`suiteName:`(`?`·`!`)·이름이 defaults 인 변수·`self.defaults` 같은 속성)의 `set(…, forKey: "…token|password|secret|session_id…")` + 공식 `swift-user-defaults`. Keychain 래퍼의 같은 API 는 제외. 지역 별칭(`let ud = UserDefaults.standard; ud.set(…)`)은 잡지 않는다 | `custom.ios.insecure-storage` | medium |
+| I4 | Semgrep 커스텀 — `print`·`NSLog`·`debugPrint`·`os_log`·`Logger` 인자에 token·password 등(카멜케이스 `userPassword`·`refreshToken` 포함, 뒤에 소문자가 이어지는 `Tokenizer` 등은 제외), Objective-C `NSLog`의 형식 문자열·인자 | `custom.ios.sensitive-log(-objc)` | low |
 | I5 | OSV-Scanner (공통) — `Package.resolved`. `Podfile.lock`은 "점검되지 않음" 경고 | — | CVSS |
-| I6 | Semgrep 커스텀 — `CC_MD5`·`CC_SHA1`(`_Init` 포함)·`Insecure.MD5/SHA1`(스트리밍 포함)·`kCCAlgorithmDES/3DES/RC4/RC2`·`kCCOptionECBMode` (Swift), Objective-C 는 같은 이름 정규식(주석 줄 제외) | `custom.ios.weak-crypto(-objc)` | medium |
+| I6 | Semgrep 커스텀 — `CC_MD5`·`CC_SHA1`(`_Init` 포함)·`Insecure.MD5/SHA1`(스트리밍 포함)·`kCCAlgorithmDES/3DES/RC4/RC2`·`kCCOptionECBMode` (Swift), Objective-C 는 같은 이름 정규식(`//`·`/*` 뒤는 제외, 줄 앞 2000자까지) | `custom.ios.weak-crypto(-objc)` | medium |
 | I7 | Semgrep 커스텀 — `setValue(true|1|NSNumber(value: true), forKey: "allowFileAccessFromFileURLs"|"allowUniversalAccessFromFileURLs")`, Objective-C `setValue:@YES forKey:@"…"` | `custom.ios.webview-file-access(-objc)` | medium |
 
 - Semgrep 은 Objective-C 를 지원하지 않아 `*.m`·`*.mm`은 `generic` 언어 정규식으로만 본다.
