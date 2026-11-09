@@ -170,6 +170,16 @@ test_rules_lock_validation() {
   assert_status 1 sec_validate_rules_lock
   assert_contains "$OUT" "https URL"
   assert_contains "$OUT" "커밋 해시"
+  # name 은 $DATA/data/<name> 으로 rm -rf·mv 에 쓰인다 (PR #19 SUGGESTION)
+  local c n
+  c=$(printf 'c%.0s' $(seq 40))
+  for n in .. osv 'a/b' Rules; do
+    printf '%s https://github.com/x/y %s .\n' "$n" "$c" >"$SEC_RULES_LOCK"
+    assert_status 1 sec_validate_rules_lock
+  done
+  printf 'osv https://github.com/x/y %s .\n' "$c" >"$SEC_RULES_LOCK"
+  assert_status 1 sec_validate_rules_lock
+  assert_contains "$OUT" "osv 는 OSV DB 폴더 이름"
 }
 
 # --- Docker 사전 점검 D1~D6 ---------------------------------------------------
