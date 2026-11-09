@@ -33,7 +33,15 @@ MAX_FILE = 1_000_000
 MAX_LINE = 4_000            # 이보다 긴 줄은 정규식에 넘기지 않는다 (축소·생성 파일)
 MAX_RESULTS_PER_CHECK = 200
 MAX_WALK_ENTRIES = _profiles.MAX_WALK_ENTRIES
-TIMEOUT_SEC = int(os.environ.get("DWK_CHECKS_TIMEOUT", "120"))
+def _timeout_from_env(default=120):
+    try:
+        v = int(os.environ.get("DWK_CHECKS_TIMEOUT", default))
+    except ValueError:
+        return default
+    return v if v >= 1 else default
+
+
+TIMEOUT_SEC = _timeout_from_env()
 
 
 class Ctx:
@@ -106,7 +114,7 @@ class Ctx:
                 data = f.read(MAX_FILE + 1)
             if len(data) > MAX_FILE:
                 return None
-            return data.decode("utf-8", "replace")
+            return data.decode("utf-8-sig", "replace")
         except OSError:
             return None
         finally:
@@ -129,9 +137,21 @@ def _lines(text):
             yield n, line
 
 
+_REGEX_PREV = set("(,=:[!&|?{};+-*%<>~^") | {""}
+
+
 def strip_js_comments(text):
-    """JS/TS 의 // · /* */ 주석을 지운다 (문자열·템플릿 리터럴 안은 유지, 줄 수 유지). 선형 시간 상태 기계."""
+    """JS/TS 의 // · /* */ 주석을 지운다 (줄 수 유지). 선형 시간 상태 기계.
+
+    - '·" 문자열은 줄바꿈에서 끝난 것으로 본다 (JS 문자열은 여러 줄에 걸치지 않는다 — JSX 텍스트의 아포스트로피가
+      파일 끝까지 번지지 않게). 템플릿 리터럴(`)은 여러 줄을 허용한다.
+    - 앞의 공백 아닌 문자가 연산자·여는 괄호·줄 시작이거나 return 뒤면 / 는 정규식 리터럴로 보고 건너뛴다
+      (정규식 안의 `/*` 를 주석으로 오인하지 않게). 문자 클래스 [...] 안의 / 는 끝으로 보지 않는다.
+    - 닫히지 않은 블록 주석은 주석으로 보지 않는다 (파일 끝까지 지워 판정을 바꾸지 않게).
+    """
     out, i, n, quote = [], 0, len(text), None
+    prev = ""            # 마지막으로 낸 공백 아닌 문자 (정규식 리터럴 판정용)
+    prev_word = ""
     while i < n:
         c = text[i]
         if quote:
@@ -140,24 +160,57 @@ def strip_js_comments(text):
                 out.append(text[i + 1])
                 i += 2
                 continue
-            if c == quote:
+            if c == quote or (c == "\n" and quote != "`"):
                 quote = None
+                prev = c if c != "\n" else prev
             i += 1
             continue
         if c in "'\"`":
             quote = c
             out.append(c)
+            prev = c
             i += 1
         elif text.startswith("//", i):
             j = text.find("\n", i)
             i = n if j < 0 else j
         elif text.startswith("/*", i):
             j = text.find("*/", i + 2)
-            seg = text[i:n if j < 0 else j + 2]
-            out.append("\n" * seg.count("\n"))
-            i = n if j < 0 else j + 2
+            if j < 0:            # 닫히지 않은 블록 주석 — 그대로 둔다
+                out.append(text[i:])
+                break
+            out.append("\n" * text.count("\n", i, j))
+            i = j + 2
+        elif c == "/" and (prev in _REGEX_PREV or prev_word in ("return", "typeof", "case", "in", "of")):
+            # 정규식 리터럴 — 줄 안에서 이스케이프되지 않은 / 까지 (문자 클래스 안 제외)
+            j, in_class = i + 1, False
+            while j < n and text[j] != "\n":
+                ch = text[j]
+                if ch == "\\":
+                    j += 2
+                    continue
+                if ch == "[":
+                    in_class = True
+                elif ch == "]":
+                    in_class = False
+                elif ch == "/" and not in_class:
+                    break
+                j += 1
+            if j < n and text[j] == "/":
+                out.append(text[i:j + 1])
+                i = j + 1
+                prev, prev_word = "/", ""
+            else:                # 줄 안에서 끝나지 않으면 나눗셈으로 본다
+                out.append(c)
+                prev = c
+                i += 1
         else:
             out.append(c)
+            if not c.isspace():
+                if c.isalnum() or c in "_$":
+                    prev_word = (prev_word + c) if (prev.isalnum() or prev in "_$") else c
+                else:
+                    prev_word = ""
+                prev = c
             i += 1
     return "".join(out)
 
@@ -167,21 +220,35 @@ def strip_js_comments(text):
 # ---------------------------------------------------------------------------
 # W2 이름 규칙 — rules/custom/web/public-env-*.yaml 의 metavariable-regex 와 같은 문자열이어야 한다 (테스트가 확인)
 PUBLIC_ENV_PREFIXES = ("NEXT_PUBLIC_", "VITE_", "REACT_APP_", "NUXT_PUBLIC_", "GATSBY_", "EXPO_PUBLIC_", "PUBLIC_")
-# 공개용으로 설계된 값을 뜻하는 이름 조각 (접두사를 뗀 나머지에서 단어 단위로 본다)
-PUBLIC_BY_DESIGN = ("PUBLISHABLE", "ANON", "PUBLIC", "SITE", "SITEKEY", "MEASUREMENT", "FIREBASE", "MAPBOX")
-SECRET_WORDS = ("SECRET", "PRIVATE", "PASSWORD", "PASSWD", "TOKEN", "SERVICE_ROLE", "CREDENTIAL", "CREDENTIALS")
+# 강한 단어 — 공개용 조각과 함께 있어도 항상 high (예: FIREBASE_PRIVATE_KEY, MAPBOX_SECRET_TOKEN)
+STRONG_WORDS = ("SECRET", "PRIVATE", "PASSWORD", "PASSWD", "SERVICE_ROLE", "CREDENTIAL", "CREDENTIALS")
+# 약한 단어 — 공개용으로 발급되는 경우가 흔해, 이름에 공개용 조각이 있으면 제외한다
+TOKEN_WORDS = ("TOKEN",)
+TOKEN_PUBLIC = ("PUBLIC", "ANON", "PUBLISHABLE", "MAPBOX")                 # high
 KEY_WORDS = ("API_KEY", "APIKEY", "ACCESS_KEY")
+KEY_PUBLIC = ("PUBLISHABLE", "ANON", "PUBLIC", "SITE", "SITEKEY", "FIREBASE", "MEASUREMENT")   # medium
+_SEG = r"(?:[A-Za-z0-9]+_)*"
 
 
-def _public_env_regex(words):
-    seg = r"(?:[A-Za-z0-9]+_)*"
-    return (r"^(?:" + "|".join(PUBLIC_ENV_PREFIXES) + r")"
-            + r"(?!" + seg + r"(?:" + "|".join(PUBLIC_BY_DESIGN) + r")(?:_|$))"
-            + seg + r"(?:" + "|".join(words) + r")(?:_[A-Za-z0-9_]*)?$")
+def _alt(words):
+    return "(?:" + "|".join(words) + ")"
 
 
-PUBLIC_ENV_SECRET_RE = _public_env_regex(SECRET_WORDS)   # high
-PUBLIC_ENV_KEY_RE = _public_env_regex(KEY_WORDS)         # medium (공개 API 키도 흔해 한 단계 낮춘다)
+def _public_env_regexes(start, end):
+    """(비밀 정규식, API 키 정규식). start·end 는 이름 앞뒤 경계 (변수 이름은 ^ $, 대괄호 문자열은 따옴표 포함)."""
+    tail = r"(?:_[A-Za-z0-9_]*)?" + end
+
+    def guarded(words, public):
+        return r"(?!" + _SEG + _alt(public) + r"(?:_|" + end + r"))" + _SEG + _alt(words) + tail
+
+    prefix = start + _alt(PUBLIC_ENV_PREFIXES)
+    secret = prefix + r"(?:" + _SEG + _alt(STRONG_WORDS) + tail + "|" + guarded(TOKEN_WORDS, TOKEN_PUBLIC) + ")"
+    return secret, prefix + guarded(KEY_WORDS, KEY_PUBLIC)
+
+
+PUBLIC_ENV_SECRET_RE, PUBLIC_ENV_KEY_RE = _public_env_regexes("^", "$")
+# Semgrep 의 process.env['X'] 형태용 — 메타변수 텍스트에 따옴표가 포함된다
+PUBLIC_ENV_SECRET_BRACKET_RE, PUBLIC_ENV_KEY_BRACKET_RE = _public_env_regexes("^[\"']", "[\"']$")
 _SECRET_NAME = re.compile(PUBLIC_ENV_SECRET_RE)
 _KEY_NAME = re.compile(PUBLIC_ENV_KEY_RE)
 ENV_ASSIGN = re.compile(r"[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=")
@@ -223,7 +290,23 @@ def check_env_public_secret(ctx):
     return out
 
 
-ROUTE_FILE = re.compile(r"(^|/)(app/api/(?:[^/]+/)*route|pages/api/(?:[^/]+/)*[^/]+)\.(js|jsx|ts|tsx|mjs|cjs)$")
+ROUTE_EXTS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+
+
+def is_route_file(rel):
+    """app/api/**/route.<ext> 또는 pages/api/**/<파일>.<ext> — 경로 구성 요소로 판정 (정규식 백트래킹 없음)."""
+    if not rel.endswith(ROUTE_EXTS):
+        return False
+    parts = rel.split("/")
+    stem = parts[-1].rsplit(".", 1)[0]
+    for i in range(len(parts) - 2):          # api 뒤에 구성 요소가 하나 이상 있어야 한다
+        if parts[i + 1] != "api":
+            continue
+        if parts[i] == "pages" or (parts[i] == "app" and stem == "route"):
+            return True
+    return False
+
+
 ROUTE_EXPORT = re.compile(
     r"export[ \t]+(?:async[ \t]+)?function[ \t]+(GET|POST|PUT|PATCH|DELETE)\b"
     r"|export[ \t]+const[ \t]+(GET|POST|PUT|PATCH|DELETE)[ \t]*="
@@ -239,18 +322,54 @@ MIDDLEWARE_EXTS = ("js", "ts", "mjs")
 UNIVERSAL_MATCHERS = ("/", "/(.*)", "/:path*", "/((.*))", "/(.*)?")
 
 
+def _matcher_values(code):
+    """config 객체의 matcher 값(문자열 목록). config·matcher 가 없으면 None, 해석할 수 없으면 []."""
+    cm = re.search(r"\bconfig\b[^=\n]{0,80}=[ \t]*\{", code)
+    if not cm:
+        return None
+    mm = re.search(r"\bmatcher[ \t]*:[ \t]*", code[cm.end():cm.end() + 5000])
+    if not mm:
+        return None
+    rest = code[cm.end() + mm.end():cm.end() + mm.end() + 3000]
+    if rest[:1] in "'\"`":
+        end = rest.find(rest[0], 1)
+        return [rest[1:end]] if end > 0 else []
+    if rest[:1] != "[":
+        return []
+    values, i, quote, buf = [], 1, None, []
+    while i < len(rest):           # 짝이 맞는 ] 까지, 문자열 안의 [ ] 는 무시
+        c = rest[i]
+        if quote:
+            if c == "\\":
+                buf.append(rest[i:i + 2])
+                i += 2
+                continue
+            if c == quote:
+                values.append("".join(buf))
+                quote, buf = None, []
+            else:
+                buf.append(c)
+        elif c in "'\"`":
+            quote = c
+        elif c == "]":
+            return values
+        i += 1
+    return []
+
+
 def _middleware_covers_api(text):
-    """middleware(proxy) 가 /api 경로를 덮는지 — matcher 가 없으면 전체를 덮는다.
-    matcher 문자열마다: /api 로 시작하거나 전체 매처면 덮음, 부정 lookahead 안에 api 가 있으면 덮지 않음."""
+    """middleware(proxy) 가 /api 경로를 덮는지.
+    - matcher 가 파일 어디에도 없으면 전체를 덮는다.
+    - config.matcher 문자열마다: /api 로 시작하거나 전체 매처면 덮음, 부정 lookahead 안에 api 가 있으면 덮지 않음.
+    - matcher 가 있는데 config 에서 해석할 수 없으면(가져온 값 등) 애매하므로 덮지 않는 것으로 본다 (medium 유지)."""
     code = strip_js_comments(text)
-    m = re.search(r"\bmatcher\b", code)
-    if not m:
-        return True
-    region = code[m.end():m.end() + 2000]
-    for p in re.findall(r"['\"`]([^'\"`\n]{0,300})['\"`]", region):
+    values = _matcher_values(code)
+    if values is None:
+        return not re.search(r"\bmatcher\b", code)
+    for p in values:
         if "(?!" in p:
-            neg = p[p.index("(?!"):]
-            if not re.search(r"\bapi\b", neg.split(")")[0]):
+            neg = p[p.index("(?!") + 3:].split(")")[0]
+            if not re.search(r"\bapi\b", neg):
                 return True
             continue
         if p.startswith("/api") or p in UNIVERSAL_MATCHERS:
@@ -271,7 +390,7 @@ def check_next_unauth_route(ctx):
         if _middleware_covers_api(ctx.read(full) or ""):
             covers = True
     out = []
-    for rel, full in ctx.files(lambda rel, name: bool(ROUTE_FILE.search(rel))):
+    for rel, full in ctx.files(lambda rel, name: is_route_file(rel)):
         text = ctx.read(full)
         if text is None:
             continue
@@ -357,7 +476,7 @@ def check_next_config(ctx):
     return out
 
 
-def _pnpm_package_key(line):
+def _pnpm_package_key(line, lock_major=6):
     """pnpm-lock.yaml 의 packages 항목 줄(들여쓰기 2칸, ':' 로 끝남) → (이름, 버전) 또는 None.
     v5: `  /esbuild/0.18.20:`  v6: `  /esbuild@0.18.20:` · `  /@scope/pkg@1.0.0(peer@1):`. 정규식 없이 문자열로 자른다."""
     if not line.startswith("  ") or line.startswith("   ") or not line.rstrip().endswith(":"):
@@ -368,10 +487,13 @@ def _pnpm_package_key(line):
         return None
     scoped = key.startswith("@")
     body = key[1:] if scoped else key
-    if "@" in body:                                   # v6 이상: name@version
-        name, _, ver = body.rpartition("@")
-    elif "/" in body:                                 # v5: name/version
+    if lock_major < 6:                                # v5: name/version[_peer@ver…]
+        if "/" not in body:
+            return None
         name, _, ver = body.rpartition("/")
+        ver = ver.split("_", 1)[0]
+    elif "@" in body:                                 # v6~v8: name@version
+        name, _, ver = body.rpartition("@")
     else:
         return None
     if not name or not ver or not ver[:1].isdigit():
@@ -406,25 +528,33 @@ def check_npm_install_scripts(ctx):
         pkgs = data.get("packages") if isinstance(data, dict) else None
         if not isinstance(pkgs, dict):
             continue
-        for key, meta in sorted(pkgs.items()):
+        cursor, line_at, line_no = 0, 0, 1
+        for key, meta in pkgs.items():           # 파일 순서 그대로 — 줄 번호를 이어서 센다 (선형)
             # 워크스페이스 자체 패키지(packages/app 등)는 의존성이 아니다
             if "node_modules/" not in key or not isinstance(meta, dict) or meta.get("hasInstallScript") is not True:
                 continue
             name = key.rsplit("node_modules/", 1)[-1]
-            pos = text.find(json.dumps(key, ensure_ascii=False))
-            add(rel, name, str(meta.get("version", "?")), _line_count(text, pos) if pos >= 0 else None)
+            line = None
+            if len(out) <= MAX_RESULTS_PER_CHECK:
+                pos = text.find(json.dumps(key, ensure_ascii=False), cursor)
+                if pos >= 0:
+                    line_no += text.count("\n", line_at, pos)
+                    line_at = cursor = pos
+                    line = line_no
+            add(rel, name, str(meta.get("version", "?")), line)
     for rel, full in ctx.files(lambda rel, name: name == "pnpm-lock.yaml"):
         text = ctx.read(full)
         if text is None:
             continue
         ver = re.search(r"^lockfileVersion:[ \t]*['\"]?(\d+)", text[:500], re.M)
-        if ver and int(ver.group(1)) >= 9:
+        major = int(ver.group(1)) if ver else 6
+        if major >= 9:
             ctx.warn(f"{rel}: pnpm lockfile v9 에는 설치 스크립트 표시가 없어 W8(설치 스크립트 의존성 목록)을 판별하지 못했습니다 — "
                      "pnpm-workspace.yaml 의 onlyBuiltDependencies 를 직접 확인하세요")
             continue
         current = None
         for n, line in _lines(text):
-            key = _pnpm_package_key(line)
+            key = _pnpm_package_key(line, major)
             if key:
                 current = (key[0], key[1], n)
             elif current and line.strip() == "requiresBuild: true" and line.startswith("    "):

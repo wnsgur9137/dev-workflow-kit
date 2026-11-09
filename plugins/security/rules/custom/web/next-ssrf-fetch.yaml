@@ -29,6 +29,26 @@ rules:
               regex: ^(req|request|ctx\.request)$
       - pattern: $X.searchParams.get(...)
       - pattern: $X.searchParams.getAll(...)
+      # Next.js 공식 예시: const { searchParams } = new URL(request.url) / const sp = request.nextUrl.searchParams
+      - patterns:
+          - pattern-either:
+              - pattern: $SP.get(...)
+              - pattern: $SP.getAll(...)
+          - pattern-either:
+              - pattern-inside: |
+                  const { searchParams: $SP } = $U; ...
+              - pattern-inside: |
+                  const $SP = $R.nextUrl.searchParams; ...
+              - pattern-inside: |
+                  const $SP = new URL(...).searchParams; ...
+              - pattern-inside: |
+                  const $SP = $U.searchParams; ...
+      - patterns:
+          - pattern-either:
+              - pattern: searchParams.get(...)
+              - pattern: searchParams.getAll(...)
+          - pattern-inside: |
+              const { searchParams } = $U; ...
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -46,3 +66,10 @@ rules:
           - metavariable-regex:
               metavariable: $URL
               regex: ^(?!\s*[`"']https?://[^`"'$/{}\s]+/)
+          # 클라이언트 컴포넌트('use client')의 요청은 브라우저에서 나가므로 SSRF 가 아니다
+          - pattern-not-inside: |
+              'use client'
+              ...
+          - pattern-not-inside: |
+              "use client"
+              ...
