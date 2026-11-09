@@ -10,4 +10,6 @@
 | S4 약한 해시 | `web/app.py`(`hashlib.md5`) | 공식 규칙 |
 | S5 Dockerfile | `Dockerfile` | `missing-user`, `dockerfile-copy-env`, `dockerfile-add-remote` |
 | S6 compose | `docker-compose.yml` | `compose-privileged`, `compose-db-port-exposed`, `compose-docker-socket` |
+| 음성 사례 | `infra/Dockerfile.prod`(`.env.example`·`--checksum`·`.envrc`), `infra/docker-compose.safe.yml`(루프백·mongo-express·환경 변수 docker.sock), `web/settings/dev.py`, `application-safe.yml` | 기준선 `must_not_find` |
+| S5 Containerfile | `deploy/Containerfile` | `dockerfile-copy-env` (generic 언어로 점검) |
 | S7 취약 의존성 | `requirements.txt.fixture`(테스트에서 `web/requirements.txt` 로 복사) | `django@3.2.0` |

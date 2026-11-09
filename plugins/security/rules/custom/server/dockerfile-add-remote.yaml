@@ -5,11 +5,20 @@ rules:
       ADD 로 원격 URL 을 내려받습니다. 내용 검증 없이 빌드에 들어가고 캐시·재현성도 깨집니다.
       RUN curl 로 받은 뒤 체크섬을 확인하거나, ADD --checksum=sha256:… 을 쓰세요.
     severity: WARNING
-    languages: [dockerfile]
+    languages: [generic]
+    paths:
+      include:
+        - "Dockerfile"
+        - "Dockerfile.*"
+        - "*.Dockerfile"
+        - "*.dockerfile"
+        - "dockerfile"
+        - "Containerfile"
+        - "Containerfile.*"
     metadata:
       category: security
       cwe: ["CWE-494: Download of Code Without Integrity Check"]
       owasp: ["A08:2021 - Software and Data Integrity Failures"]
       stack: server
-    # --checksum 이 있으면 제외 (줄 단위 정규식)
+    # --checksum 이 있으면 제외 (줄 단위 정규식). 한계: ADD \ 줄 이어짐·git 원격(ADD git@…)은 다루지 않는다
     pattern-regex: '(?im)^[ \t]*ADD\b(?![^\n]*--checksum)[^\n]*\shttps?://'

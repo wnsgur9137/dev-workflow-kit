@@ -34,9 +34,9 @@ profile: server
 |---|---|---|---|---|
 | S1 | 하드코딩 시크릿, `.env`·`application-*.yml`의 비밀 값 | Gitleaks | 소스, 설정 파일 | high |
 | S2 | SQL·명령어·템플릿 인젝션, 역직렬화(`pickle`, `yaml.load`, `ObjectInputStream`) | Semgrep 공식 `python`·`go`·`java`·`javascript` (django, flask, fastapi, gin, spring, express 규칙 포함) | 소스 | high |
-| S3 | 디버그 모드 배포 (`DEBUG=True`, `app.run(debug=True)`, Spring actuator 전체 노출) | Semgrep 공식 + 커스텀 `server/debug-mode` | 소스, 설정 | high |
+| S3 | 디버그 모드 배포 (`DEBUG=True`, `app.run(debug=True)`, Spring actuator 전체 노출) | Semgrep 공식 + 커스텀 `server/django-debug-true` | 소스, 설정 | high |
 | S4 | 약한 해시·암호화 (MD5/SHA1 비밀번호, 고정 IV) | Semgrep 공식 | 소스 | medium |
-| S5 | Dockerfile: `USER` 미지정(root), `ADD`로 원격 다운로드, `COPY .env`, `:latest` 베이스 | Semgrep 공식 `dockerfile` + 커스텀 | `Dockerfile*` | medium |
+| S5 | Dockerfile: `USER` 미지정(root), `ADD`로 원격 다운로드, `COPY .env`, `:latest` 베이스 | Semgrep 공식 `dockerfile` + 커스텀 | `Dockerfile*` | medium (`COPY .env`·`USER` 미지정은 high — 구현 메모) |
 | S6 | `docker-compose`의 `privileged: true`, 호스트 포트 `0.0.0.0` 바인딩 DB | 커스텀 검사 (YAML 파싱) | `docker-compose*.yml` | medium |
 | S7 | 취약 의존성 | OSV-Scanner | 위 lockfile | CVSS 기준 |
 
@@ -44,16 +44,18 @@ profile: server
 
 | # | 구현 | 규칙·검사 ID | 심각도 |
 |---|---|---|---|
-| S1 | Gitleaks (공통) + 스택 검사 — Spring `application*`·`bootstrap*`(`.yml`·`.properties`)의 비밀 키(`password`·`secret`·`token`·`api-key` 등)에 평문 값. `${…}`·`{cipher}`·`ENC(…)`는 제외, **키 이름만** 기록 | `server.config-plaintext-secret` | high |
+| S1 | Gitleaks (공통) + 스택 검사 — Spring `application*`·`bootstrap*`(`.yml`·`.properties`)의 비밀 키(`password`·`secret`·`token`·`api-key` 등)에 평문 값. `${ENV}`·`{cipher}`·`ENC(…)`·불리언·숫자는 제외, `${ENV:기본값}`은 기본값이 평문이면 결과. 리스트 항목·앵커·여러 문서(`---`)·properties 이어짐·이스케이프 키 처리. **키 이름만** 기록 | `server.config-plaintext-secret` | high (테스트 설정은 low) |
 | S2 | Semgrep 공식 `python`·`go`·`java`·`kotlin`·`javascript`·`typescript` | `tainted-sql-string`, `insecure-deserialization`, `dangerous-exec-command` 등 | 규칙 기준 |
-| S3 | 공식(Flask `debug-enabled`, Spring `spring-actuator-*`) + 커스텀 Django `DEBUG = True`(`settings*.py`) | `custom.server.django-debug-true` | high |
+| S3 | 공식(Flask `debug-enabled`, Spring `spring-actuator-*`) + 커스텀 Django `DEBUG = True`(`settings*.py`, 개발·로컬·테스트 설정 제외) | `custom.server.django-debug-true` | high |
 | S4 | Semgrep 공식 | `insecure-hash-algorithm-md5`, `md5-used-as-password` 등 | 규칙 기준 |
-| S5 | 공식 `dockerfile`(`missing-user`, `avoid-latest-version` 등) + 커스텀 `COPY/ADD .env`(`.env.example` 등 제외)·`ADD <URL>`(`--checksum` 있으면 제외) | `custom.server.dockerfile-copy-env`, `custom.server.dockerfile-add-remote` | high / medium |
-| S6 | 스택 검사(저장소 전체) — `privileged: true`, docker.sock 마운트, DB·캐시 이미지의 포트를 루프백 없이 게시(짧은·긴·흐름 문법) | `server.compose-*` | medium |
+| S5 | 공식 `dockerfile`(`missing-user`, `avoid-latest-version` 등) + 커스텀 `COPY/ADD .env`(소스 인자만, `.env.example` 등 예시 소스 줄 제외)·`ADD <URL>`(`--checksum` 있으면 제외). 커스텀은 `generic` 언어 + 경로 지정이라 `Dockerfile.prod`·`*.Dockerfile`·`Containerfile*`도 본다 | `custom.server.dockerfile-copy-env`, `custom.server.dockerfile-add-remote` | high / medium |
+| S6 | 스택 검사(저장소 전체) — `privileged: true`, `volumes`의 docker.sock 마운트, DB·캐시 이미지(이미지 이름 마지막 구성 요소가 정확히 일치)의 포트를 루프백 없이 게시(짧은·긴·흐름 문법, 긴 문법은 `published` 생략 포함). evidence 에 서비스명·포트 | `server.compose-*` | medium |
 | S7 | OSV-Scanner (공통) | — | CVSS |
 
-- compose 해석은 표준 라이브러리만 쓰는 들여쓰기 기반이라 앵커·병합(`<<: *x`) 같은 고급 문법은 보이는 줄만 본다.
-- 공식 `dockerfile` 규칙셋에는 best-practice 규칙(캐시 정리 등)도 들어 있어 low 결과가 늘 수 있다.
+- compose 해석은 표준 라이브러리만 쓰는 들여쓰기 기반이라 병합(`<<: *x`) 같은 고급 문법은 보이는 줄만 본다. 서비스 키의 앵커(`db: &db`)·줄 끝 주석은 처리한다. 주석 제거와 해석은 줄 길이에 선형이다 (PR #25 리뷰 — 이전 `\s+#.*$`의 이차 백트래킹 수정).
+- 공식 `dockerfile` 규칙셋에는 best-practice·audit 규칙(`dockerfile-source-not-pinned`, 캐시 정리 등)도 들어 있어 low 결과가 늘 수 있고, `prefer-copy-over-add`는 `dockerfile-add-remote`와 같은 줄에 겹쳐 나온다. 규칙셋 이름이 하위 폴더를 고르지 못해 지금은 전체를 쓴다.
+- **한계**: 공식 `dockerfile` 규칙은 Semgrep 이 Dockerfile 로 인식하는 이름(`Dockerfile`, `*.Dockerfile`)에만 적용되고 `Dockerfile.prod`·`Containerfile`은 커스텀 규칙만 본다. `ADD \` 줄 이어짐·`ADD git@…`은 다루지 않는다.
+- **한계**: compose·Dockerfile 점검은 server 프로파일이 감지될 때만 켜진다. web 만 감지되는 저장소(예: Next.js + 루트 compose)는 S5·S6 이 빠진다 — 인프라 파일 공통 점검은 후속 과제.
 
 ## 동적 점검 (`/security:scan-web`)
 - API 서버도 [[OWASP ZAP]] **baseline**만 사용 (passive). OpenAPI 기반 `zap-api-scan`은 기본이 active라 사용하지 않음 → [[ADR-005 Active Scan 금지]]

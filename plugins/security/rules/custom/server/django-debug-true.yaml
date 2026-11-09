@@ -11,6 +11,14 @@ rules:
         - "**/settings.py"
         - "**/settings_*.py"
         - "**/settings/*.py"
+      # 개발·로컬·테스트 설정의 DEBUG = True 는 정상이다
+      exclude:
+        - "**/settings/dev*.py"
+        - "**/settings/local*.py"
+        - "**/settings/test*.py"
+        - "**/settings_dev*.py"
+        - "**/settings_local*.py"
+        - "**/settings_test*.py"
     metadata:
       category: security
       cwe: ["CWE-489: Active Debug Code"]

@@ -1,0 +1,13 @@
+# 음성 사례: compose-* 로 잡히면 안 된다 (PR #25 리뷰)
+services:
+  db: &db   # 루프백에만 게시
+    image: postgres:16
+    ports:
+      - "127.0.0.1:5432:5432"
+  ui:
+    image: mongo-express
+    ports:
+      - "8081:8081"
+    privileged: false
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock

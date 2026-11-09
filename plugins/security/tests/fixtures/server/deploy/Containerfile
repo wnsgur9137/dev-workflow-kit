@@ -1,0 +1,3 @@
+FROM alpine:3.19
+COPY --chown=app .env.production /app/
+USER app

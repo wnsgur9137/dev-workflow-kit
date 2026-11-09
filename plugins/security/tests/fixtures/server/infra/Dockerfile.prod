@@ -1,0 +1,7 @@
+# 음성 사례: 아래 줄은 dockerfile-copy-env·dockerfile-add-remote 로 잡히면 안 된다 (PR #25 리뷰)
+FROM python:3.12-slim
+ADD --checksum=sha256:24454f830cdb571e2c4ad15481119c43b3cafd48dd869a9b2945d1036d1dc68d https://example.com/tool.tgz /opt/
+COPY .env.example .env
+COPY .env.sample /app/
+COPY .envrc /app/
+USER app

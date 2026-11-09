@@ -1,0 +1,7 @@
+# 음성 사례: 자리표시자·불리언·암호문은 평문 비밀이 아니다
+app:
+  require-password: true
+  db:
+    password: ${DB_PASSWORD}
+  crypto:
+    token: '{cipher}abc'
