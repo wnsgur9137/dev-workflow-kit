@@ -1,0 +1,18 @@
+# A7 — MODE_WORLD_READABLE·MODE_WORLD_WRITEABLE (docs/security/07 스택별 설계/Android.md)
+rules:
+  - id: world-readable-mode
+    message: >-
+      MODE_WORLD_READABLE·MODE_WORLD_WRITEABLE 은 다른 앱이 이 파일을 읽거나 쓸 수 있게 합니다(API 24 이상에서는 예외).
+      MODE_PRIVATE 를 쓰고, 공유가 필요하면 FileProvider 로 범위를 정해 넘기세요.
+    severity: WARNING
+    languages: [java, kotlin]
+    metadata:
+      category: security
+      cwe: ["CWE-276: Incorrect Default Permissions"]
+      owasp: ["M2: Insecure Data Storage"]
+      stack: android
+    pattern-either:
+      - pattern: Context.MODE_WORLD_READABLE
+      - pattern: Context.MODE_WORLD_WRITEABLE
+      - pattern: MODE_WORLD_READABLE
+      - pattern: MODE_WORLD_WRITEABLE

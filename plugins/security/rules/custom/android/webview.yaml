@@ -1,0 +1,57 @@
+# A6 — WebView 의 JS 인터페이스·파일 접근 (docs/security/07 스택별 설계/Android.md)
+rules:
+  - id: webview-javascript-interface
+    message: >-
+      WebView 에 addJavascriptInterface 로 네이티브 객체를 노출합니다. 신뢰하지 않는 페이지(사용자 입력 URL, http,
+      리다이렉트)가 로드되면 그 페이지의 JS 가 노출된 메서드를 호출할 수 있습니다. 로드할 출처를 고정하고
+      @JavascriptInterface 메서드를 최소화하세요.
+    severity: WARNING
+    languages: [java, kotlin]
+    metadata:
+      category: security
+      cwe: ["CWE-749: Exposed Dangerous Method or Function"]
+      owasp: ["M1: Improper Platform Usage"]
+      stack: android
+    pattern: $W.addJavascriptInterface(...)
+  - id: webview-file-access
+    message: >-
+      WebView 의 파일 접근을 켭니다(setAllowFileAccess·…FromFileURLs). file:// 페이지나 주입된 JS 가 앱 내부 파일을
+      읽어 외부로 보낼 수 있습니다. 필요 없으면 false 로 두고, 로컬 콘텐츠는 WebViewAssetLoader 로 제공하세요.
+    severity: WARNING
+    languages: [java, kotlin]
+    metadata:
+      category: security
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      owasp: ["M1: Improper Platform Usage"]
+      stack: android
+    pattern-either:
+      - pattern: $S.setAllowFileAccess(true)
+      - pattern: $S.setAllowFileAccessFromFileURLs(true)
+      - pattern: $S.setAllowUniversalAccessFromFileURLs(true)
+      - pattern: $S.allowFileAccess = true
+      - pattern: $S.allowFileAccessFromFileURLs = true
+      - pattern: $S.allowUniversalAccessFromFileURLs = true
+  - id: webview-file-access-kotlin-scope
+    message: >-
+      WebView 설정의 범위 함수(apply·with) 안에서 파일 접근을 켭니다. file:// 페이지나 주입된 JS 가 앱 내부 파일을
+      읽어 외부로 보낼 수 있습니다. 필요 없으면 false 로 두고, 로컬 콘텐츠는 WebViewAssetLoader 로 제공하세요.
+    severity: WARNING
+    languages: [kotlin]
+    metadata:
+      category: security
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      owasp: ["M1: Improper Platform Usage"]
+      stack: android
+    # 수신 객체 없는 대입은 WebView 설정 범위 안에서만 본다 (Java 필드·일반 프로퍼티 오탐 방지, PR #26 재리뷰)
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $X.settings.apply { ... }
+          - pattern-inside: |
+              with($X.settings) { ... }
+          - pattern-inside: |
+              $X.getSettings().apply { ... }
+      - pattern-either:
+          - pattern: allowFileAccess = true
+          - pattern: allowFileAccessFromFileURLs = true
+          - pattern: allowUniversalAccessFromFileURLs = true

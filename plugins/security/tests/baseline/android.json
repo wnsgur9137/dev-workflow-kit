@@ -1,0 +1,18 @@
+{
+  "_doc": "tests/fixtures/android 를 /security:scan-code 로 점검했을 때 반드시 나와야 하는 결과 (S-Android 기준선, 점검 항목 A1~A8 은 docs/security/07 스택별 설계/Android.md). 하나라도 빠지면 회귀다.",
+  "must_find": [
+    {"tool": "toolkit", "rule_id": "android.properties-secret", "file": "gradle.properties", "severity": "high", "note": "A1"},
+    {"tool": "toolkit", "rule_id": "android.manifest-debuggable", "file": "app/src/main/AndroidManifest.xml", "severity": "high", "note": "A2"},
+    {"tool": "toolkit", "rule_id": "android.manifest-allow-backup", "file": "app/src/main/AndroidManifest.xml", "severity": "medium", "note": "A2"},
+    {"tool": "toolkit", "rule_id": "android.manifest-exported-component", "file": "app/src/main/AndroidManifest.xml", "severity": "high", "note": "A3"},
+    {"tool": "toolkit", "rule_id": "android.manifest-cleartext", "file": "app/src/main/AndroidManifest.xml", "severity": "medium", "note": "A4 (networkSecurityConfig 가 함께 있어 medium)"},
+    {"tool": "toolkit", "rule_id": "android.nsc-cleartext", "file": "app/src/main/res/xml/network_security_config.xml", "severity": "high", "note": "A4"},
+    {"tool": "toolkit", "rule_id": "android.nsc-user-certs", "file": "app/src/main/res/xml/network_security_config.xml", "note": "A4"},
+    {"tool": "toolkit", "rule_id": "android.gradle-release-minify-disabled", "file": "app/build.gradle", "note": "A5"},
+    {"tool": "semgrep", "rule_suffix": "webview-javascript-interface", "file": "app/src/main/java/com/example/fx/MainActivity.kt", "note": "A6"},
+    {"tool": "semgrep", "rule_suffix": "webview-file-access", "file": "app/src/main/java/com/example/fx/MainActivity.kt", "note": "A6"},
+    {"tool": "semgrep", "rule_suffix": "webview-file-access-kotlin-scope", "file": "app/src/main/java/com/example/fx/MainActivity.kt", "note": "A6 Kotlin apply"},
+    {"tool": "semgrep", "rule_suffix": "world-readable-mode", "file": "app/src/main/java/com/example/fx/Storage.java", "note": "A7"},
+    {"tool": "osv-scanner", "package": "com.fasterxml.jackson.core:jackson-databind@2.9.8", "file": "app/gradle.lockfile", "note": "A8"}
+  ]
+}

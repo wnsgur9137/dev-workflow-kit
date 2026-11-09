@@ -494,6 +494,201 @@ class ChecksTest(unittest.TestCase):
             ("server.config-plaintext-secret", "api/src/main/resources/application.yml"),
         ])
 
+    def test_android_manifest_and_nsc(self):
+        _w(os.path.join(self.t, "app/src/main/AndroidManifest.xml"), """<?xml version="1.0"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application android:allowBackup="false" android:networkSecurityConfig="@xml/nsc">
+    <activity android:name=".Main" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+    </activity>
+    <activity android:name=".Deep" android:exported="true"/>
+    <service android:name=".S" android:exported="true" android:permission="x.P"/>
+    <receiver android:name=".R" android:exported="false"/>
+  </application>
+</manifest>
+""")
+        _w(os.path.join(self.t, "app/src/main/res/xml/nsc.xml"),
+           '<network-security-config><domain-config cleartextTrafficPermitted="true"><domain>10.0.2.2</domain></domain-config>'
+           '<debug-overrides><trust-anchors><certificates src="system"/></trust-anchors></debug-overrides></network-security-config>')
+        got = sorted((r["rule_id"], r["severity"], r["evidence"]) for r in self.run_checks([("android", ".", [])])["results"])
+        self.assertEqual([(a, b) for a, b, _ in got], [("android.manifest-exported-component", "high"), ("android.nsc-cleartext", "medium")])
+        self.assertIn(".Deep", got[0][2])
+
+    def test_android_xml_with_doctype_is_refused(self):
+        _w(os.path.join(self.t, "AndroidManifest.xml"),
+           '<?xml version="1.0"?><!DOCTYPE m [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;">]><manifest><application/></manifest>')
+        report = self.run_checks([("android", ".", [])])
+        self.assertEqual(report["results"], [])
+        self.assertTrue(any("DOCTYPE" in w for w in report["warnings"]))
+
+    def test_android_gradle_release(self):
+        _w(os.path.join(self.t, "a/build.gradle.kts"),
+           'plugins { id("com.android.application") }\nandroid { buildTypes { getByName("release") { isMinifyEnabled = true } } }\n')
+        _w(os.path.join(self.t, "b/build.gradle"),
+           "plugins { id 'com.android.application' }\nandroid {\n  buildTypes {\n    debug { minifyEnabled true }\n  }\n}\n")
+        _w(os.path.join(self.t, "c/build.gradle"),
+           "plugins { id 'com.android.library' }\nandroid { buildTypes { release { minifyEnabled false } } }\n")   # 라이브러리 — 대상 아님
+        _w(os.path.join(self.t, "d/build.gradle"),
+           "plugins { id 'com.android.application' }\nandroid { buildTypes { release {\n // minifyEnabled true\n minifyEnabled false } } }\n")
+        got = sorted((r["file"], r["evidence"][:14]) for r in self.run_checks([("android", ".", [])])["results"])
+        self.assertEqual(got, [("b/build.gradle", "release 빌드 타입이"), ("d/build.gradle", "release 빌드 타입에")])
+
+    def test_android_properties_secret(self):
+        value = "Zq9" + "storepw"
+        _w(os.path.join(self.t, "gradle.properties"),
+           f"org.gradle.jvmargs=-Xmx2g\nRELEASE_STORE_PASSWORD={value}\nKEY_PASSWORD=${{KEY_PW}}\nandroid.enableR8=true\n"
+           "KEYSTORE_PASSWORD=123456\n")
+        _w(os.path.join(self.t, "local.properties"), "sdk.dir=/Users/x/Library/Android/sdk\nMAPS_API_KEY=" + value + "\n")
+        rs = self.run_checks([("android", ".", [])])["results"]
+        self.assertEqual(sorted((r["file"], r["line"]) for r in rs),
+                         [("gradle.properties", 2), ("gradle.properties", 5), ("local.properties", 2)])   # 숫자 비밀번호도
+        self.assertNotIn(value, json.dumps(rs))
+
+    def test_android_checks_line_length_is_linear(self):
+        """S-Server 리뷰 교훈: 줄 길이를 2배로 늘려도 시간이 이차로 늘지 않는다 (해당 경로를 거치는지 결과로 확인)"""
+        def gradle(pad):
+            body = "".join(f"minifyEnabled{pad}x\n" for _ in range(150))
+            return "plugins { id 'com.android.application' }\nandroid { buildTypes { release {\n" + body + "} } }\n"
+        def props(pad):
+            return "".join(f"STORE_PASSWORD={pad}v\n" for _ in range(150))
+        for name, gen in (("app/build.gradle", gradle), ("gradle.properties", props)):
+            times = []
+            for width in (1900, 3800):
+                path = os.path.join(self.t, name)
+                _w(path, gen(" " * width))
+                t0 = time.time()
+                rs = self.run_checks([("android", ".", [])])["results"]
+                times.append(time.time() - t0)
+                self.assertTrue(rs, name)
+                os.remove(path)
+            self.assertLess(times[1], max(times[0] * 3.0, 0.3), (name, times))
+
+    def test_android_review_cases(self):
+        """PR #26 리뷰 재현 사례"""
+        # 루트 빌드 파일의 apply false 는 대상 아님, Kotlin DSL 변형은 정상 판정
+        _w(os.path.join(self.t, "build.gradle"), "plugins {\n  id 'com.android.application' version '8.5.0' apply false\n}\n")
+        _w(os.path.join(self.t, "build.gradle.kts"), "plugins {\n  alias(libs.plugins.android.application) apply false\n}\n")
+        _w(os.path.join(self.t, "k/build.gradle.kts"), 'plugins { id("com.android.application") }\nandroid {\n  buildTypes\n  {\n'
+           '    named("release") { isMinifyEnabled = true }\n  }\n}\n')
+        _w(os.path.join(self.t, "g/build.gradle"), "plugins { id 'com.android.application' }\nandroid {\n  buildTypes {\n"
+           "    debug { resValue 'string', 'p', 'C:\\\\' }\n    release { minifyEnabled(true) }\n  }\n}\n")
+        # application permission 기본값·tools:node=remove·디버그 소스셋·nsc 이름 검증·debug-overrides
+        _w(os.path.join(self.t, "app/src/main/AndroidManifest.xml"), """<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <application android:permission="com.x.SIG" android:networkSecurityConfig="@xml/../../../../build/nsc">
+    <service android:name=".A" android:exported="true"/>
+  </application>
+</manifest>""")
+        _w(os.path.join(self.t, "lib/src/main/AndroidManifest.xml"), """<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <application android:networkSecurityConfig="@xml/nsc">
+    <service android:name="com.lib.S" android:exported="true" tools:node="remove"/>
+    <service android:name=".B" android:exported="true"/>
+  </application>
+</manifest>""")
+        _w(os.path.join(self.t, "lib/src/main/res/xml/nsc.xml"),
+           '<network-security-config><base-config cleartextTrafficPermitted="false"/>'
+           '<debug-overrides><trust-anchors><certificates src="user"/></trust-anchors></debug-overrides></network-security-config>')
+        _w(os.path.join(self.t, "app/src/debug/AndroidManifest.xml"),
+           '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:debuggable="true"/></manifest>')
+        _w(os.path.join(self.t, "gradle.properties"),
+           "TOKEN_URL=https://auth.example.com/token\nsecretsPropertiesFile=secrets.properties\nkeystorePasswordFile=../pw.txt\n")
+        report = checks.run(self.t, [("android", ".", [])], self.defs)
+        got = sorted((r["rule_id"], r["file"], r["severity"]) for r in report["results"])
+        self.assertEqual(got, [("android.manifest-debuggable", "app/src/debug/AndroidManifest.xml", "low"),
+                               ("android.manifest-exported-component", "lib/src/main/AndroidManifest.xml", "high")])
+        self.assertTrue(any("리소스 이름 형식" in w for w in report["warnings"]))
+
+    def test_android_rereview_cases(self):
+        """PR #26 재리뷰: 작은따옴표 이름·targetActivity 로 커서 앞지름, 모듈 판정 오탐, 비밀 키 판정, 한 줄 nsc, flavor 디버그 소스셋"""
+        _w(os.path.join(self.t, "app/src/main/AndroidManifest.xml"), "\n".join([
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+            "  <application>",
+            "    <activity android:name='.A' android:exported='true'/>",
+            '    <service android:name=".B" android:exported="true"/>',
+            '    <service android:name=".C" android:exported="true"/>',
+            '    <activity-alias android:name=".Alias" android:targetActivity=".A" android:exported="true"/>',
+            '    <receiver android:name=".D" android:exported="true"/>',
+            "  </application>",
+            "</manifest>"]))
+        lines = sorted(r["line"] for r in checks.run(self.t, [("android", ".", [])], self.defs)["results"])
+        self.assertEqual(lines, [3, 4, 5, 6, 7])
+        os.remove(os.path.join(self.t, "app/src/main/AndroidManifest.xml"))
+        _w(os.path.join(self.t, "lib/build.gradle"), "plugins { id 'com.android.library' }\n// was: id 'com.android.application'\nandroid { }\n")
+        _w(os.path.join(self.t, "core/build.gradle.kts"), 'plugins { id("com.android.library") }\nandroid { namespace = "org.android.application.core" }\n')
+        _w(os.path.join(self.t, "src/stagingDebug/res/xml/n.xml"), "x")
+        _w(os.path.join(self.t, "flav/src/freeDebug/AndroidManifest.xml"),
+           '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:debuggable="true"/></manifest>')
+        _w(os.path.join(self.t, "one/src/main/AndroidManifest.xml"),
+           '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:networkSecurityConfig="@xml/n"/></manifest>')
+        _w(os.path.join(self.t, "one/src/main/res/xml/n.xml"),
+           '<network-security-config><base-config cleartextTrafficPermitted="true"/><domain-config cleartextTrafficPermitted="true"><domain>a</domain></domain-config></network-security-config>')
+        got = sorted((r["rule_id"], r["severity"]) for r in checks.run(self.t, [("android", ".", [])], self.defs)["results"])
+        self.assertEqual(got, [("android.manifest-debuggable", "low"), ("android.nsc-cleartext", "high"), ("android.nsc-cleartext", "medium")])
+        for key, want in {"SECRET_KEY": True, "AWS_SECRET_ACCESS_KEY": True, "secretKey": True, "ACCESS_KEY": True,
+                          "apiKeyRelease": True, "AUTH_TOKEN_DEV": True, "clientSecretProd": True, "storePassword": True,
+                          "TOKEN_URL": False, "secretsPropertiesFile": False, "keystorePasswordFile": False,
+                          "RELEASE_KEY_ALIAS": False, "org.gradle.jvmargs": False}.items():
+            self.assertEqual(checks.is_secret_key(key), want, key)
+
+    def test_android_build_types_unclosed_is_linear(self):
+        """PR #26 재리뷰 HIGH: 닫히지 않은 buildTypes { 가 반복돼도 이차 시간이 되지 않는다"""
+        times = []
+        for n in (3000, 6000):
+            _w(os.path.join(self.t, "app/build.gradle"),
+               "plugins { id 'com.android.application' }\nandroid {\n" + "buildTypes{\n" * n)
+            t0 = time.time()
+            rs = checks.run(self.t, [("android", ".", [])], self.defs)["results"]
+            times.append(time.time() - t0)
+            self.assertTrue(rs)
+        self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+        _w(os.path.join(self.t, "app/build.gradle"), ("buildTypes" + " " * 3900 + "\n") * 200 + "plugins { id 'com.android.application' }\nandroid {}\n")
+        t0 = time.time()
+        checks.run(self.t, [("android", ".", [])], self.defs)
+        self.assertLess(time.time() - t0, 1.5)
+
+    def test_android_manifest_lines_are_linear(self):
+        def manifest(n):
+            comps = "".join(f'<service android:name=".S{i}" android:exported="true"/>\n' for i in range(n))
+            return f'<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>\n{comps}</application></manifest>'
+        times = []
+        for n in (4000, 8000):
+            _w(os.path.join(self.t, "AndroidManifest.xml"), manifest(n))
+            t0 = time.time()
+            rs = checks.run(self.t, [("android", ".", [])], self.defs)["results"]
+            times.append(time.time() - t0)
+            self.assertTrue(rs)
+        self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
+    def test_strip_js_comments_word_runs_are_linear(self):
+        """PR #26 리뷰: prev_word 가 공백에서 초기화되지 않아 'a a a …' 에서 이차였다"""
+        f = checks.strip_js_comments
+        self.assertEqual(f("a = b\nin /x*/.test(y) /* c */"), "a = b\nin /x*/.test(y) ")   # 이전 코드는 prev_word 가 'bin' 이 되어 실패
+        self.assertEqual(f('foo"x"return /a*/ //c'), 'foo"x"return /a*/ ')
+        times = []
+        for n in (100_000, 200_000):
+            t0 = time.time()
+            f("a " * n)
+            times.append(time.time() - t0)
+        self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
+    def test_android_fixture_expectations(self):
+        import shutil
+        shutil.copytree(os.path.join(HERE, "fixtures", "android"), self.t, dirs_exist_ok=True)
+        detected = profiles.detect_full(self.t, self.defs)
+        self.assertEqual([(n, r) for n, r, _ in detected], [("android", ".")])
+        report = checks.run(self.t, detected, self.defs)
+        self.assertEqual(report["errors"], [])
+        self.assertEqual(self.rules(report), [
+            ("android.gradle-release-minify-disabled", "app/build.gradle"),
+            ("android.manifest-allow-backup", "app/src/main/AndroidManifest.xml"),
+            ("android.manifest-cleartext", "app/src/main/AndroidManifest.xml"),
+            ("android.manifest-debuggable", "app/src/main/AndroidManifest.xml"),
+            ("android.manifest-exported-component", "app/src/main/AndroidManifest.xml"),
+            ("android.manifest-exported-component", "app/src/main/AndroidManifest.xml"),
+            ("android.nsc-cleartext", "app/src/main/res/xml/network_security_config.xml"),
+            ("android.nsc-user-certs", "app/src/main/res/xml/network_security_config.xml"),
+            ("android.properties-secret", "gradle.properties"),
+        ])
+
     def test_web_fixture_expectations(self):
         """tests/fixtures/web 의 README 표와 같은 결과 (env·lockfile 은 테스트에서 실제 이름으로 복사)"""
         import shutil
