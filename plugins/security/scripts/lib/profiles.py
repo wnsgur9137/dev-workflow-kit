@@ -704,6 +704,10 @@ def format_profile_label(name: str, root: str) -> str:
 # 스캔 계획 (scan-code.sh 가 Semgrep 인자를 조립할 때 쓴다)
 # ---------------------------------------------------------------------------
 COMMON_RULESETS = ("generic",)
+# 소스일 가능성이 거의 없는 의존성·산출물 폴더 — 어느 프로파일이 감지됐는지와 무관하게 전역 제외한다.
+# exclude_paths 를 하위 경로로 한정하면 어느 프로파일에도 속하지 않는 경로(예: Flutter 의 macos/Pods)가 남기 때문이다.
+# node_modules·build·dist·vendor·.venv 는 Semgrep 기본 무시 목록이 이미 뺀다 (1.182.0 실측, PR #22 리뷰).
+GLOBAL_EXCLUDES = ("Pods", "DerivedData", ".gradle", ".dart_tool")
 
 
 def _semgrep_exclude(pattern: str) -> str:
@@ -714,6 +718,27 @@ def _semgrep_exclude(pattern: str) -> str:
     while p.endswith("/**"):
         p = p[:-3]
     return p or pattern
+
+
+def _escape_glob(path: str) -> str:
+    """하위 경로 이름의 glob 특수문자를 이스케이프한다 (Semgrep --exclude 는 gitignore 문법)."""
+    out = re.sub(r"([\\*?\[\]])", r"\\\1", path)
+    return "\\" + out if out[:1] in ("!", "#") else out
+
+
+def scoped_exclude(pattern: str, root: str) -> str:
+    """프로파일의 exclude_paths 패턴 하나를 그 프로파일의 하위 경로로 한정한 Semgrep --exclude 패턴.
+
+    루트(".")에서 감지된 프로파일은 모든 깊이에 적용한다. gitignore 문법에서 가운데 `/` 가 있는 패턴
+    (`ios/Pods`)은 루트에 고정되므로 `**/` 를 붙인다. 하위 경로에서 감지된 프로파일은 `<하위 경로>/**/<패턴>`
+    으로 고정해 다른 하위 프로젝트(예: Flutter 의 macos 러너, 다른 프로젝트의 build/ 소스)를 제외하지 않는다.
+    Semgrep 1.182.0 에서 `ios/**/macos` 가 최상위 `macos/` 는 남기고 `ios/macos/` 만 제외하는 것을 실측했다.
+    """
+    base = _semgrep_exclude(pattern)
+    root = os.path.normpath(root or ".").strip("/")
+    if root in ("", "."):
+        return f"**/{base}" if "/" in base else base
+    return f"{_escape_glob(root)}/**/{base}"
 
 
 def _has_rules(d: str) -> bool:
@@ -736,11 +761,11 @@ def build_plan(detected, profiles: dict, rules_dir: str, custom_dir: str):
 
     rulesets = list(COMMON_RULESETS)
     customs, excludes = [], []
-    for name, _root in detected:
+    for name, root in detected:
         p = profiles[name]
         rulesets += p["semgrep"].get("rulesets") or []
         customs += p["semgrep"].get("custom") or []
-        excludes += p.get("exclude_paths") or []
+        excludes += [scoped_exclude(x, root) for x in p.get("exclude_paths") or []]
     for r in rulesets:
         if not re.fullmatch(r"[a-z0-9_-]+", r):
             add("warning", f"규칙셋 이름 형식 오류로 건너뜀: {r}")
@@ -755,8 +780,8 @@ def build_plan(detected, profiles: dict, rules_dir: str, custom_dir: str):
             add("custom", c)
         else:
             add("warning", f"커스텀 규칙 '{c}' 폴더가 비어 있어 건너뜀")
-    for x in excludes:
-        add("exclude", _semgrep_exclude(x))
+    for x in list(GLOBAL_EXCLUDES) + excludes:
+        add("exclude", x)
     return plan
 
 
