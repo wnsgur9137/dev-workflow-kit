@@ -98,6 +98,59 @@ test_rules_mismatch_with_lock_is_warned() {
   assert_not_contains "$(cat "$(dirname "$summary")/raw/warnings.txt")" "rules.lock 과 다릅니다"
 }
 
+test_d7_probe_failure_is_not_blamed_on_mount_sharing() {
+  setup_fake
+  fake_data
+  # PR #19 NITPICK: 컨테이너 자체가 실패하면(이미지·런타임 오류) 마운트 공유 문제로 안내하지 않는다
+  assert_status 1 "$SCAN" "$HOME/proj"
+  assert_contains "$OUT" "[D7] 대상 폴더 확인용 컨테이너를 실행하지 못했습니다 (종료코드 99)"
+  assert_contains "$OUT" "가짜 docker 로 run 을 실행하면 안 됩니다"
+  assert_not_contains "$OUT" "공유하지 않습니다"
+}
+
+# 가짜 docker 로 스캔을 끝까지 돌리고 status.tsv 의 한 도구 행을 돌려준다 (도구 결과는 없으므로 정규화 오류는 무시)
+_status_row() {
+  local target=$1 tool=$2 summary
+  summary=$("$SCAN" "$target" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  awk -F '\t' -v t="$tool" '$1 == t' "$(dirname "$summary")/raw/status.tsv"
+}
+
+# 전제: 테스트 임시 폴더(TMPDIR)가 git 저장소 안에 있지 않다 (있으면 "git 저장소가 아님" 대신 하위 폴더 안내가 나온다)
+test_history_skip_reason_for_worktree_and_subfolder() {
+  setup_fake
+  fake_data
+  export FAKE_RUN_OUTPUT="a.py"
+  # 호스트 git 을 실행하지 않는다 (위협 모델 T5) — 호출되면 기록되는 가짜 git
+  printf '#!/bin/sh\necho "git $*" >>"%s"\nexit 1\n' "$SEC_TMP/git.log" >"$SEC_TMP/bin/git"
+  chmod +x "$SEC_TMP/bin/git"
+  # PR #19 W8: worktree·서브모듈(.git 이 파일)과 저장소 하위 폴더를 "git 저장소 아님"으로 안내하지 않는다
+  printf 'gitdir: /elsewhere/.git/worktrees/proj\n' >"$HOME/proj/.git"
+  assert_contains "$(_status_row "$HOME/proj" gitleaks-git)" "git worktree 또는 서브모듈입니다"
+  rm -f "$HOME/proj/.git"
+  mkdir -p "$HOME/repo/.git" "$HOME/repo/sub"
+  echo 'print(1)' >"$HOME/repo/sub/a.py"
+  assert_contains "$(_status_row "$HOME/repo/sub" gitleaks-git)" "최상위 경로($(cd -P "$HOME/repo" && pwd -P))로 실행하면"
+  assert_contains "$(_status_row "$HOME/proj" gitleaks-git)" "git 저장소가 아님"
+  # 서브모듈의 하위 폴더는 처음부터 worktree·서브모듈로 안내한다
+  mkdir -p "$HOME/sm/sub"
+  printf 'gitdir: ../.git/modules/sm\n' >"$HOME/sm/.git"
+  echo 'print(1)' >"$HOME/sm/sub/a.py"
+  assert_contains "$(_status_row "$HOME/sm/sub" gitleaks-git)" "worktree 또는 서브모듈("
+  # 상위 .git 이 홈 디렉터리면(점검 대상으로 받지 않는 경로) 안내하지 않는다
+  mkdir -p "$HOME/.git"
+  assert_contains "$(_status_row "$HOME/proj" gitleaks-git)" "git 저장소가 아님"
+  [ ! -s "$SEC_TMP/git.log" ] || fail "호스트 git 이 실행됨: $(cat "$SEC_TMP/git.log")"
+}
+
+test_oom_kill_is_named_in_failure_note() {
+  setup_fake
+  fake_data
+  # PR #19 SUGGESTION: 종료코드 137 은 메모리 부족 가능성을 드러낸다
+  export FAKE_RUN_OUTPUT="a.py" FAKE_RUN_FAIL_MATCH="semgrep scan" FAKE_RUN_FAIL_RC=137
+  assert_contains "$(_status_row "$HOME/proj" semgrep)" "메모리 부족(OOM)"
+}
+
 test_unknown_forced_profile_is_rejected() {
   setup_fake
   fake_data

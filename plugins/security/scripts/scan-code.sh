@@ -96,7 +96,19 @@ DOCKER_HARDEN=(--rm --network none --read-only --cap-drop ALL --security-opt no-
 # [D7] 마운트 가시성 — 런타임 VM 이 대상 경로를 공유하지 않으면 컨테이너에는 빈 폴더로 보여
 #      "결과 0건" 으로 조용히 끝난다 (Colima 기본 설정은 홈 디렉터리만 공유).
 if [ -n "$(ls -A "$TARGET" 2>/dev/null)" ]; then
-  seen=$(docker run "${DOCKER_HARDEN[@]}" --tmpfs /tmp:rw,size=8m -v "$TARGET:/src:ro" --entrypoint sh "$IMG_GITLEAKS" -c 'ls -A /src | head -n 1' 2>/dev/null)
+  probe_err=$(mktemp "${TMPDIR:-/tmp}/sec-d7.XXXXXX") || sec_die "임시 파일을 만들 수 없습니다."
+  trap 'rm -f "$probe_err"' EXIT
+  seen=$(docker run "${DOCKER_HARDEN[@]}" --tmpfs /tmp:rw,size=8m -v "$TARGET:/src:ro" --entrypoint sh "$IMG_GITLEAKS" -c 'ls -A /src | head -n 1' 2>"$probe_err")
+  probe_rc=$?
+  probe_msg=$(tail -n 3 "$probe_err" | tr '\n' ' ' | cut -c1-300)
+  rm -f "$probe_err"
+  trap - EXIT
+  # 컨테이너 자체가 실패한 경우(이미지·런타임 오류)를 마운트 공유 문제로 잘못 안내하지 않는다
+  if [ $probe_rc -ne 0 ]; then
+    sec_err "[D7] 대상 폴더 확인용 컨테이너를 실행하지 못했습니다 (종료코드 $probe_rc): ${probe_msg:-출력 없음}"
+    sec_log "  docker info 로 런타임 상태를 확인하고, 이미지가 손상됐으면 update.sh --images 를 다시 실행하세요."
+    exit 1
+  fi
   if [ -z "$seen" ]; then
     sec_err "[D7] 컨테이너에서 대상 폴더가 비어 보입니다 — Docker 런타임이 이 경로를 공유하지 않습니다: $TARGET"
     sec_log "  Colima 는 기본적으로 홈 디렉터리만 공유합니다. 프로젝트를 홈 아래로 옮기거나"
@@ -163,6 +175,14 @@ precreate() { (umask 077 && : >"$1"); }
 
 record() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$STATUS"; }
 tail_log() { tail -n 3 "$1" 2>/dev/null | tr '\n\t' '  ' | cut -c1-280; }
+# 실패 메모: 컨테이너가 SIGKILL(137)로 끝났으면 대개 메모리 부족이다 — 원인을 드러낸다
+fail_note() {
+  if [ "$1" = 137 ]; then
+    printf '메모리 부족(OOM)으로 강제 종료됐을 수 있습니다 — Docker VM 메모리를 늘린 뒤 다시 실행하세요. %s' "$(tail_log "$2")" | cut -c1-280
+  else
+    tail_log "$2"
+  fi
+}
 
 run_semgrep() {
   # 실행할 규칙이 하나도 없으면 실행하지 않는다 (bash 3.2 는 set -u 에서 빈 배열 확장이 오류다)
@@ -185,7 +205,7 @@ run_semgrep() {
   if [ $rc -le 1 ] && [ -s "$RAW/semgrep.json" ]; then
     record semgrep ok "$rc" ""
   else
-    record semgrep failed "$rc" "$(tail_log "$RAW/semgrep.log")"
+    record semgrep failed "$rc" "$(fail_note "$rc" "$RAW/semgrep.log")"
   fi
 }
 
@@ -205,7 +225,7 @@ run_gitleaks() {
   rc=$?
   # gitleaks 는 git 오류가 나도 "0 commits scanned" 후 종료코드 0 으로 끝날 수 있다 — 누락을 성공으로 기록하지 않는다
   if [ $rc -ne 0 ] || [ ! -s "$RAW/gitleaks-$mode.json" ]; then
-    record "gitleaks-$mode" failed "$rc" "$(tail_log "$log")"
+    record "gitleaks-$mode" failed "$rc" "$(fail_note "$rc" "$log")"
   elif grep -q ' ERR ' "$log"; then
     record "gitleaks-$mode" failed "$rc" "도구 오류: $(grep ' ERR ' "$log" | head -n 2 | tr '\n\t' '  ' | cut -c1-240)"
   elif [ "$mode" = git ] && grep -q ' 0 commits scanned' "$log"; then
@@ -238,19 +258,43 @@ run_osv() {
     ecos=$(grep -o 'could not load db for [^ ]* ecosystem' "$RAW/osv.log" | awk '{print $6}' | sort -u | tr '\n' ' ')
     record osv-scanner failed "$rc" "오프라인 DB 가 없는 생태계(${ecos% }) lockfile 때문에 의존성 점검 전체가 중단됐습니다. update.sh --osv 로 DB 를 갱신하거나, 지원하지 않는 생태계면 해당 lockfile 을 점검에서 빼야 합니다"
   else
-    record osv-scanner failed "$rc" "$(tail_log "$RAW/osv.log")"
+    record osv-scanner failed "$rc" "$(fail_note "$rc" "$RAW/osv.log")"
   fi
+}
+
+# 상위 폴더에서 .git 을 찾는다. 대상 저장소의 git 설정을 읽지 않도록 호스트 git 은 실행하지 않는다 (위협 모델 T5)
+# 홈 디렉터리와 그 위는 점검 대상으로 받지 않으므로(sec_validate_target) 거기서 멈춘다
+git_toplevel_above() {
+  local d home
+  home=$(cd -P "$HOME" 2>/dev/null && pwd -P) || home=$HOME
+  d=$(dirname "$1")
+  while [ -n "$d" ] && [ "$d" != / ] && [ "$d" != "$home" ]; do
+    if [ -e "$d/.git" ]; then
+      printf '%s\n' "$d"
+      return 0
+    fi
+    d=$(dirname "$d")
+  done
+  return 1
 }
 
 sec_log "도구 실행 중 (Semgrep · Gitleaks · OSV-Scanner, 네트워크 차단)..."
 run_semgrep &
 pid_semgrep=$!
+pid_git=""
 if [ -d "$TARGET/.git" ]; then
   run_gitleaks git &
   pid_git=$!
+elif [ -f "$TARGET/.git" ]; then
+  # worktree·서브모듈은 .git 이 gitdir 를 가리키는 파일이다. gitdir 는 마운트 밖이라 컨테이너에서 읽을 수 없다
+  record gitleaks-git skipped - "git worktree 또는 서브모듈입니다 (.git 이 파일) — 히스토리가 대상 폴더 밖에 있어 점검을 생략했습니다. 원본 저장소 경로로 다시 실행하면 히스토리도 점검합니다"
+elif top=$(git_toplevel_above "$TARGET") && [ -n "$top" ] && [ -f "$top/.git" ]; then
+  # 서브모듈·worktree 의 하위 폴더 — 그 최상위로 다시 실행해도 히스토리는 마운트 밖이다
+  record gitleaks-git skipped - "git worktree 또는 서브모듈($top)의 하위 폴더입니다 — 히스토리가 대상 폴더 밖에 있어 점검을 생략했습니다. 원본 저장소 경로로 다시 실행하면 히스토리도 점검합니다"
+elif [ -n "${top:-}" ]; then
+  record gitleaks-git skipped - "저장소의 하위 폴더입니다 — 히스토리 점검을 생략했습니다. 최상위 경로($top)로 실행하면 히스토리도 점검합니다"
 else
-  record gitleaks-git skipped - "git 저장소가 아님 (.git 폴더 없음) — 히스토리 점검 생략"
-  pid_git=""
+  record gitleaks-git skipped - "git 저장소가 아님 (.git 없음) — 히스토리 점검 생략"
 fi
 run_gitleaks dir &
 pid_dir=$!
