@@ -1,0 +1,37 @@
+# W5 — 요청 값(쿼리·본문·searchParams)으로 만든 URL 로 서버에서 요청 (SSRF, docs/security/07 스택별 설계/Web.md)
+rules:
+  - id: next-ssrf-fetch
+    message: >-
+      요청에서 받은 값이 서버 측 HTTP 요청의 URL 로 쓰입니다(SSRF). 내부망·메타데이터 주소(169.254.169.254 등)로
+      요청을 보내게 만들 수 있습니다. 허용 호스트 목록으로 검증하거나 URL 대신 식별자를 받아 서버에서 주소를 정하세요.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: ["CWE-918: Server-Side Request Forgery (SSRF)"]
+      owasp: ["A10:2021 - Server-Side Request Forgery (SSRF)"]
+      confidence: MEDIUM
+      stack: web
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.query
+          - pattern: $REQ.body
+          - pattern: $REQ.params
+          - pattern: $SP.get(...)
+          - pattern: await $REQ.json()
+          - pattern: await $REQ.formData()
+          - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fetch($URL, ...)
+              - pattern: axios($URL, ...)
+              - pattern: axios.$METHOD($URL, ...)
+              - pattern: got($URL, ...)
+              - pattern: got.$METHOD($URL, ...)
+              - pattern: http.get($URL, ...)
+              - pattern: https.get($URL, ...)
+              - pattern: http.request($URL, ...)
+              - pattern: https.request($URL, ...)
+          - focus-metavariable: $URL
