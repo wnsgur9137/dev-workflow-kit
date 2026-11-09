@@ -10,10 +10,12 @@ detect:
 exclude_paths: ["**/build/**", "**/.gradle/**", "**/generated/**"]
 semgrep:
   rulesets: [kotlin, java]
+  custom: [android]
 sca:
   lockfiles: ["**/gradle.lockfile", "**/gradle/verification-metadata.xml"]
   missing_lockfile_hint: "Gradle 의존성 잠금(dependencyLocking) 활성화 권장: ./gradlew dependencies --write-locks"
 artifact:
   types: [apk, aab]
   analyzer: mobsf
+checks: [android-manifest, android-gradle-release, android-properties-secret]
 checklist: android
