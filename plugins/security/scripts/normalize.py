@@ -207,6 +207,23 @@ def read_source_lines(target, rel, start, end, max_lines=3):
     return "\n".join(out)
 
 
+def semgrep_partial_warning(data):
+    """Semgrep 의 warn 수준 오류(타임아웃·파싱 실패 등)는 결과를 막지 않지만 해당 파일 일부가 점검되지 않은 것이다."""
+    paths, count = set(), 0
+    for e in (data or {}).get("errors", []) or []:
+        if str(e.get("level", "")).lower() != "warn":
+            continue
+        count += 1
+        p = e.get("path")
+        if isinstance(p, str) and p:
+            paths.add(strip_container_prefix(p))
+    if not count:
+        return ""
+    where = f"{len(paths)}개 파일" if paths else f"{count}건"
+    return (f"Semgrep 이 {where}의 일부를 점검하지 못했습니다 (타임아웃·파싱 실패 등 경고 {count}건) — "
+            "raw/semgrep.json 의 errors 를 확인하세요.")
+
+
 def parse_semgrep(data, index: ProfileIndex, target=None):
     out, errors = [], []
     for e in (data or {}).get("errors", []) or []:
@@ -424,10 +441,27 @@ def _cell(text) -> str:
     return t.replace("|", "\\|").replace("`", "'")
 
 
+def _code(text) -> str:
+    """짧은 식별자(경로·규칙 ID·프로파일 라벨)는 인라인 코드로 감싼다."""
+    return f"`{_cell(text)}`"
+
+
 def _fence(text: str) -> str:
     # 데이터 안의 ``` 가 코드 블록을 닫지 못하게 백틱 3개 이상을 깨뜨린다
     body = re.sub(r"`{3,}", lambda m: "'" * len(m.group(0)), text or "")
     return "````text\n" + body + "\n````"
+
+
+def _detail_block(f) -> str:
+    """설명·조치·근거는 도구가 대상에서 뽑은 문자열(메타변수 치환 메시지, 패키지 이름, 코드 줄)을 담으므로
+    summary 에서는 코드 블록 밖에 두지 않는다 (리포트 포맷: 도구가 추출한 문자열은 코드 블록 안에)."""
+    parts = [f"설명: {f['title']}"]
+    if f.get("fix_hint"):
+        parts.append(f"조치: {f['fix_hint']}")
+    if f.get("evidence"):
+        parts.append("근거:")
+        parts.append(f["evidence"])
+    return _fence("\n".join(parts))
 
 
 def _loc(f) -> str:
@@ -449,11 +483,11 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors) -> str:
     L.append("")
     L.append("## 메타")
     L.append(f"- run-id: `{meta['run_id']}`")
-    L.append(f"- 대상: `{_cell(meta['target'])}`")
+    L.append(f"- 대상: {_code(meta['target'])}")
     L.append(f"- 시간: {meta.get('started_at', '?')} → {meta.get('finished_at', '?')}")
-    L.append(f"- 프로파일: {', '.join(meta['profiles']) if meta['profiles'] else '(감지 없음 — 공통 기반만 적용)'}")
+    L.append(f"- 프로파일: {', '.join(_code(p) for p in meta['profiles']) if meta['profiles'] else '(감지 없음 — 공통 기반만 적용)'}")
     if meta.get("docker_context"):
-        L.append(f"- Docker 컨텍스트: `{_cell(meta['docker_context'])}`")
+        L.append(f"- Docker 컨텍스트: {_code(meta['docker_context'])}")
     for t in meta.get("tools", []):
         L.append(f"- {t['name']}: {t.get('tag', '?')} (`{t.get('digest', '?')[:19]}…`)")
     if meta.get("rules"):
@@ -473,17 +507,13 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors) -> str:
     if not top:
         L.append("없음")
     for i, f in enumerate(top[:SUMMARY_DETAIL_MAX], 1):
-        L.append(f"### {i}. [{f['severity']}] {f['tool']} · {_cell(f['rule_id'])}")
-        L.append(f"- 위치: `{_cell(_loc(f))}` · 프로파일: {f['profile']} · 분류: {f['category']}")
-        L.append(f"- 설명: {_cell(f['title'])}")
+        L.append(f"### {i}. [{f['severity']}] {f['tool']} · {_code(f['rule_id'])}")
+        L.append(f"- 위치: {_code(_loc(f))} · 프로파일: {_code(f['profile'])} · 분류: {f['category']}")
         if f.get("references"):
-            L.append(f"- 참고: {', '.join(_cell(r) for r in f['references'])}")
-        if f.get("fix_hint"):
-            L.append(f"- 조치: {_cell(f['fix_hint'])}")
-        if f.get("evidence"):
-            L.append("- 근거 (데이터):")
-            L.append(_fence(f["evidence"]))
+            L.append(f"- 참고: {', '.join(_code(r) for r in f['references'])}")
         L.append(f"- id: `{f['id'][:16]}`")
+        L.append("- 설명·조치·근거 (데이터):")
+        L.append(_detail_block(f))
         L.append("")
     if len(top) > SUMMARY_DETAIL_MAX:
         L.append(f"_외 {len(top) - SUMMARY_DETAIL_MAX}건은 findings.json 참조_")
@@ -496,26 +526,37 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors) -> str:
     else:
         L.append(f"medium {stats['medium']} · low {stats['low']} · info {stats['info']} — 상위 {min(len(others), SUMMARY_TOP_OTHERS)}건:")
         L.append("")
-        L.append("| 심각도 | 도구 | 위치 | 규칙 | 설명 |")
+        L.append("| # | 심각도 | 도구 | 위치 | 규칙 |")
         L.append("|---|---|---|---|---|")
-        for f in others[:SUMMARY_TOP_OTHERS]:
-            L.append(f"| {f['severity']} | {f['tool']} | `{_cell(_loc(f))}` | {_cell(f['rule_id'].split('.')[-1])} | {_cell(f['title'])} |")
+        shown = others[:SUMMARY_TOP_OTHERS]
+        for i, f in enumerate(shown, 1):
+            L.append(f"| {i} | {f['severity']} | {f['tool']} | {_code(_loc(f))} | {_code(f['rule_id'].split('.')[-1])} |")
+        L.append("")
+        L.append("설명 (데이터, 번호는 위 표와 같음):")
+        L.append(_fence("\n".join(f"{i}. {f['title']}" for i, f in enumerate(shown, 1))))
     L.append("")
 
     L.append("## 경고")
-    L.extend([f"- {_cell(w)}" for w in warnings] or ["없음"])
+    # 경고에는 대상 저장소의 경로·파일 이름이 들어간다
+    L.append(_fence("\n".join(f"- {w}" for w in warnings)) if warnings else "없음")
     L.append("")
     L.append("## 실행 오류·건너뛴 도구")
     problems = [r for r in status_rows if r["status"] != "ok"]
     if not problems and not errors:
         L.append("없음 — 모든 도구가 정상 종료했습니다.")
     else:
-        L.append("| 도구 | 상태 | 종료코드 | 내용 |")
-        L.append("|---|---|---|---|")
+        L.append("| 도구 | 상태 | 종료코드 |")
+        L.append("|---|---|---|")
         for r in problems:
-            L.append(f"| {r['tool']} | {r['status']} | {r['exit_code']} | {_cell(r['note'])} |")
-        for e in errors:
-            L.append(f"| (파싱) | error | - | {_cell(e)} |")
+            L.append(f"| {_cell(r['tool'])} | {_cell(r['status'])} | {_cell(r['exit_code'])} |")
+        for _e in errors:
+            L.append("| (파싱) | error | - |")
+        # 내용에는 도구 로그 끝부분·도구 오류 메시지가 들어간다
+        notes = [f"{r['tool']}: {r['note']}" for r in problems if r["note"]] + [f"(파싱) {e}" for e in errors]
+        if notes:
+            L.append("")
+            L.append("내용 (데이터):")
+            L.append(_fence("\n".join(notes)))
     L.append("")
     return "\n".join(L)
 
@@ -576,24 +617,33 @@ def main(argv=None) -> int:
                                 "note": "상태 기록 없음 — 도구가 결과를 기록하기 전에 비정상 종료했습니다"})
     findings, errors, warnings = [], [], []
 
-    data, err = _load_json(os.path.join(raw, "semgrep.json"))
-    if err:
-        errors.append(err)
-    if data is not None:
-        f, e = parse_semgrep(data, index, args.target)
-        findings += f
-        errors += e
-    for mode in ("git", "dir"):
-        data, err = _load_json(os.path.join(raw, f"gitleaks-{mode}.json"))
+    def run_parser(filename, parse):
+        """파서 하나가 예상과 다른 구조에서 예외를 내도 나머지 도구 결과와 summary 는 만든다."""
+        data, err = _load_json(os.path.join(raw, filename))
         if err:
             errors.append(err)
-        if data is not None:
-            findings += parse_gitleaks(data, mode)
-    data, err = _load_json(os.path.join(raw, "osv.json"))
-    if err:
-        errors.append(err)
-    if data is not None:
-        findings += parse_osv(data, index)
+        if data is None:
+            return
+        try:
+            f, e = parse(data)
+        except Exception as ex:  # noqa: BLE001 — 도구 출력은 신뢰하지 않는 입력이다
+            errors.append(f"{filename} 해석 실패 — 이 도구의 결과는 리포트에서 빠졌습니다: "
+                          f"{type(ex).__name__}: {clean_text(ex, 160, True)}")
+            return
+        findings.extend(f)
+        errors.extend(e)
+
+    def _semgrep(data):
+        f, e = parse_semgrep(data, index, args.target)
+        w = semgrep_partial_warning(data)
+        if w:
+            warnings.append(w)
+        return f, e
+
+    run_parser("semgrep.json", _semgrep)
+    for mode in ("git", "dir"):
+        run_parser(f"gitleaks-{mode}.json", lambda d, m=mode: (parse_gitleaks(d, m), []))
+    run_parser("osv.json", lambda d: (parse_osv(d, index), []))
 
     # 중복 제거 (id 기준) 후 심각도·위치 순 정렬
     uniq = {}
