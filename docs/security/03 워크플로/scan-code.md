@@ -38,6 +38,7 @@ sequenceDiagram
 - 대상 경로는 `realpath`로 정규화, 심볼릭 링크로 홈 디렉터리 전체가 마운트되지 않게 검사
 - 대상이 git 저장소가 아니면 Gitleaks `git` 모드 생략 (summary에 표시)
 - OSV DB 갱신일이 7일 초과면 경고
+- 설치된 Semgrep 규칙(`.commit`의 커밋·paths)이 `rules.lock`과 다르면 경고 (플러그인 갱신 후 `update.sh` 미실행)
 
 ## SKILL.md 지시 요지 (Claude 행동 규칙)
 
