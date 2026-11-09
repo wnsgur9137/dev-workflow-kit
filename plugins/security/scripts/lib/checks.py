@@ -438,6 +438,169 @@ def _line_count(text, pos):
 
 
 # ---------------------------------------------------------------------------
+# server
+# ---------------------------------------------------------------------------
+COMPOSE_FILE = re.compile(r"(^|/)(docker-)?compose[\w.-]*\.ya?ml$")
+DB_IMAGE = re.compile(
+    r"\b(postgres|postgis|mysql|mariadb|mongo|redis|valkey|elasticsearch|opensearch|memcached|cassandra|"
+    r"couchdb|rabbitmq|clickhouse|neo4j|influxdb|mssql|cockroach)", re.I)
+LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip(" "))
+
+
+def _yaml_value(line):
+    v = line.split(":", 1)[1].strip() if ":" in line else ""
+    v = re.sub(r"\s+#.*$", "", v)
+    return v.strip().strip("'\"")
+
+
+def _compose_services(text):
+    """docker-compose 의 services 아래 서비스별 (이름, 시작 줄, [(줄 번호, 줄)]) — 표준 라이브러리만 쓰는 들여쓰기 기반 해석.
+    앵커·병합 같은 고급 문법은 해석하지 않는다 (보이는 줄만 본다)."""
+    out, in_services, svc_indent, cur = [], False, None, None
+    for n, raw in _lines(text):
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        ind = _indent(raw)
+        if ind == 0:
+            in_services = raw.rstrip().startswith("services:")
+            cur, svc_indent = None, None
+            continue
+        if not in_services:
+            continue
+        if svc_indent is None:
+            svc_indent = ind
+        if ind == svc_indent and raw.rstrip().endswith(":"):
+            cur = (raw.strip()[:-1].strip("'\""), n, [])
+            out.append(cur)
+        elif cur and ind > svc_indent:
+            cur[2].append((n, raw))
+    return out
+
+
+def _port_entries(body, i, ports_indent):
+    """body[i] 가 `ports:` 줄일 때, 그 아래 항목들을 (줄 번호, {"short": str} | {"published":…, "host_ip":…}) 로."""
+    first = body[i][1].split(":", 1)[1].strip()
+    if first.startswith("["):   # 흐름 문법 ports: ["5432:5432", ...]
+        return [(body[i][0], {"short": x}) for x in re.findall(r"['\"]?([^,'\"\[\]\s]+)['\"]?", first)]
+    entries = []
+    for n, line in body[i + 1:]:
+        st = line.strip()
+        ind = _indent(line)
+        if ind < ports_indent or (ind == ports_indent and not st.startswith("-")):
+            break
+        if st.startswith("-"):
+            item = st[1:].strip()
+            item = re.sub(r"\s+#.*$", "", item)
+            if re.match(r"^[\w-]+\s*:\s", item + " ") and not re.match(r"^['\"]?[\d.]", item):
+                k, v = item.split(":", 1)
+                entries.append((n, {k.strip(): v.strip().strip("'\"")}))
+            else:
+                entries.append((n, {"short": item.strip("'\"")}))
+        elif entries and ":" in st and "short" not in entries[-1][1]:
+            k, v = st.split(":", 1)
+            entries[-1][1][k.strip()] = re.sub(r"\s+#.*$", "", v).strip().strip("'\"")
+    return entries
+
+
+def _port_exposed(e):
+    """ports 항목이 모든 인터페이스에 열리는지 — "127.0.0.1:5432:5432"·host_ip 루프백은 아님."""
+    if "short" in e:
+        v = e["short"]
+        return bool(v) and not v.startswith(LOOPBACK)
+    return "published" in e and e.get("host_ip", "") not in LOOPBACK
+
+
+def check_compose(ctx):
+    """S6 — docker-compose 의 privileged, docker.sock 마운트, DB 포트의 전체 인터페이스 바인딩."""
+    out = []
+    for rel, full in ctx.files(lambda rel, name: bool(COMPOSE_FILE.search(rel))):
+        text = ctx.read(full)
+        if text is None:
+            continue
+        for _name, _start, body in _compose_services(text):
+            is_db = any(DB_IMAGE.search(_yaml_value(l)) for _, l in body if l.strip().startswith("image:"))
+            for i, (n, line) in enumerate(body):
+                st = line.strip()
+                if re.match(r"privileged:\s*true\b", st):
+                    out.append(ctx.finding(
+                        "compose", "server.compose-privileged", "medium", "config", rel, n,
+                        "compose 서비스가 privileged 로 실행됩니다",
+                        evidence="privileged: true — 컨테이너가 호스트 장치·커널 기능에 거의 제한 없이 접근합니다",
+                        fix_hint="privileged 를 빼고 필요한 cap_add 만 지정하세요.", references=["CWE-250"]))
+                if "docker.sock" in st and not st.startswith("#"):
+                    out.append(ctx.finding(
+                        "compose", "server.compose-docker-socket", "medium", "config", rel, n,
+                        "compose 서비스에 Docker 소켓이 마운트됩니다",
+                        evidence="docker.sock 마운트 — 컨테이너가 호스트 Docker 를 제어해 사실상 root 권한을 얻습니다",
+                        fix_hint="꼭 필요하면 읽기 전용 프록시(docker-socket-proxy 등)로 범위를 줄이세요.", references=["CWE-250"]))
+                if is_db and re.match(r"ports:", st):
+                    for en, e in _port_entries(body, i, _indent(line)):
+                        if _port_exposed(e):
+                            out.append(_db_port_finding(ctx, rel, en))
+    return out
+
+
+def _db_port_finding(ctx, rel, n):
+    return ctx.finding(
+        "compose", "server.compose-db-port-exposed", "medium", "config", rel, n,
+        "DB·캐시 서비스 포트가 모든 인터페이스에 열립니다",
+        evidence="호스트 IP 없이 포트를 게시하면 0.0.0.0 에 바인딩되어 같은 네트워크(공용 Wi-Fi 등)에서 접속할 수 있습니다",
+        fix_hint="\"127.0.0.1:5432:5432\" 처럼 루프백에만 게시하거나, 다른 서비스만 접근하면 ports 대신 내부 네트워크를 쓰세요.",
+        references=["CWE-668"])
+
+
+SPRING_CONFIG = re.compile(r"(^|/)(application|bootstrap)(-[\w.-]+)?\.(ya?ml|properties)$")
+SECRET_KEY = re.compile(r"(password|passwd|pwd|secret|token|api[-_]?key|private[-_]?key|credentials?)$", re.I)
+
+
+def _plain_secret_value(v):
+    v = v.strip().strip("'\"")
+    return bool(v) and "${" not in v and v.lower() not in ("null", "~", "none", "changeme") and not v.startswith(("{cipher}", "ENC("))
+
+
+def check_spring_config_secret(ctx):
+    """S1 보강 — Spring application*.yml·properties 의 비밀 키에 평문 값 (값은 결과에 넣지 않는다).
+    ${ENV} 자리표시자·{cipher}·ENC(...) 는 제외한다."""
+    out = []
+    for rel, full in ctx.files(lambda rel, name: bool(SPRING_CONFIG.search(rel))):
+        text = ctx.read(full)
+        if text is None:
+            continue
+        hits = []
+        if rel.endswith(".properties"):
+            for n, line in _lines(text):
+                m = re.match(r"^[ \t]*([\w.\-\[\]]+)[ \t]*[=:][ \t]*(.*)$", line)
+                if m and not line.lstrip().startswith(("#", "!")) and SECRET_KEY.search(m.group(1)) and _plain_secret_value(m.group(2)):
+                    hits.append((n, m.group(1)))
+        else:
+            stack = []
+            for n, line in _lines(text):
+                if not line.strip() or line.lstrip().startswith(("#", "-", "---")):
+                    continue
+                m = re.match(r"^( *)([\w.\-\[\]\"']+)[ \t]*:(.*)$", line)
+                if not m:
+                    continue
+                ind, key, val = len(m.group(1)), m.group(2).strip("'\""), re.sub(r"\s+#.*$", "", m.group(3)).strip()
+                while stack and stack[-1][0] >= ind:
+                    stack.pop()
+                stack.append((ind, key))
+                if val and not val.startswith(("|", ">", "&", "*")) and SECRET_KEY.search(key) and _plain_secret_value(val):
+                    hits.append((n, ".".join(k for _, k in stack)))
+        for n, key in hits:
+            out.append(ctx.finding(
+                "spring-config-secret", "server.config-plaintext-secret", "high", "secret", rel, n,
+                "설정 파일의 비밀 키에 평문 값이 있습니다",
+                evidence=f"키: {key} (값은 리포트에 남기지 않습니다)",
+                fix_hint="${ENV_VAR} 자리표시자로 바꾸고 값은 환경 변수·시크릿 저장소로 옮기세요. 이미 커밋됐다면 폐기(rotate)하세요.",
+                references=["CWE-798"]))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 등록부
 # ---------------------------------------------------------------------------
 CHECKS = {
@@ -445,10 +608,12 @@ CHECKS = {
     "next-unauth-route": check_next_unauth_route,
     "next-config": check_next_config,
     "npm-install-scripts": check_npm_install_scripts,
+    "compose": check_compose,
+    "spring-config-secret": check_spring_config_secret,
 }
 # 저장소 전체를 보는 검사 — 인프라 설정처럼 프로파일 하위 경로가 아니라 저장소 루트에 있는 경우가 많은 것.
 # 감지된 프로파일 중 하나라도 이 검사를 쓰면 대상 루트 기준으로 한 번만 실행한다.
-REPO_WIDE: set = set()
+REPO_WIDE = {"compose"}
 
 
 class _Timeout(Exception):

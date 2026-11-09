@@ -217,6 +217,60 @@ class ChecksTest(unittest.TestCase):
         self.assertTrue(any("알 수 없는 검사 'nope'" in e for e in report["errors"]))
         self.assertTrue(any("next-config: 검사 실패" in e for e in report["errors"]))
 
+    def test_compose_checks(self):
+        """S6 — privileged·docker.sock·DB 포트 (짧은·긴·흐름 문법, 루프백 제외, DB 아닌 서비스 제외)"""
+        _w(os.path.join(self.t, "infra/docker-compose.prod.yml"),
+           "services:\n  db:\n    image: \"postgres:16\"\n    ports:\n      - \"5432:5432\"\n      - 127.0.0.1:5433:5432\n"
+           "      - target: 5432\n        published: 5434\n      - target: 5432\n        published: 5435\n        host_ip: 127.0.0.1\n"
+           "  mongo:\n    image: mongo\n    ports: [\"27017:27017\"]\n  web:\n    image: nginx\n    privileged: true\n    ports:\n    - \"80:80\"\n"
+           "    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n")
+        report = self.run_checks([("server", "backend", [])])   # compose 는 저장소 전체를 본다
+        got = sorted((r["rule_id"], r["line"]) for r in report["results"])
+        self.assertEqual(got, [("server.compose-db-port-exposed", 5), ("server.compose-db-port-exposed", 7),
+                               ("server.compose-db-port-exposed", 14), ("server.compose-docker-socket", 21),
+                               ("server.compose-privileged", 17)])
+
+    def test_repo_wide_check_runs_once(self):
+        _w(os.path.join(self.t, "docker-compose.yml"), "services:\n  a:\n    privileged: true\n")
+        report = self.run_checks([("server", "api", []), ("server", "worker", [])])
+        self.assertEqual(len(report["results"]), 1)
+
+    def test_spring_config_secret_reports_key_only(self):
+        value = "Zq9" + "plaintextPw"
+        _w(os.path.join(self.t, "api/src/main/resources/application-prod.yml"),
+           f"spring:\n  datasource:\n    password: {value}\n    username: app\njwt:\n  secret: ${{JWT_SECRET}}\n"
+           f"crypto:\n  token: '{{cipher}}abc'\n# api-key: commented\n")
+        _w(os.path.join(self.t, "api/src/main/resources/application.properties"),
+           f"app.api-key={value}\nother.secret=${{X}}\n! old.password=y\n")
+        report = self.run_checks([("server", "api", [])])
+        got = sorted((r["file"].rsplit("/", 1)[-1], r["line"], r["evidence"].split(" ")[1]) for r in report["results"])
+        self.assertEqual(got, [("application-prod.yml", 3, "spring.datasource.password"),
+                               ("application.properties", 1, "app.api-key")])
+        self.assertNotIn(value, json.dumps(report))
+
+    def test_server_checks_linear_time_on_adversarial_files(self):
+        big = 900_000
+        _w(os.path.join(self.t, "docker-compose.yml"), "services:\n  db:\n    image: postgres\n    ports:\n" + "      -\n" * (big // 8))
+        _w(os.path.join(self.t, "api/application.yml"), "a" * 3000 + "\n" + (" " * 3000 + "x\n") * 200)
+        _w(os.path.join(self.t, "api/application.properties"), ("k" * 3900 + "\n") * 200)
+        t0 = time.time()
+        self.run_checks([("server", "api", [])])
+        self.assertLess(time.time() - t0, 5.0)
+
+    def test_server_fixture_expectations(self):
+        import shutil
+        fx = os.path.join(HERE, "fixtures", "server")
+        shutil.copytree(fx, self.t, dirs_exist_ok=True)
+        shutil.move(os.path.join(self.t, "requirements.txt.fixture"), os.path.join(self.t, "web", "requirements.txt"))
+        detected = profiles.detect_full(self.t, self.defs)
+        self.assertEqual(sorted((n, r) for n, r, _ in detected), [("server", "api"), ("server", "gosvc"), ("server", "web")])
+        self.assertEqual(self.rules(checks.run(self.t, detected, self.defs)), [
+            ("server.compose-db-port-exposed", "docker-compose.yml"),
+            ("server.compose-docker-socket", "docker-compose.yml"),
+            ("server.compose-privileged", "docker-compose.yml"),
+            ("server.config-plaintext-secret", "api/src/main/resources/application.yml"),
+        ])
+
     def test_web_fixture_expectations(self):
         """tests/fixtures/web 의 README 표와 같은 결과 (env·lockfile 은 테스트에서 실제 이름으로 복사)"""
         import shutil
