@@ -36,5 +36,5 @@ rules:
       category: security
       cwe: ["CWE-327: Use of a Broken or Risky Cryptographic Algorithm"]
       stack: ios
-    # 주석 줄은 건너뛴다 (줄 단위, 선형)
-    pattern-regex: '(?m)^(?![ \t]*//)[^\n]{0,2000}\b((CC_MD5|CC_SHA1)(_Init|_Update|_Final)?|kCCAlgorithm(DES|3DES|RC4|RC2)|kCCOptionECBMode)\b'
+    # // 나 /* 뒤의 키워드는 건너뛴다 (줄 단위, 줄 앞 2000자까지 — 그보다 뒤는 미탐)
+    pattern-regex: '(?m)^(?:(?!//|/\*)[^\n]){0,2000}\b((CC_MD5|CC_SHA1)(_Init|_Update|_Final)?|kCCAlgorithm(DES|3DES|RC4|RC2)|kCCOptionECBMode)\b'

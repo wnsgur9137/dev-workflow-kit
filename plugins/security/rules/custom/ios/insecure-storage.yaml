@@ -19,6 +19,8 @@ rules:
           - pattern: UserDefaults.standard.setValue(...)
           - pattern: UserDefaults($...ARGS)?.set(...)
           - pattern: UserDefaults($...ARGS)?.setValue(...)
+          - pattern: UserDefaults($...ARGS)!.set(...)
+          - pattern: UserDefaults($...ARGS)!.setValue(...)
           - patterns:
               - pattern-either:
                   - pattern: $D.set(...)
@@ -26,4 +28,12 @@ rules:
               - metavariable-regex:
                   metavariable: $D
                   regex: (?i)^(defaults|userdefaults|standard|shareddefaults|groupdefaults|appdefaults)$
+          # self.defaults.set(...) 에서 $D 는 self 에만 묶인다(1.182.0 실측) — 마지막 이름 $F 로 판정 (PR #27 재리뷰)
+          - patterns:
+              - pattern-either:
+                  - pattern: $X.$F.set(...)
+                  - pattern: $X.$F.setValue(...)
+              - metavariable-regex:
+                  metavariable: $F
+                  regex: (?i)^(defaults|userdefaults|shareddefaults|groupdefaults|appdefaults)$
       - pattern-regex: (?i)forKey:\s*"[^"\n]{0,100}(token|password|passwd|secret|credential|api_?key|session_?(id|token|key))

@@ -6,7 +6,9 @@
     {"tool": "toolkit", "rule_id": "ios.ats-insecure-http-exception", "file": "App/Info.plist", "note": "I2"},
     {"tool": "toolkit", "rule_id": "ios.ats-weak-tls", "file": "App/Info.plist", "note": "I2"},
     {"tool": "semgrep", "rule_suffix": "insecure-storage", "file": "App/Sources/Session.swift", "note": "I3"},
+    {"tool": "semgrep", "rule_suffix": "insecure-storage", "file": "App/Sources/Prefs.swift", "note": "I3 self.defaults·강제 언래핑 (PR #27 재리뷰 W2)"},
     {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/Session.swift", "note": "I4"},
+    {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/Auth.swift", "note": "I4 카멜케이스 userPassword·refreshToken (PR #27 재리뷰 W1)"},
     {"tool": "semgrep", "rule_suffix": "sensitive-log-objc", "file": "App/Legacy/Crypto.m", "note": "I4 Objective-C"},
     {"tool": "semgrep", "rule_suffix": "weak-crypto", "file": "App/Sources/Hash.swift", "note": "I6"},
     {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/Crypto.m", "note": "I6 Objective-C"},
@@ -14,6 +16,9 @@
     {"tool": "osv-scanner", "package": "github.com/apple/swift-nio-http2@1.19.1", "file": "Package.resolved", "note": "I5"}
   ],
   "must_not_find": [
-    {"file": "App/Sources/SecureStore.swift", "rule_suffix": "insecure-storage", "note": "Keychain 래퍼"}
+    {"file": "App/Sources/SecureStore.swift", "rule_suffix": "insecure-storage", "note": "Keychain 래퍼"},
+    {"file": "App/Sources/Tokenizer.swift", "rule_suffix": "sensitive-log", "note": "키워드 뒤 소문자(Tokenizer)"},
+    {"file": "App/Legacy/Comments.m", "rule_suffix": "weak-crypto-objc", "note": "줄 끝·블록 주석 안의 알고리즘 이름"},
+    {"file": "App/Legacy/Comments.m", "rule_suffix": "sensitive-log-objc", "note": "NSLog tokenizer"}
   ]
 }
