@@ -6,10 +6,12 @@ detect:
 exclude_paths: ["**/node_modules/**", "**/ios/Pods/**", "**/android/build/**"]
 semgrep:
   rulesets: [javascript, typescript]
+  custom: [react-native, web]   # web: 공개 접두사 변수(EXPO_PUBLIC_ 등) 비밀 규칙을 함께 쓴다
 sca:
   lockfiles: ["**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml"]
   missing_lockfile_hint: "package-lock.json / yarn.lock / pnpm-lock.yaml 을 커밋하세요"
 artifact:
   types: [apk, aab, ipa]
   analyzer: mobsf
+checks: [env-public-secret]
 checklist: react-native

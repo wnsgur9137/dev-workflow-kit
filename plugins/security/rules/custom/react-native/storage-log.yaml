@@ -1,0 +1,32 @@
+# R2·R4 — AsyncStorage 토큰 저장, __DEV__ 밖 민감 로그 (docs/security/07 스택별 설계/Flutter·React Native.md)
+rules:
+  - id: insecure-storage
+    message: >-
+      AsyncStorage 는 암호화되지 않은 저장소입니다. 토큰·비밀번호는 react-native-keychain·expo-secure-store 에 저장하세요.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: ["CWE-312: Cleartext Storage of Sensitive Information"]
+      owasp: ["M2: Insecure Data Storage"]
+      stack: react-native
+    patterns:
+      - pattern: AsyncStorage.setItem(...)
+      - pattern-regex: (?i)setItem\(\s*['"`][^'"`\n]{0,100}(token|password|passwd|secret|credential|session)
+  - id: sensitive-log
+    message: >-
+      토큰·비밀번호로 보이는 값을 __DEV__ 분기 밖에서 로그로 출력합니다. 릴리스 빌드에도 남아 기기 로그로 새어 나갈 수 있습니다.
+    severity: INFO
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
+      stack: react-native
+    patterns:
+      - pattern-either:
+          - pattern: console.log(...)
+          - pattern: console.info(...)
+          - pattern: console.debug(...)
+      - pattern-not-inside: |
+          if (__DEV__) { ... }
+      - pattern-regex: (?i)(token|password|passwd|secret|credential)

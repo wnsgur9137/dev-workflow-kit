@@ -1,0 +1,33 @@
+# F4 — 인증서 검증 우회·평문 HTTP URL (docs/security/07 스택별 설계/Flutter·React Native.md)
+rules:
+  - id: bad-certificate-callback
+    message: >-
+      badCertificateCallback 이 항상 true 를 돌려 TLS 인증서 검증을 끕니다. 중간자 공격으로 통신을 가로챌 수 있습니다.
+      개발용이라도 릴리스 빌드에 남지 않게 하고, 자체 서명 인증서는 SecurityContext 에 신뢰 루트로 추가하세요.
+    severity: ERROR
+    languages: [dart]
+    metadata:
+      category: security
+      cwe: ["CWE-295: Improper Certificate Validation"]
+      owasp: ["M3: Insecure Communication"]
+      stack: flutter
+    pattern-either:
+      - pattern: $C.badCertificateCallback = (...) => true
+      - pattern: |
+          $C.badCertificateCallback = (...) { return true; }
+  - id: insecure-http-url
+    message: >-
+      평문 http:// 주소로 요청합니다. Android 9+·iOS ATS 기본 설정에서 막히거나, 허용돼 있다면 통신이 노출됩니다. https 를 쓰세요.
+    severity: WARNING
+    languages: [dart]
+    metadata:
+      category: security
+      cwe: ["CWE-319: Cleartext Transmission of Sensitive Information"]
+      owasp: ["M3: Insecure Communication"]
+      stack: flutter
+    # 로컬 개발 주소(localhost·127.0.0.1·에뮬레이터 10.0.2.2)는 제외
+    pattern-either:
+      - pattern: Uri.parse("=~/^http:\/\/(?!localhost|127\.0\.0\.1|10\.0\.2\.2)/")
+      - pattern: $H.get(Uri.parse("=~/^http:\/\/(?!localhost|127\.0\.0\.1|10\.0\.2\.2)/"), ...)
+      - pattern: $D.get("=~/^http:\/\/(?!localhost|127\.0\.0\.1|10\.0\.2\.2)/", ...)
+      - pattern: $D.post("=~/^http:\/\/(?!localhost|127\.0\.0\.1|10\.0\.2\.2)/", ...)
