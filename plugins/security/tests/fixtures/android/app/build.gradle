@@ -1,0 +1,14 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.example.fx'
+    compileSdk 34
+    buildTypes {
+        release {
+            // 난독화 꺼짐 (A5)
+            minifyEnabled false
+        }
+    }
+}

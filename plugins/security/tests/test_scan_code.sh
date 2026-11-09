@@ -394,3 +394,22 @@ test_real_scan_code_server_baseline() {
     fail "설정 파일 비밀번호 값이 리포트에 남음"
   fi
 }
+
+# S-Android: 안드로이드 픽스처 기준선 (A1~A8)
+test_real_scan_code_android_baseline() {
+  _real_ready || exit 77
+  mkdir -p "$HOME/.cache/dev-workflow-kit-tests"
+  AND_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/android.XXXXXX")
+  trap 'rm -rf "$AND_DIR"; [ -n "${AND_RUN:-}" ] && rm -rf "$AND_RUN"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+  cp -R "$TESTS_DIR/fixtures/android/." "$AND_DIR/"
+  mv "$AND_DIR/gradle.lockfile.fixture" "$AND_DIR/app/gradle.lockfile"
+  local summary
+  summary=$("$SCAN" "$AND_DIR" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  AND_RUN=$(dirname "$summary")
+  assert_eq "$(awk -F '\t' '$2 != "ok" && $1 != "gitleaks-git"' "$AND_RUN/raw/status.tsv")" "" "(도구 실패)"
+  _check_baseline "$AND_RUN/findings.json" "$TESTS_DIR/baseline/android.json"
+  if grep -rqF "fixture-store-pw" "$AND_RUN"; then
+    fail "서명 비밀번호 값이 리포트에 남음"
+  fi
+}
