@@ -76,6 +76,9 @@ _SECRET_PATTERNS = [
     # 32자 이상 고엔트로피 토큰 (hex/base64 계열)
     (re.compile(r"\b[A-Za-z0-9+/_\-]{40,}={0,2}"), "[MASKED-TOKEN]"),
 ]
+# 식별자(경로·패키지·규칙 ID)용 — 마지막 두 패턴(키=값, 고엔트로피)은 쓰지 않는다.
+# 키=값 패턴은 Maven 좌표(com.auth0:java-jwt)·`AuthController.kt:1024` 를, 고엔트로피 패턴은 긴 경로를 망가뜨린다 (PR #26 리뷰)
+_IDENT_SECRET_PATTERNS = _SECRET_PATTERNS[:-2]
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
 
 
@@ -100,12 +103,14 @@ def clean_text(text, limit: int, single_line: bool = False) -> str:
 
 
 def clean_ident(text, limit: int) -> str:
-    """경로·패키지·규칙 ID 같은 식별자 — 제어문자 제거·한 줄·길이 제한만 한다.
-    시크릿 재마스킹은 하지 않는다: 40자 이상 이어진 경로(app/src/main/res/xml/network_security_config)가
+    """경로·패키지·규칙 ID 같은 식별자 — 제어문자 제거·한 줄·길이 제한, 그리고 접두사 토큰·URL 자격증명 재마스킹.
+    키=값·고엔트로피 패턴은 쓰지 않는다: 40자 이상 이어진 경로(app/src/main/res/xml/network_security_config)가
     고엔트로피 토큰 패턴에 걸려 [MASKED-TOKEN] 으로 바뀌던 문제 (다른 도구의 location 도 마스킹하지 않는다)."""
     if text is None:
         return ""
     t = re.sub(r"\s+", " ", _CONTROL.sub("", str(text))).strip()
+    for rx, repl in _IDENT_SECRET_PATTERNS:     # 개인키·접두사 토큰·URL 자격증명·Bearer 만 가린다
+        t = rx.sub(repl, t)
     return t if len(t) <= limit else t[: limit - 1] + "…"
 
 
@@ -488,7 +493,7 @@ def _cell(text) -> str:
 
 
 def _code(text) -> str:
-    """짧은 식별자(경로·규칙 ID·프로파일 라벨)는 인라인 코드로 감싼다 — 마스킹 없이 정제만 (긴 경로가 가려지지 않게)."""
+    """짧은 식별자(경로·규칙 ID·프로파일 라벨)는 인라인 코드로 감싼다 — clean_ident 로 정제(긴 경로·Maven 좌표가 가려지지 않게)."""
     t = clean_ident(text, 200)
     return "`" + t.replace("|", "\\|").replace("`", "'") + "`"
 

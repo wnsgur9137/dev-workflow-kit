@@ -10,6 +10,7 @@ class MainActivity : Activity() {
         val web = WebView(this)
         web.settings.javaScriptEnabled = true
         web.settings.allowFileAccess = true
+        web.settings.apply { allowUniversalAccessFromFileURLs = true }
         web.addJavascriptInterface(Bridge(), "bridge")
         web.loadUrl(intent.getStringExtra("url") ?: "https://example.com")
         setContentView(web)
