@@ -100,12 +100,14 @@ def clean_text(text, limit: int, single_line: bool = False) -> str:
 
 
 def clean_ident(text, limit: int) -> str:
-    """경로·패키지·규칙 ID 같은 식별자 — 제어문자 제거·한 줄·길이 제한만 한다.
-    시크릿 재마스킹은 하지 않는다: 40자 이상 이어진 경로(app/src/main/res/xml/network_security_config)가
+    """경로·패키지·규칙 ID 같은 식별자 — 제어문자 제거·한 줄·길이 제한, 그리고 고엔트로피 토큰을 뺀 시크릿 재마스킹.
+    고엔트로피 패턴은 쓰지 않는다: 40자 이상 이어진 경로(app/src/main/res/xml/network_security_config)가
     고엔트로피 토큰 패턴에 걸려 [MASKED-TOKEN] 으로 바뀌던 문제 (다른 도구의 location 도 마스킹하지 않는다)."""
     if text is None:
         return ""
     t = re.sub(r"\s+", " ", _CONTROL.sub("", str(text))).strip()
+    for rx, repl in _SECRET_PATTERNS[:-1]:      # URL 자격증명·접두사 토큰 등은 그대로 가린다 (고엔트로피 패턴만 제외)
+        t = rx.sub(repl, t)
     return t if len(t) <= limit else t[: limit - 1] + "…"
 
 

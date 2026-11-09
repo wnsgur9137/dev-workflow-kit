@@ -151,7 +151,7 @@ def strip_js_comments(text):
     """
     out, i, n, quote = [], 0, len(text), None
     prev = ""            # 마지막으로 낸 공백 아닌 문자 (정규식 리터럴 판정용)
-    prev_word = ""
+    prev_word, in_word = "", False
     while i < n:
         c = text[i]
         if quote:
@@ -198,18 +198,22 @@ def strip_js_comments(text):
             if j < n and text[j] == "/":
                 out.append(text[i:j + 1])
                 i = j + 1
-                prev, prev_word = "/", ""
+                prev, prev_word, in_word = "/", "", False
             else:                # 줄 안에서 끝나지 않으면 나눗셈으로 본다
                 out.append(c)
                 prev = c
                 i += 1
         else:
             out.append(c)
-            if not c.isspace():
+            if c.isspace():
+                in_word = False                                # 공백에서 단어가 끝난다 (이전: 계속 이어 붙어 이차 시간)
+            else:
                 if c.isalnum() or c in "_$":
-                    prev_word = (prev_word + c) if (prev.isalnum() or prev in "_$") else c
+                    # return·typeof 판정에는 최근 몇 글자면 충분 — 길이를 제한해 선형으로 둔다
+                    prev_word = ((prev_word + c) if in_word else c)[-8:]
+                    in_word = True
                 else:
-                    prev_word = ""
+                    prev_word, in_word = "", False
                 prev = c
             i += 1
     return "".join(out)
@@ -903,7 +907,11 @@ def check_spring_config_secret(ctx):
 # android
 # ---------------------------------------------------------------------------
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
+TOOLS_NODE = "{http://schemas.android.com/tools}node"
 COMPONENTS = ("activity", "activity-alias", "service", "receiver", "provider")
+# 디버그·테스트 소스셋의 Manifest 는 일부러 debuggable·cleartext 를 켜는 경우가 흔하다 — low 로 낮춘다
+ANDROID_DEBUG_SOURCESET = re.compile(r"(^|/)src/(debug|androidTest|test)[^/]*/")
+RES_NAME = re.compile(r"[A-Za-z0-9_]+")
 
 
 def parse_xml(ctx, rel, full):
@@ -922,8 +930,23 @@ def parse_xml(ctx, rel, full):
         return None, None
 
 
+class _LineCursor:
+    """문서 순서대로 찾으며 줄 번호를 이어 센다 (선형) — 같은 문자열이 여러 번 나와도 앞에서부터 차례로."""
+
+    def __init__(self, text):
+        self.text, self.pos, self.line = text or "", 0, 1
+
+    def find(self, needle):
+        k = self.text.find(needle, self.pos)
+        if k < 0:
+            return None
+        self.line += self.text.count("\n", self.pos, k)
+        self.pos = k
+        return self.line
+
+
 def _xml_line(text, needle, start=0):
-    pos = text.find(needle, start)
+    pos = (text or "").find(needle, start)
     return (text.count("\n", 0, pos) + 1) if pos >= 0 else 1
 
 
@@ -942,7 +965,7 @@ def _is_launcher(el):
 
 def check_android_manifest(ctx):
     """A2·A3·A4 — AndroidManifest.xml 의 debuggable·allowBackup·usesCleartextTraffic, 권한 없는 exported 컴포넌트,
-    networkSecurityConfig 의 cleartextTrafficPermitted·사용자 CA 신뢰."""
+    networkSecurityConfig 의 cleartextTrafficPermitted·사용자 CA 신뢰(debug-overrides 밖). 디버그·테스트 소스셋은 low."""
     out = []
     for rel, full in ctx.files(lambda rel, name: name == "AndroidManifest.xml"):
         root, text = parse_xml(ctx, rel, full)
@@ -951,89 +974,120 @@ def check_android_manifest(ctx):
         app = root.find("application")
         if app is None:
             continue
-        line = _xml_line(text, "<application")
-        if _attr(app, "debuggable") == "true":
+        debug_set = bool(ANDROID_DEBUG_SOURCESET.search(rel))
+
+        def sev(normal):
+            return "low" if debug_set else normal
+
+        cur = _LineCursor(text)
+        cur.find("<application")
+        nsc = _attr(app, "networkSecurityConfig")
+        for attr, rid, normal, title, hint, cwe in (
+            ("debuggable", "android.manifest-debuggable", "high",
+             "android:debuggable=\"true\" — 릴리스 빌드에 남으면 디버거 연결·데이터 추출이 가능합니다",
+             "Manifest 에서 debuggable 을 지우세요(빌드 타입이 정합니다).", "CWE-489"),
+            ("allowBackup", "android.manifest-allow-backup", "medium",
+             "android:allowBackup=\"true\" — adb backup·클라우드 백업으로 앱 데이터가 밖으로 나갈 수 있습니다",
+             "false 로 두거나 dataExtractionRules·fullBackupContent 로 민감 데이터를 제외하세요.", "CWE-530"),
+            ("usesCleartextTraffic", "android.manifest-cleartext", "high",
+             "android:usesCleartextTraffic=\"true\" — 평문 HTTP 통신을 허용합니다",
+             "false 로 두고, 꼭 필요한 도메인만 network_security_config 의 domain-config 로 허용하세요.", "CWE-319"),
+        ):
+            if _attr(app, attr) != "true":
+                continue
+            s_ = sev(normal)
+            note = ""
+            if attr == "usesCleartextTraffic" and nsc:
+                s_, note = sev("medium"), " (networkSecurityConfig 가 있어 API 24 이상에서는 그 설정이 우선)"
             out.append(ctx.finding(
-                "android-manifest", "android.manifest-debuggable", "high", "mobile", rel, _xml_line(text, "debuggable"),
-                "android:debuggable=\"true\" — 릴리스 빌드에 남으면 디버거 연결·데이터 추출이 가능합니다",
-                evidence="application android:debuggable=\"true\"",
-                fix_hint="Manifest 에서 debuggable 을 지우세요(빌드 타입이 정합니다).", references=["CWE-489"]))
-        if _attr(app, "allowBackup") == "true":
-            out.append(ctx.finding(
-                "android-manifest", "android.manifest-allow-backup", "medium", "mobile", rel, _xml_line(text, "allowBackup"),
-                "android:allowBackup=\"true\" — adb backup·클라우드 백업으로 앱 데이터가 밖으로 나갈 수 있습니다",
-                evidence="application android:allowBackup=\"true\"",
-                fix_hint="false 로 두거나 dataExtractionRules·fullBackupContent 로 민감 데이터를 제외하세요.", references=["CWE-530"]))
-        if _attr(app, "usesCleartextTraffic") == "true":
-            out.append(ctx.finding(
-                "android-manifest", "android.manifest-cleartext", "high", "mobile", rel, _xml_line(text, "usesCleartextTraffic"),
-                "android:usesCleartextTraffic=\"true\" — 평문 HTTP 통신을 허용합니다",
-                evidence="application android:usesCleartextTraffic=\"true\"",
-                fix_hint="false 로 두고, 꼭 필요한 도메인만 network_security_config 의 domain-config 로 허용하세요.", references=["CWE-319"]))
+                "android-manifest", rid, s_, "mobile", rel, _xml_line(text, f'android:{attr}=', cur.pos),
+                title, evidence=f"application android:{attr}=\"true\"{note}" + (" — 디버그·테스트 소스셋" if debug_set else ""),
+                fix_hint=hint, references=[cwe]))
+        app_perm = _attr(app, "permission")      # application 의 permission 은 컴포넌트 기본값이다
         for el in app:
-            if el.tag not in COMPONENTS or _attr(el, "exported") != "true":
+            if el.tag not in COMPONENTS:
+                continue
+            name = _attr(el, "name") or "?"
+            line = cur.find(f'"{name}"') if name != "?" else None
+            if _attr(el, "exported") != "true" or el.get(TOOLS_NODE) in ("remove", "removeAll"):
                 continue
             if el.tag in ("activity", "activity-alias") and _is_launcher(el):
                 continue
-            perms = [_attr(el, k) for k in ("permission", "readPermission", "writePermission")]
-            if any(perms):
+            if app_perm or any(_attr(el, k) for k in ("permission", "readPermission", "writePermission")):
                 continue
-            name = _attr(el, "name") or "?"
             out.append(ctx.finding(
-                "android-manifest", "android.manifest-exported-component", "high", "mobile", rel,
-                _xml_line(text, f'"{name}"', text.find("<application")),
+                "android-manifest", "android.manifest-exported-component", sev("high"), "mobile", rel, line,
                 "권한 없이 exported 된 컴포넌트 — 다른 앱이 호출할 수 있습니다",
                 evidence=f"{el.tag} {name}: exported=\"true\", permission 없음",
                 fix_hint="외부 호출이 필요 없으면 exported=\"false\", 필요하면 signature 수준 permission 을 지정하세요.",
                 references=["CWE-926"]))
-        nsc = _attr(app, "networkSecurityConfig")
+            if len(out) > MAX_RESULTS_PER_CHECK:
+                break
         if nsc and nsc.startswith("@xml/"):
-            nsc_rel = os.path.join(os.path.dirname(rel), "res", "xml", nsc[5:] + ".xml")
+            res = nsc[5:]
+            if not RES_NAME.fullmatch(res):
+                ctx.warn(f"{rel}: networkSecurityConfig 값이 리소스 이름 형식이 아니어서 확인하지 않았습니다")
+                continue
+            nsc_rel = os.path.normpath(os.path.join(os.path.dirname(rel), "res", "xml", res + ".xml"))
             nsc_full = os.path.join(ctx.target, nsc_rel)
             if os.path.isfile(nsc_full) and not os.path.islink(nsc_full):
-                out += _check_nsc(ctx, nsc_rel, nsc_full)
+                out += _check_nsc(ctx, nsc_rel, nsc_full, debug_set)
+            else:
+                ctx.warn(f"{rel}: networkSecurityConfig 가 가리키는 {nsc_rel} 을 찾지 못해 확인하지 않았습니다 (다른 소스셋·flavor 일 수 있음)")
     return out
 
 
-def _check_nsc(ctx, rel, full):
-    out = []
+def _check_nsc(ctx, rel, full, debug_set=False):
+    """network_security_config — base-config·domain-config 의 평문 허용과 사용자 CA (debug-overrides 는 디버그 빌드 전용이라 제외)."""
+    out, seen = [], set()
     root, text = parse_xml(ctx, rel, full)
     if root is None:
         return out
+    cur = _LineCursor(text)
     for el in root.iter():
-        if el.tag in ("base-config", "domain-config") and el.get("cleartextTrafficPermitted") == "true":
+        if el.tag not in ("base-config", "domain-config"):
+            continue
+        line = cur.find("<" + el.tag)
+        if el.get("cleartextTrafficPermitted") == "true" and ("cleartext", line) not in seen:
+            seen.add(("cleartext", line))
             scope = "전체" if el.tag == "base-config" else "일부 도메인"
+            normal = "high" if el.tag == "base-config" else "medium"
             out.append(ctx.finding(
-                "android-manifest", "android.nsc-cleartext", "high" if el.tag == "base-config" else "medium", "mobile", rel,
-                _xml_line(text, "cleartextTrafficPermitted"),
+                "android-manifest", "android.nsc-cleartext", "low" if debug_set else normal, "mobile", rel, line,
                 f"network_security_config 가 평문 HTTP 를 허용합니다 ({scope})",
                 evidence=f"{el.tag} cleartextTrafficPermitted=\"true\"",
                 fix_hint="평문이 꼭 필요한 개발용 도메인만 domain-config 로 허용하고 base-config 는 false 로 두세요.",
                 references=["CWE-319"]))
-    for anchors in root.iter("trust-anchors"):
-        if any(c.get("src") == "user" for c in anchors.iter("certificates")):
-            out.append(ctx.finding(
-                "android-manifest", "android.nsc-user-certs", "medium", "mobile", rel, _xml_line(text, 'src="user"'),
-                "network_security_config 가 사용자 설치 CA 를 신뢰합니다 — 중간자 공격 프록시가 TLS 를 가로챌 수 있습니다",
-                evidence="trust-anchors 에 certificates src=\"user\"",
-                fix_hint="debug-overrides 안으로 옮겨 디버그 빌드에서만 허용하세요.", references=["CWE-295"]))
-            break
+        for anchors in el.findall("trust-anchors"):
+            if any(c.get("src") == "user" for c in anchors.findall("certificates")) and ("user", line) not in seen:
+                seen.add(("user", line))
+                out.append(ctx.finding(
+                    "android-manifest", "android.nsc-user-certs", "low" if debug_set else "medium", "mobile", rel, line,
+                    "network_security_config 가 사용자 설치 CA 를 신뢰합니다 — 중간자 공격 프록시가 TLS 를 가로챌 수 있습니다",
+                    evidence=f"{el.tag} 의 trust-anchors 에 certificates src=\"user\"",
+                    fix_hint="debug-overrides 안으로 옮겨 디버그 빌드에서만 허용하세요.", references=["CWE-295"]))
     return out
 
 
 GRADLE_FILE = re.compile(r"(^|/)build\.gradle(\.kts)?$")
+APP_PLUGIN_LINE = re.compile(r"com\.android\.application|libs\.plugins\.android\.application|android\.application")
+RELEASE_BLOCK = re.compile(r"(?:\brelease|\b(?:getByName|named|maybeCreate|create)\([ \t]*[\"']release[\"'][ \t]*\)(?:\.apply)?)[ \t]*\{")
+MINIFY_ON = re.compile(r"\b(?:is)?[mM]inifyEnabled[ \t]*(?:=[ \t]*|\([ \t]*)?true\b")
 
 
 def _brace_block(code, start):
-    """code[start] 가 '{' 일 때 짝이 맞는 '}' 까지의 내용 (주석은 이미 지운 코드). 못 찾으면 None."""
-    depth, quote = 0, None
-    for k in range(start, min(len(code), start + 200_000)):
+    """code[start] 가 '{' 일 때 짝이 맞는 '}' 까지의 내용 (주석은 이미 지운 코드). 못 찾으면 None.
+    문자열 안의 중괄호는 무시하고, 백슬래시는 다음 문자를 건너뛴다 ('C:\\\\' 처럼 이스케이프된 백슬래시)."""
+    depth, quote, k, end = 0, None, start, min(len(code), start + 200_000)
+    while k < end:
         c = code[k]
         if quote:
-            if c == quote and code[k - 1] != "\\":
+            if c == "\\":
+                k += 2
+                continue
+            if c == quote:
                 quote = None
-            continue
-        if c in "'\"":
+        elif c in "'\"":
             quote = c
         elif c == "{":
             depth += 1
@@ -1041,7 +1095,16 @@ def _brace_block(code, start):
             depth -= 1
             if depth == 0:
                 return code[start + 1:k]
+        k += 1
     return None
+
+
+def _is_android_app_module(text):
+    """앱 모듈 빌드 파일인지 — 플러그인 선언 줄에 apply false 가 붙은 루트 빌드 파일은 아니다 (원문에서 먼저 거른다)."""
+    for line in text.splitlines():
+        if APP_PLUGIN_LINE.search(line) and "apply false" not in line and "apply(false)" not in line:
+            return True
+    return False
 
 
 def check_android_gradle_release(ctx):
@@ -1049,23 +1112,23 @@ def check_android_gradle_release(ctx):
     out = []
     for rel, full in ctx.files(lambda rel, name: bool(GRADLE_FILE.search(rel))):
         text = ctx.read(full)
-        if text is None:
+        if text is None or not _is_android_app_module(text):
             continue
         code = strip_js_comments(text)      # Groovy·Kotlin 주석 문법이 같다
-        if "com.android.application" not in code and "libs.plugins.android.application" not in code:
+        if not re.search(r"\bandroid[ \t]*\{", code):
             continue
-        m = re.search(r"\bbuildTypes[ \t]*\{", code)
-        release = None
-        if m:
-            types = _brace_block(code, m.end() - 1) or ""
-            r = re.search(r"(\brelease|getByName\([ \t]*[\"']release[\"'][ \t]*\))[ \t]*\{", types)
+        release, line = None, 1
+        for m in re.finditer(r"\bbuildTypes[ \t]*\n?[ \t]*\{", code):   # 문자열 안 'buildTypes {' 같은 가짜 일치를 건너뛴다
+            types = _brace_block(code, m.end() - 1)
+            if types is None:
+                continue
+            line = code.count("\n", 0, m.start()) + 1
+            r = RELEASE_BLOCK.search(types)
             if r:
                 release = _brace_block(types, r.end() - 1)
-        # 공백 수량자가 연달아 붙지 않게 쓴다 (= 가 없을 때 [ \t]*[ \t]* 이차 백트래킹 방지)
-        enabled = release is not None and re.search(r"\b(?:is)?[mM]inifyEnabled[ \t]*(?:=[ \t]*)?true\b", release)
-        if enabled:
+                break
+        if release is not None and MINIFY_ON.search(release):
             continue
-        line = code.count("\n", 0, m.start()) + 1 if m else 1
         out.append(ctx.finding(
             "android-gradle-release", "android.gradle-release-minify-disabled", "medium", "mobile", rel, line,
             "release 빌드에서 코드 축소·난독화(R8)가 꺼져 있습니다",
@@ -1077,7 +1140,8 @@ def check_android_gradle_release(ctx):
 
 
 GRADLE_PROPS = re.compile(r"(^|/)(gradle|local|keystore|signing)\.properties$")
-ANDROID_SECRET_KEY = re.compile(r"(password|passwd|secret|token|api[-_]?key|private[-_]?key)", re.I)
+# 끝을 고정한다 — TOKEN_URL·secretsPropertiesFile·keystorePasswordFile 같은 위치 키를 비밀로 보지 않게
+ANDROID_SECRET_KEY = re.compile(r"(password|passwd|pwd|secret|token|api[-_]?key|private[-_]?key)$", re.I)
 
 
 def check_android_properties_secret(ctx):
@@ -1101,7 +1165,7 @@ def check_android_properties_secret(ctx):
                 out.append(ctx.finding(
                     "android-properties-secret", "android.properties-secret", "high", "secret", rel, n,
                     "properties 파일의 비밀 키에 평문 값이 있습니다 (서명 키 비밀번호 등)",
-                    evidence=f"키: {key} — 값은 리포트에 남기지 않습니다",
+                    evidence=f"키: {key[:60]} — 값은 리포트에 남기지 않습니다",
                     fix_hint="~/.gradle/gradle.properties(저장소 밖)나 CI 시크릿으로 옮기고, 커밋됐다면 키를 교체하세요.",
                     references=["CWE-798"]))
     return out

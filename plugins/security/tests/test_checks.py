@@ -563,6 +563,64 @@ class ChecksTest(unittest.TestCase):
                 os.remove(path)
             self.assertLess(times[1], max(times[0] * 3.0, 0.3), (name, times))
 
+    def test_android_review_cases(self):
+        """PR #26 리뷰 재현 사례"""
+        # 루트 빌드 파일의 apply false 는 대상 아님, Kotlin DSL 변형은 정상 판정
+        _w(os.path.join(self.t, "build.gradle"), "plugins {\n  id 'com.android.application' version '8.5.0' apply false\n}\n")
+        _w(os.path.join(self.t, "build.gradle.kts"), "plugins {\n  alias(libs.plugins.android.application) apply false\n}\n")
+        _w(os.path.join(self.t, "k/build.gradle.kts"), 'plugins { id("com.android.application") }\nandroid {\n  buildTypes\n  {\n'
+           '    named("release") { isMinifyEnabled = true }\n  }\n}\n')
+        _w(os.path.join(self.t, "g/build.gradle"), "plugins { id 'com.android.application' }\nandroid {\n  buildTypes {\n"
+           "    debug { resValue 'string', 'p', 'C:\\\\' }\n    release { minifyEnabled(true) }\n  }\n}\n")
+        # application permission 기본값·tools:node=remove·디버그 소스셋·nsc 이름 검증·debug-overrides
+        _w(os.path.join(self.t, "app/src/main/AndroidManifest.xml"), """<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <application android:permission="com.x.SIG" android:networkSecurityConfig="@xml/../../../../build/nsc">
+    <service android:name=".A" android:exported="true"/>
+  </application>
+</manifest>""")
+        _w(os.path.join(self.t, "lib/src/main/AndroidManifest.xml"), """<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <application android:networkSecurityConfig="@xml/nsc">
+    <service android:name="com.lib.S" android:exported="true" tools:node="remove"/>
+    <service android:name=".B" android:exported="true"/>
+  </application>
+</manifest>""")
+        _w(os.path.join(self.t, "lib/src/main/res/xml/nsc.xml"),
+           '<network-security-config><base-config cleartextTrafficPermitted="false"/>'
+           '<debug-overrides><trust-anchors><certificates src="user"/></trust-anchors></debug-overrides></network-security-config>')
+        _w(os.path.join(self.t, "app/src/debug/AndroidManifest.xml"),
+           '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:debuggable="true"/></manifest>')
+        _w(os.path.join(self.t, "gradle.properties"),
+           "TOKEN_URL=https://auth.example.com/token\nsecretsPropertiesFile=secrets.properties\nkeystorePasswordFile=../pw.txt\n")
+        report = checks.run(self.t, [("android", ".", [])], self.defs)
+        got = sorted((r["rule_id"], r["file"], r["severity"]) for r in report["results"])
+        self.assertEqual(got, [("android.manifest-debuggable", "app/src/debug/AndroidManifest.xml", "low"),
+                               ("android.manifest-exported-component", "lib/src/main/AndroidManifest.xml", "high")])
+        self.assertTrue(any("리소스 이름 형식" in w for w in report["warnings"]))
+
+    def test_android_manifest_lines_are_linear(self):
+        def manifest(n):
+            comps = "".join(f'<service android:name=".S{i}" android:exported="true"/>\n' for i in range(n))
+            return f'<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>\n{comps}</application></manifest>'
+        times = []
+        for n in (4000, 8000):
+            _w(os.path.join(self.t, "AndroidManifest.xml"), manifest(n))
+            t0 = time.time()
+            rs = checks.run(self.t, [("android", ".", [])], self.defs)["results"]
+            times.append(time.time() - t0)
+            self.assertTrue(rs)
+        self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
+    def test_strip_js_comments_word_runs_are_linear(self):
+        """PR #26 리뷰: prev_word 가 공백에서 초기화되지 않아 'a a a …' 에서 이차였다"""
+        f = checks.strip_js_comments
+        self.assertEqual(f("x = 1\nreturn /re/ // c"), "x = 1\nreturn /re/ ")
+        times = []
+        for n in (100_000, 200_000):
+            t0 = time.time()
+            f("a " * n)
+            times.append(time.time() - t0)
+        self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
     def test_android_fixture_expectations(self):
         import shutil
         shutil.copytree(os.path.join(HERE, "fixtures", "android"), self.t, dirs_exist_ok=True)
