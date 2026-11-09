@@ -1294,7 +1294,7 @@ def check_ios_xcconfig_secret(ctx):
             # 줄 끝 주석은 공백 뒤 // 만 (URL 의 :// 는 값이다)
             key, value = m.group(1), m.group(2).split(" //", 1)[0].strip()
             ok, _note = _secret_value(value, key)
-            if ANDROID_SECRET_KEY.search(key) and ok and not value.startswith("$("):
+            if is_secret_key(key) and ok and not value.startswith("$("):
                 out.append(ctx.finding(
                     "ios-xcconfig-secret", "ios.xcconfig-secret", "high", "secret", rel, n,
                     "xcconfig 의 비밀 키에 평문 값이 있습니다 — 앱 번들(Info.plist·바이너리)에 들어갈 수 있습니다",

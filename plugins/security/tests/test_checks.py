@@ -719,6 +719,17 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual([(r["line"], r["evidence"].split(" ")[1]) for r in rs], [(2, "API_TOKEN"), (6, "SIGN_PASSWORD")])
         self.assertNotIn(value, json.dumps(rs))
 
+    def test_ios_checks_line_length_is_linear(self):
+        """리뷰 교훈: 줄 길이를 2배로 늘려도 이차가 아니다 (해당 경로를 거치는지 결과로 확인)"""
+        times = []
+        for width in (1900, 3800):
+            _w(os.path.join(self.t, "C.xcconfig"), "".join(f"API_TOKEN{' ' * width}= v\n" for _ in range(150)))
+            t0 = time.time()
+            rs = self.run_checks([("ios", ".", [])])["results"]
+            times.append(time.time() - t0)
+            self.assertTrue(rs)
+        self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
     def test_ios_fixture_expectations(self):
         import shutil
         shutil.copytree(os.path.join(HERE, "fixtures", "ios"), self.t, dirs_exist_ok=True)
