@@ -141,14 +141,37 @@ if [ -d "$SEC_CONF/semgrep-custom" ] && [ -n "$(ls -A "$SEC_CONF/semgrep-custom"
   SEMGREP_ARGS+=(--config /user)
 fi
 
+# 대상 저장소가 도구 결과를 억제하는 설정을 갖고 있으면 알린다 (툴킷은 그 설정을 쓰지 않지만,
+# .semgrepignore 는 Semgrep 이 끌 수 없으므로 해당 경로가 점검되지 않을 수 있다)
+SUPPRESS=$(find "$TARGET" \( -name node_modules -o -name .git -o -name Pods -o -name build \) -prune -o -type f \
+  \( -name .gitleaks.toml -o -name .gitleaksignore -o -name .semgrepignore -o -name osv-scanner.toml \) -print 2>/dev/null |
+  cut -c$((${#TARGET} + 2))- | head -n 5 | tr '\n' ' ')
+if [ -n "$SUPPRESS" ]; then
+  printf '%s\n' "대상 저장소에 결과 억제 설정이 있습니다: ${SUPPRESS}— .gitleaks.toml·.gitleaksignore·osv-scanner.toml 은 무시하고 툴킷 설정으로 점검했지만, .semgrepignore 에 적힌 경로는 Semgrep 이 점검하지 않았을 수 있습니다." >>"$WARNINGS_FILE"
+fi
+
+# 컨테이너가 결과 파일을 새로 만들면 컨테이너 umask(644)로 생긴다. 권한 600 빈 파일을 미리 만들어 두면
+# semgrep·osv-scanner 는 기존 파일을 덮어쓰므로 권한이 유지된다 (실측. gitleaks 는 stdout 으로 받는다)
+precreate() { (umask 077 && : >"$1"); }
+
 record() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$STATUS"; }
 tail_log() { tail -n 3 "$1" 2>/dev/null | tr '\n\t' '  ' | cut -c1-280; }
 
 run_semgrep() {
+  # 실행할 규칙이 하나도 없으면 실행하지 않는다 (bash 3.2 는 set -u 에서 빈 배열 확장이 오류다)
+  local a has_rule=0
+  for a in ${SEMGREP_ARGS[@]+"${SEMGREP_ARGS[@]}"}; do
+    [ "$a" = --config ] && has_rule=1
+  done
+  if [ $has_rule -eq 0 ]; then
+    record semgrep failed - "실행할 규칙셋이 없습니다 (generic 규칙이 설치되지 않음 — update.sh --rules)"
+    return
+  fi
+  precreate "$RAW/semgrep.json"
   docker run "${DOCKER_HARDEN[@]}" --tmpfs /tmp:rw,size=1g \
     -e SEMGREP_ENABLE_VERSION_CHECK=0 -e SEMGREP_SEND_METRICS=off \
     -v "$TARGET:/src:ro" -v "$RULES_DIR:/rules:ro" ${SEMGREP_MOUNTS[@]+"${SEMGREP_MOUNTS[@]}"} -v "$RAW:/out" \
-    "$IMG_SEMGREP" semgrep scan "${SEMGREP_ARGS[@]}" --metrics=off --disable-version-check \
+    "$IMG_SEMGREP" semgrep scan "${SEMGREP_ARGS[@]}" --disable-nosem --metrics=off --disable-version-check \
     --json -o /out/semgrep.json /src >"$RAW/semgrep.log" 2>&1
   local rc=$?
   # semgrep: 0 정상, 1 발견 있음(--error 미사용 시에도 일부 버전), 그 외 오류
@@ -164,14 +187,17 @@ run_gitleaks() {
   log="$RAW/gitleaks-$mode.log"
   # 호스트 사용자로 실행하면 컨테이너 안 git 이 저장소 소유자 불일치(dubious ownership)로 거부한다.
   # 읽기 전용 루트라 git config 를 쓸 수 없으므로 환경변수로 safe.directory 를 준다.
+  # gitleaks 는 리포트 파일을 지우고 새로 만들어 권한이 644 가 되므로, 리포트는 stdout 으로 받아 호스트가
+  # umask 077(600) 로 쓴다. 로그는 stderr 로 분리된다. 덕분에 gitleaks 에는 쓰기 마운트가 없다.
   docker run "${DOCKER_HARDEN[@]}" --tmpfs /tmp:rw,size=64m \
     -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
-    -v "$TARGET:/repo:ro" -v "$RAW:/out" "$IMG_GITLEAKS" \
-    "$mode" /repo --redact --no-banner --no-color --exit-code 0 \
-    --report-format json --report-path "/out/gitleaks-$mode.json" >"$log" 2>&1
+    -v "$TARGET:/repo:ro" -v "$SEC_PLUGIN/config:/cfg:ro" "$IMG_GITLEAKS" \
+    "$mode" /repo --config /cfg/gitleaks.toml --gitleaks-ignore-path /cfg --ignore-gitleaks-allow \
+    --redact --no-banner --no-color --exit-code 0 \
+    --report-format json --report-path - >"$RAW/gitleaks-$mode.json" 2>"$log"
   rc=$?
   # gitleaks 는 git 오류가 나도 "0 commits scanned" 후 종료코드 0 으로 끝날 수 있다 — 누락을 성공으로 기록하지 않는다
-  if [ $rc -ne 0 ] || [ ! -f "$RAW/gitleaks-$mode.json" ]; then
+  if [ $rc -ne 0 ] || [ ! -s "$RAW/gitleaks-$mode.json" ]; then
     record "gitleaks-$mode" failed "$rc" "$(tail_log "$log")"
   elif grep -q ' ERR ' "$log"; then
     record "gitleaks-$mode" failed "$rc" "도구 오류: $(grep ' ERR ' "$log" | head -n 2 | tr '\n\t' '  ' | cut -c1-240)"
@@ -184,17 +210,26 @@ run_gitleaks() {
 
 run_osv() {
   local rc
+  precreate "$RAW/osv.json"
   docker run "${DOCKER_HARDEN[@]}" --tmpfs /tmp:rw,size=512m \
     -e OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY=/db \
-    -v "$TARGET:/src:ro" -v "$OSV_DB:/db:ro" -v "$RAW:/out" "$IMG_OSV" \
-    scan source -r --offline --offline-vulnerabilities \
+    -v "$TARGET:/src:ro" -v "$OSV_DB:/db:ro" -v "$SEC_PLUGIN/config:/cfg:ro" -v "$RAW:/out" "$IMG_OSV" \
+    scan source -r --offline --offline-vulnerabilities --config /cfg/osv-scanner.toml \
     --format json --output /out/osv.json /src >"$RAW/osv.log" 2>&1
   rc=$?
+  if grep -q 'ignored package' "$RAW/osv.log"; then
+    printf '%s\n' "OSV-Scanner 가 일부 패키지를 무시했습니다: $(grep -o 'Filtered [0-9]* ignored package[^ ]*' "$RAW/osv.log" | head -n 1)" >>"$WARNINGS_FILE"
+  fi
   # osv-scanner: 0 취약점 없음, 1 취약점 있음, 128 패키지(lockfile) 없음
   if { [ $rc -eq 0 ] || [ $rc -eq 1 ]; } && [ -s "$RAW/osv.json" ]; then
     record osv-scanner ok "$rc" ""
   elif [ $rc -eq 128 ]; then
     record osv-scanner skipped "$rc" "lockfile·매니페스트를 찾지 못함"
+  elif grep -q 'could not load db for' "$RAW/osv.log"; then
+    # 오프라인 DB 가 없는 생태계 lockfile 이 하나라도 있으면 osv-scanner 는 전체를 실패시킨다
+    local ecos
+    ecos=$(grep -o 'could not load db for [^ ]* ecosystem' "$RAW/osv.log" | awk '{print $6}' | sort -u | tr '\n' ' ')
+    record osv-scanner failed "$rc" "오프라인 DB 가 없는 생태계(${ecos% }) lockfile 때문에 의존성 점검 전체가 중단됐습니다. update.sh --osv 로 DB 를 갱신하거나, 지원하지 않는 생태계면 해당 lockfile 을 점검에서 빼야 합니다"
   else
     record osv-scanner failed "$rc" "$(tail_log "$RAW/osv.log")"
   fi
@@ -255,4 +290,6 @@ fi
 failed=$(awk -F '\t' '$2 == "failed" { printf "%s ", $1 }' "$STATUS")
 [ -n "$failed" ] && sec_warn "실패한 도구: $failed(summary.md 의 '실행 오류' 참조)"
 sec_log "완료. 요약: $SEC_RUN_DIR/summary.md"
+# 정규화 후 한 번 더 권한 정리 (늦게 보인 컨테이너 생성 파일 포함)
+find "$SEC_RUN_DIR" -type f ! -perm 600 -exec chmod 600 {} + 2>/dev/null
 printf '%s\n' "$SEC_RUN_DIR/summary.md"

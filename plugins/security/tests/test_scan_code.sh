@@ -114,14 +114,23 @@ _make_target() {
       printf 'AWS_ACCESS_KEY_ID = "%s"\n' "$AWS_KEY" >config.py &&
       git add -A && git commit -qm init && git rm -q config.py && git commit -qm "remove key"
   ) || return 1
-  printf 'token = "%s"\n' "$GH_TOKEN_FAKE" >"$t/.env.local"
+  # 도구의 인라인 억제 주석이 있어도 탐지해야 한다 (--ignore-gitleaks-allow, --disable-nosem)
+  printf 'token = "%s"  # gitleaks:allow\n' "$GH_TOKEN_FAKE" >"$t/.env.local"
+  sed -i.bak 's|innerHTML = |innerHTML = /* nosemgrep */ |' "$t/web/render.js" && rm -f "$t/web/render.js.bak"
+  # 일반 형태 시크릿 (따옴표로 감싼 키) — Semgrep 시크릿 규칙 경로로 원문이 새면 안 된다 (PR #19 C1)
+  PLAIN_PW="Pw$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 18)"
+  mkdir -p "$t/app" && printf '{\n  "password": "%s"\n}\n' "$PLAIN_PW" >"$t/app/config.json"
+  # 대상 저장소의 억제 설정 — 툴킷은 이를 쓰지 않아야 한다 (PR #19 W2, 위협 모델 T5)
+  printf "[allowlist]\npaths = ['.*']\n" >"$t/.gitleaks.toml"
+  printf '[[PackageOverrides]]\nname = "requests"\nignore = true\n' >"$t/osv-scanner.toml"
   TARGET_DIR=$t
 }
 
 test_real_scan_code_end_to_end() {
   _real_ready || exit 77
   _make_target || fail "대상 저장소 생성 실패 (git 필요)"
-  trap 'rm -rf "$TARGET_DIR"; [ -n "${RUN_DIR:-}" ] && rm -rf "$RUN_DIR"' EXIT
+  # run.sh 의 SEC_TMP 정리 trap 을 덮어쓰므로 SEC_TMP 정리도 함께 한다
+  trap 'rm -rf "$TARGET_DIR"; [ -n "${RUN_DIR:-}" ] && rm -rf "$RUN_DIR"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
 
   # 모든 docker 호출을 기록하는 래퍼 (실제 docker 로 전달)
   local real_docker before_status after_status summary
@@ -173,7 +182,7 @@ sys.exit(1 if missing else 0)
 PY
 
   # V2·T4: 시크릿 원문이 리포트 폴더 어디에도 없다 (raw 포함)
-  if grep -rqF "$AWS_KEY" "$RUN_DIR" || grep -rqF "$GH_TOKEN_FAKE" "$RUN_DIR"; then
+  if grep -rqF "$AWS_KEY" "$RUN_DIR" || grep -rqF "$GH_TOKEN_FAKE" "$RUN_DIR" || grep -rqF "$PLAIN_PW" "$RUN_DIR"; then
     fail "시크릿 원문이 리포트에 남음"
   fi
 
@@ -192,9 +201,32 @@ for ln in open(sys.argv[1], encoding="utf-8"):
 sys.exit(1 if bad or not seen else 0)
 PY
 
+  # 억제 설정이 있었다는 사실은 summary 에 드러난다
+  assert_contains "$(cat "$summary")" "결과 억제 설정이 있습니다"
+
   # 권한: 리포트 폴더 700, 파일 600
   assert_eq "$(file_mode "$RUN_DIR")" 700
-  assert_eq "$(find "$RUN_DIR" -type f ! -perm 600 | wc -l | tr -d ' ')" 0 "(600 아닌 리포트 파일)"
+  local bad_modes
+  bad_modes=$(find "$RUN_DIR" -type f ! -perm 600 -exec stat -f '%Sp %N' {} + 2>/dev/null)
+  assert_eq "$bad_modes" "" "(600 아닌 리포트 파일)"
+}
+
+# PR #19 W3: 오프라인 DB 가 없는 생태계 lockfile 이 섞이면 SCA 전체가 실패한다 — 0건이 아니라 실패와 원인을 보여야 한다
+test_real_unsupported_ecosystem_fails_loudly() {
+  _real_ready || exit 77
+  # trap 은 함수가 끝난 뒤 실행되므로 지역 변수가 아닌 전역 변수를 쓴다
+  local summary
+  mkdir -p "$HOME/.cache/dev-workflow-kit-tests"
+  ECO_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/eco.XXXXXX")
+  trap 'rm -rf "$ECO_DIR"; [ -n "${ECO_RUN:-}" ] && rm -rf "$ECO_RUN"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+  printf 'requests==2.19.0\n' >"$ECO_DIR/requirements.txt"
+  # Hex(Elixir) 는 osv-seed 에 없는 생태계
+  printf '%%{\n  "jason": {:hex, :jason, "1.4.1", "af1504e35f629ddcdd6addb3513c3853991f694921b1b9368b0bd32beb9f1b63", [:mix], [], "hexpm", "fbb01ecdfd565b56261302f7e1fcc27c4fb8f32d56eab74db621fc154604a7a1"},\n}\n' >"$ECO_DIR/mix.lock"
+  summary=$("$SCAN" "$ECO_DIR" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  ECO_RUN=$(dirname "$summary")
+  assert_contains "$(awk -F '\t' '$1 == "osv-scanner"' "$ECO_RUN/raw/status.tsv")" "failed"
+  assert_contains "$(cat "$summary")" "오프라인 DB 가 없는 생태계(Hex"
 }
 
 test_real_n0_containers_cannot_reach_network() {

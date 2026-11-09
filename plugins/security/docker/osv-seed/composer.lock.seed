@@ -1,0 +1,12 @@
+{
+    "_readme": ["seed"],
+    "content-hash": "00000000000000000000000000000000",
+    "packages": [
+        {
+            "name": "psr/log",
+            "version": "3.0.0",
+            "type": "library"
+        }
+    ],
+    "packages-dev": []
+}

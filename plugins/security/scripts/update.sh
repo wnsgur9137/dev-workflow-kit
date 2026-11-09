@@ -55,7 +55,7 @@ if [ $need_docker -gt 0 ]; then
 fi
 
 # docker/osv-seed/ 의 씨앗이 받아야 하는 생태계 (OSV 디렉터리 이름)
-OSV_ECOSYSTEMS="npm PyPI Go Maven Pub SwiftURL"
+OSV_ECOSYSTEMS="npm PyPI Go Maven Pub SwiftURL crates.io RubyGems Packagist NuGet"
 
 TMP_ROOT="$SEC_DATA/data/.tmp-update-$$"
 cleanup() { rm -rf "$TMP_ROOT"; }
@@ -91,7 +91,7 @@ update_images() {
       continue
     fi
     # digest 로 pull 하므로 내용은 고정되지만, 로컬 기록도 한 번 더 확인한다
-    if ! docker image inspect --format '{{join .RepoDigests "\n"}}' "$ref" 2>/dev/null | grep -qx "$ref"; then
+    if ! docker image inspect --format '{{join .RepoDigests "\n"}}' "$ref" 2>/dev/null | grep -qxF "$ref"; then
       sec_err "받은 이미지의 digest 가 images.lock 과 다릅니다: $ref — 중단합니다."
       exit 1
     fi
@@ -194,7 +194,7 @@ update_osv() {
   for f in "$SEC_PLUGIN"/docker/osv-seed/*.seed; do
     cp "$f" "$seed/$(basename "$f" .seed)"
   done
-  sec_log "OSV 오프라인 DB 받는 중 (npm, PyPI, Go, Maven, Pub, SwiftURL — 수백 MB)..."
+  sec_log "OSV 오프라인 DB 받는 중 (${OSV_ECOSYSTEMS// /, } — 수백 MB)..."
   # 이 컨테이너만 네트워크를 쓴다 (기본 bridge). 씨앗 lockfile 외에 사용자 코드는 마운트하지 않는다.
   docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     --user "$(id -u):$(id -g)" -e HOME=/tmp --tmpfs /tmp:rw,size=256m \
