@@ -1,0 +1,104 @@
+{
+  "_doc": "tests/fixtures/server 를 /security:scan-code 로 점검했을 때 반드시 나와야 하는 결과 (S-Server 기준선, 점검 항목 S1~S7 은 docs/security/07 스택별 설계/Server.md). 하나라도 빠지면 회귀다.",
+  "must_find": [
+    {
+      "tool": "toolkit",
+      "rule_id": "server.config-plaintext-secret",
+      "file": "api/src/main/resources/application.yml",
+      "severity": "high",
+      "note": "S1"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "tainted-sql-string",
+      "file": "web/app.py",
+      "note": "S2 SQL"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "insecure-deserialization",
+      "file": "web/app.py",
+      "note": "S2 pickle"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "dangerous-exec-command",
+      "file": "gosvc/main.go",
+      "note": "S2 명령어"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "debug-enabled",
+      "file": "web/app.py",
+      "note": "S3 Flask"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "django-debug-true",
+      "file": "web/settings.py",
+      "severity": "high",
+      "note": "S3 Django"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "spring-actuator-fully-enabled-yaml",
+      "file": "api/src/main/resources/application.yml",
+      "note": "S3 actuator"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "insecure-hash-algorithm-md5",
+      "file": "web/app.py",
+      "note": "S4"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "missing-user",
+      "file": "Dockerfile",
+      "note": "S5 root"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "avoid-latest-version",
+      "file": "Dockerfile",
+      "note": "S5 latest"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "dockerfile-copy-env",
+      "file": "Dockerfile",
+      "severity": "high",
+      "note": "S5 .env"
+    },
+    {
+      "tool": "semgrep",
+      "rule_suffix": "dockerfile-add-remote",
+      "file": "Dockerfile",
+      "note": "S5 ADD URL"
+    },
+    {
+      "tool": "toolkit",
+      "rule_id": "server.compose-privileged",
+      "file": "docker-compose.yml",
+      "note": "S6"
+    },
+    {
+      "tool": "toolkit",
+      "rule_id": "server.compose-docker-socket",
+      "file": "docker-compose.yml",
+      "note": "S6"
+    },
+    {
+      "tool": "toolkit",
+      "rule_id": "server.compose-db-port-exposed",
+      "file": "docker-compose.yml",
+      "note": "S6 postgres"
+    },
+    {
+      "tool": "osv-scanner",
+      "package": "django@3.2.0",
+      "file": "web/requirements.txt",
+      "note": "S7"
+    }
+  ]
+}

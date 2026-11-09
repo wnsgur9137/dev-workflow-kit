@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://db:5432/app
+    username: app
+    password: fixture-plaintext-pw
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+jwt:
+  secret: ${JWT_SECRET}
