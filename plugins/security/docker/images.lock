@@ -13,3 +13,8 @@
 #   docs/security/03 워크플로/업데이트 절차.md
 #
 # 항목은 각 도구를 도입하는 단계에서 추가한다 (P1: semgrep·gitleaks·osv-scanner, P2: mobsf, P3: zap·egress-proxy).
+
+# --- P1 /security:scan-code (2026-11-05 고정, 모두 공개 후 7일 이상) ---
+semgrep      semgrep/semgrep             1.182.0  sha256:4a34048c04fef049f71665047f074cffb00cc3d89482f965a5cd151d589237af  linux/amd64,linux/arm64
+gitleaks     ghcr.io/gitleaks/gitleaks   v8.30.1  sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f  linux/amd64,linux/arm64
+osv-scanner  ghcr.io/google/osv-scanner  v2.7.0   sha256:4f3b7e2c64b9d38a5febc5a7e4a3dfef1d1362f726dea7a2ef4762b46469fcd0  linux/amd64,linux/arm64
