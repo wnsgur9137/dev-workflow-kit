@@ -14,4 +14,4 @@ rules:
     # 문자열 리터럴 메타변수의 metavariable-regex 대신 pattern-regex 로 키 이름을 본다 (Swift 와 같은 이유)
     patterns:
       - pattern: $P.setString(...)
-      - pattern-regex: (?i)setString\(\s*['"][^'"\n]{0,100}(token|password|passwd|secret|credential|session)
+      - pattern-regex: (?i)setString\(\s*['"][^'"\n]{0,100}(token|password|passwd|secret|credential|session_?(id|token|key))

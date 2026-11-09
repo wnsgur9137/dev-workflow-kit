@@ -12,7 +12,7 @@ rules:
       stack: react-native
     patterns:
       - pattern: AsyncStorage.setItem(...)
-      - pattern-regex: (?i)setItem\(\s*['"`][^'"`\n]{0,100}(token|password|passwd|secret|credential|session)
+      - pattern-regex: (?i)setItem\(\s*['"`][^'"`\n]{0,100}(token|password|passwd|secret|credential|session_?(id|token|key))
   - id: sensitive-log
     message: >-
       토큰·비밀번호로 보이는 값을 __DEV__ 분기 밖에서 로그로 출력합니다. 릴리스 빌드에도 남아 기기 로그로 새어 나갈 수 있습니다.
@@ -29,4 +29,5 @@ rules:
           - pattern: console.debug(...)
       - pattern-not-inside: |
           if (__DEV__) { ... }
-      - pattern-regex: (?i)(token|password|passwd|secret|credential)
+      # 단어 경계 — Tokenizer·secretary 같은 이름은 잡지 않는다
+      - pattern-regex: (?i)\b(token|access_?token|password|passwd|secret|credential)s?\b
