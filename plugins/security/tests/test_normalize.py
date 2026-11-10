@@ -277,6 +277,66 @@ class ParserTest(unittest.TestCase):
         f, _ = self.run_normalize("react-native\t.\t\n")
         self.assertEqual(f["findings"][0]["profile"], "react-native")
 
+    def test_custom_rule_attribution_cases(self):
+        """PR #28 리뷰 W4·W8: 커스텀 규칙 결과는 파일을 소유한 프로파일이 그 규칙을 쓸 때만 그 프로파일로,
+        다른 스택 코드면 버리고, 어느 프로파일도 덮지 않는 파일(루트 Dockerfile 등)은 남긴다"""
+        cases = [
+            # (profiles.tsv, 파일, check_id, 기대 프로파일 | None=버림)
+            ("web\t.\t\n", "src/a.ts", "custom.web.public-env-secret", "web"),                         # web 자기 귀속
+            ("react-native\t.\tandroid,ios\nios\tios\t\nandroid\tandroid\t\n",
+             "ios/App/A.swift", "custom.ios.sensitive-log", "ios"),                                        # RN 의 ios/ 하위
+            ("react-native\t.\tandroid,ios\nios\tios\t\n", "ios/App/A.swift", "custom.react-native.sensitive-log", None),
+            ("react-native\t.\tandroid,ios\nandroid\tandroid\t\n",
+             "android/app/src/main/java/A.kt", "custom.android.webview-file-access", "android"),
+            ("server\tapi\t\n", "Dockerfile", "custom.server.dockerfile-copy-env", "server"),            # 덮는 프로파일 없음
+            ("server\tapi\t\nweb\t.\tapi\n", "Dockerfile", "custom.server.dockerfile-copy-env", "server"),  # web 이 덮지만 .ts·.js 아님
+            ("web\t.\tapps/mobile\nreact-native\tapps/mobile\t\n",                                       # 모노레포 web(.)+RN
+             "apps/mobile/src/s.ts", "custom.react-native.sensitive-log", "react-native"),
+            ("web\t.\tapps/mobile\nreact-native\tapps/mobile\t\n",
+             "apps/mobile/src/c.ts", "custom.web.public-env-secret", "react-native"),
+            ("web\t.\tapps/mobile\nreact-native\tapps/mobile\t\n",
+             "src/page.tsx", "custom.react-native.sensitive-log", None),                                  # web 코드 → 버림
+            ("web\t.\t\nreact-native\tapps/mobile\t\n",                                                  # 제외 하위 경로가 없어도 더 깊은 RN
+             "apps/mobile/src/s.ts", "custom.react-native.sensitive-log", "react-native"),
+            ("web\tapps/web\t\nreact-native\tapps/mobile\t\n",
+             "apps/web/src/a.ts", "custom.react-native.sensitive-log", None),
+            ("web\tapps/web\t\nreact-native\tapps/mobile\t\n",                                           # 덮는 프로파일 없음 → 쓰는 프로파일
+             "scripts/x.js", "custom.react-native.sensitive-log", "react-native"),
+        ]
+        for tsv, path, check, want in cases:
+            with self.subTest(tsv=tsv, path=path, check=check):
+                self.raw("semgrep.json", {"results": [self.semgrep_result("/src/" + path, line=1, check=check)]})
+                f, _ = self.run_normalize(tsv)
+                self.assertEqual([x["profile"] for x in f["findings"]], [want] if want else [])
+
+    def test_sensitive_storage_and_log_evidence_masks_literal_values(self):
+        """PR #28 리뷰 W5: CWE-312·532·798 규칙은 키=값이 아닌 인자 형태의 리터럴 값도 가린다 (키 이름은 남긴다)"""
+        pw = "hunter2" + "hunter2"
+        _w(os.path.join(self.target, "src", "s.ts"),
+           f"x\nAsyncStorage.setItem('password', '{pw}')\nconsole.log(\"token\", `{pw}`)\nfoo('{pw}')\n")
+        res = []
+        for line, cwe in ((2, "CWE-312: Cleartext Storage"), (3, "CWE-532: Log"), (4, "CWE-78: OS Command Injection")):
+            r = self.semgrep_result("/src/src/s.ts", line=line, check=f"custom.react-native.r{line}")
+            r["extra"]["metadata"]["cwe"] = [cwe]
+            res.append(r)
+        self.raw("semgrep.json", {"results": res})
+        f, summary = self.run_normalize("react-native\t.\t\n")
+        ev = {x["location"]["line"]: x["evidence"] for x in f["findings"]}
+        self.assertEqual(ev[2], "AsyncStorage.setItem('password', '[MASKED]')")
+        self.assertEqual(ev[3], 'console.log("token", `[MASKED]`)')
+        self.assertIn(pw, ev[4])                      # 다른 CWE 는 그대로
+        self.assertNotIn(pw, summary.replace(ev[4], ""))
+
+    def test_mask_literal_values_is_linear(self):
+        import time
+        times = []
+        for k in (1, 2):
+            text = ("'" + "\\" * 50_000 * k + "x" + '"' * 50_000 * k + "`") * 2
+            t0 = time.time()
+            normalize.mask_literal_values(text)
+            times.append(time.time() - t0)
+        self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
     def test_identifiers_keep_credential_masking(self):
         """PR #26 리뷰: 식별자는 고엔트로피 마스킹만 빼고 URL 자격증명·접두사 토큰은 계속 가린다"""
         tok = "ghp" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"

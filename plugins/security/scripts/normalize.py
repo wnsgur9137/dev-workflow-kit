@@ -88,6 +88,32 @@ def mask_secrets(text: str) -> str:
     return text
 
 
+# 저장·로그·하드코딩 비밀 CWE — 이 규칙들의 evidence 는 문자열 리터럴 값을 가린다 (setItem('password', '<값>') 의 값)
+SENSITIVE_VALUE_CWES = {"CWE-312", "CWE-532", "CWE-798"}
+_LITERAL_KEY_WORD = re.compile(r"(?i)(password|passwd|pwd|secret|token|credential|api[_\-]?key|auth|session)")
+_LITERAL_KEY_NAME = re.compile(r"[\w.\-:]{1,80}")
+
+
+def mask_literal_values(text: str) -> str:
+    """문자열 리터럴('…' "…" `…`) 중 키 이름(비밀 단어를 포함한 공백 없는 짧은 이름)만 남기고 나머지 내용은 가린다.
+    키=값 마스킹은 setItem('password', 'hunter2') 처럼 쉼표로 이어진 인자 값을 못 가린다 (PR #28 리뷰). 선형 스캔."""
+    out, k, n = [], 0, len(text)
+    while k < n:
+        c = text[k]
+        if c not in "'\"`":
+            out.append(c)
+            k += 1
+            continue
+        j = k + 1
+        while j < n and text[j] != c and text[j] != "\n":
+            j += 2 if text[j] == "\\" else 1
+        body = text[k + 1:min(j, n)]
+        keep = not body or (_LITERAL_KEY_NAME.fullmatch(body) and _LITERAL_KEY_WORD.search(body))
+        out.append(c + (body if keep else "[MASKED]") + (c if j < n and text[j] == c else ""))
+        k = j + 1 if j < n and text[j] == c else j
+    return "".join(out)
+
+
 def clean_text(text, limit: int, single_line: bool = False) -> str:
     if text is None:
         return ""
@@ -132,6 +158,18 @@ def finding_id(*parts) -> str:
 # ---------------------------------------------------------------------------
 # 프로파일 귀속
 # ---------------------------------------------------------------------------
+# 프로파일 언어 규칙셋이 보는 확장자 — 커스텀 규칙 결과가 다른 스택의 코드인지 판단할 때만 쓴다 (ProfileIndex.for_custom)
+RULESET_EXTS = {
+    "javascript": (".js", ".jsx", ".mjs", ".cjs"),
+    "typescript": (".ts", ".tsx", ".mts", ".cts"),
+    "swift": (".swift",),
+    "kotlin": (".kt", ".kts"),
+    "java": (".java",),
+    "python": (".py",),
+    "go": (".go",),
+}
+
+
 class ProfileIndex:
     """감지 결과(프로파일, 하위 경로)로 finding 의 profile 필드를 정한다."""
 
@@ -142,18 +180,22 @@ class ProfileIndex:
     def labels(self):
         return [_profiles.format_profile_label(n, r) for n, r, _ in self.detected]
 
-    def _candidates(self, file, pred):
-        best, depth = None, -1
+    def _covering(self, file):
+        """이 파일을 덮는 감지 프로파일 — [(깊이, 이름)] (하위 경로 제외 반영)."""
         f = file or "."
+        out = []
         for name, root, excluded in self.detected:
             if not _profiles._is_under(f, root):
                 continue
             if any(_profiles._is_under(f, x) for x in excluded):
                 continue
-            if not pred(name):
-                continue
-            d = 0 if root == "." else root.count("/") + 1
-            if d > depth:
+            out.append((0 if root == "." else root.count("/") + 1, name))
+        return out
+
+    def _candidates(self, file, pred):
+        best, depth = None, -1
+        for d, name in self._covering(file):
+            if pred(name) and d > depth:
                 best, depth = name, d
         return best
 
@@ -161,9 +203,30 @@ class ProfileIndex:
         return self._candidates(file, lambda n: lang in (self.defs.get(n, {}).get("semgrep", {}).get("rulesets") or [])) or "common"
 
     def for_custom(self, file, custom):
-        """커스텀 규칙(rules/custom/<스택>)을 쓰는 프로파일 중 이 파일을 덮는 가장 깊은 것 — 없으면 스택 이름.
-        예: react-native 프로파일이 web 규칙을 함께 쓰면 RN 앱의 결과는 react-native 로 귀속한다."""
-        return self._candidates(file, lambda n: custom in (self.defs.get(n, {}).get("semgrep", {}).get("custom") or [])) or custom
+        """커스텀 규칙(rules/custom/<스택>)의 결과를 귀속할 프로파일 — None 이면 결과를 버린다.
+        Semgrep 은 커스텀 규칙을 저장소 전체에 한 번 돌리므로(scan-code.sh), 규칙을 쓰지 않는 다른 스택의 파일에도 맞는다.
+          1) 파일을 덮는 가장 깊은 프로파일(소유 프로파일)이 이 규칙을 쓰면 그 프로파일
+             (예: react-native 가 web 규칙을 함께 쓰면 RN 앱의 결과는 react-native)
+          2) 소유 프로파일이 규칙을 쓰지 않고 그 프로파일의 언어 규칙셋이 이 파일 확장자를 본다면 다른 스택의 코드다 → 버린다
+             (예: 모노레포 apps/web 의 console.log(token) 에 맞은 react-native.sensitive-log)
+          3) 그 밖(어느 프로파일도 덮지 않는 루트 Dockerfile 등)은 버리지 않는다 — 서버 프로파일이 api/ 에만 잡혀도
+             루트 Dockerfile 의 dockerfile-copy-env 는 남아야 한다. 규칙을 쓰는 프로파일 중 파일을 덮는 가장 깊은 것,
+             없으면 감지된 것 중 규칙을 쓰는 첫 프로파일, 그것도 없으면 스택 이름으로 귀속한다."""
+        def uses(n):
+            return custom in (self.defs.get(n, {}).get("semgrep", {}).get("custom") or [])
+        cover = self._covering(file)
+        if cover:
+            top = max(d for d, _ in cover)
+            owners = [n for d, n in cover if d == top]
+            for n in owners:
+                if uses(n):
+                    return n
+            exts = {e for n in owners for rs in (self.defs.get(n, {}).get("semgrep", {}).get("rulesets") or [])
+                    for e in RULESET_EXTS.get(rs, ())}
+            if exts and (file or "").lower().endswith(tuple(exts)):
+                return None
+        return (self._candidates(file, uses)
+                or next((n for n, _, _ in self.detected if uses(n)), None) or custom)
 
     def for_lockfile(self, file):
         def pred(n):
@@ -260,6 +323,8 @@ def parse_semgrep(data, index: ProfileIndex, target=None):
         file = strip_container_prefix(r.get("path", ""))
         line = (r.get("start") or {}).get("line")
         profile = index.for_custom(file, custom) if custom else (index.for_language(file, lang) if lang and lang != "generic" else "common")
+        if profile is None:            # 다른 스택 코드에 맞은 커스텀 규칙 (ProfileIndex.for_custom)
+            continue
         refs = []
         for c in meta.get("cwe", []) if isinstance(meta.get("cwe"), list) else [meta.get("cwe")] if meta.get("cwe") else []:
             m = re.match(r"(CWE-\d+)", str(c))
@@ -282,6 +347,8 @@ def parse_semgrep(data, index: ProfileIndex, target=None):
             lines = extra.get("lines") or ""
             if not lines.strip() or lines.strip() == "requires login":
                 lines = read_source_lines(target, file, line, (r.get("end") or {}).get("line"))
+            if SENSITIVE_VALUE_CWES.intersection(refs):
+                lines = mask_literal_values(lines)
         rule_short = check_id.split(".")[-1] if check_id else "semgrep"
         out.append({
             "id": finding_id("semgrep", check_id, file, line),
