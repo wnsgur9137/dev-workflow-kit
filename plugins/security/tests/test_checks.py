@@ -866,6 +866,31 @@ class ChecksTest(unittest.TestCase):
         rs = self.run_checks([("flutter", ".", [])])["results"]
         self.assertEqual([(r["line"], r["evidence"]) for r in rs], [(3, "flutter.assets 디렉터리 assets/env/ 안의 .env")])
 
+    def test_flutter_env_asset_second_review_cases(self):
+        """PR #28 2차 리뷰 N7: 중첩 괄호가 있는 여러 줄 흐름, flavors 가 앞에 오는 매핑, 루트 폴더 asset(./)"""
+        cases = [
+            ("flutter:\n  assets: [\n    {path: a.json, flavors: [dev]},\n    .env\n  ]\n", [2]),
+            ("flutter:\n  assets: [{path: a.json, flavors: [dev]}, .env]\n", [2]),
+            ("flutter:\n  assets:\n    - flavors: [dev]\n      path: .env\n", [4]),
+            ("flutter:\n  assets:\n    - flavors:\n        - dev\n      path: .env.prod\n    - a/\n", [5]),
+            ("flutter:\n  assets:\n    - path: a.png\n      flavors: [dev]\n", []),
+            ("flutter:\n  assets: [\n    {path: a.json, flavors: [dev]},\n  ]\nother: .env\n", []),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                _w(os.path.join(self.t, "pubspec.yaml"), text)
+                rs = self.run_checks([("flutter", ".", [])])["results"]
+                self.assertEqual([r["line"] for r in rs], want)
+        _w(os.path.join(self.t, "pubspec.yaml"), "flutter:\n  assets:\n    - ./\n")
+        _w(os.path.join(self.t, ".env"), "A=1\n")
+        rs = self.run_checks([("flutter", ".", [])])["results"]
+        self.assertEqual([(r["line"], r["evidence"]) for r in rs], [(3, "flutter.assets 디렉터리 ./ 안의 .env")])
+        os.makedirs(os.path.join(self.t, "app"))
+        os.rename(os.path.join(self.t, "pubspec.yaml"), os.path.join(self.t, "app/pubspec.yaml"))
+        os.rename(os.path.join(self.t, ".env"), os.path.join(self.t, "app/.env"))
+        rs = self.run_checks([("flutter", "app", [])])["results"]
+        self.assertEqual([r["file"] for r in rs], ["app/pubspec.yaml"])
+
     def test_flutter_build_obfuscate_review_cases(self):
         """PR #28 리뷰 W1·W2·S4·S8: 줄 이음·접힘 블록·주석·echo·변수 플래그·fvm·대상 이름"""
         files = {
@@ -900,6 +925,27 @@ class ChecksTest(unittest.TestCase):
             ("fastlane/Fastfile", 2, "ipa"),
         ])
 
+    def test_flutter_build_obfuscate_second_review_cases(self):
+        """PR #28 2차 리뷰 N5: YAML plain 여러 줄 스칼라는 한 명령, 단계 name: 은 명령 아님, Jenkinsfile // 주석 제거"""
+        cases = [
+            (".github/workflows/a.yml", "steps:\n  - run: flutter build apk\n      --obfuscate --split-debug-info=s\n", []),
+            (".gitlab-ci.yml", "build:\n  script:\n    - flutter build apk\n      --obfuscate --split-debug-info=s\n", []),
+            (".github/workflows/a.yml",
+             "steps:\n  - name: flutter build apk\n    run: flutter build apk --obfuscate --split-debug-info=s\n", []),
+            (".github/workflows/a.yml", "steps:\n  - name: Build\n    run: flutter build apk\n    shell: bash\n", [3]),
+            (".github/workflows/a.yml", "steps:\n  - run: flutter build apk\n  - run: flutter test\n      --obfuscate\n", [2]),
+            (".github/workflows/a.yml", "steps:\n  - run: |\n      flutter build ipa\n        --obfuscate\n", [3]),   # 리터럴은 줄마다
+            ("Jenkinsfile", "// sh 'flutter build apk'\nsh 'curl http://x' // flutter build ipa\n", []),
+            ("Jenkinsfile", "sh 'flutter build apk' // --obfuscate\n", [1]),
+            ("scripts/b.sh", "flutter build apk\n  --obfuscate\n", [1]),                                        # YAML 아님
+        ]
+        for rel, text, want in cases:
+            with self.subTest(rel=rel, text=text):
+                _w(os.path.join(self.t, rel), text)
+                rs = self.run_checks([("flutter", ".", [])])["results"]
+                self.assertEqual([r["line"] for r in rs], want)
+                os.remove(os.path.join(self.t, rel))
+
     def test_flutter_checks_line_length_is_linear(self):
         """리뷰 교훈: 줄 길이·줄 이음 길이를 2배로 늘려도 이차가 아니다 (끝까지 가서 결과를 내는지 확인)"""
         cases = [
@@ -909,11 +955,16 @@ class ChecksTest(unittest.TestCase):
             ("build.sh", lambda w: ("x" * 30 + " \\\n") * (w // 4) + "flutter build apk\n"),
             ("build.sh", lambda w: "".join(f"echo '{';' * (w // 2)}' && flutter build apk {'$' * (w // 2)}x\n" for _ in range(100))
              + "flutter build apk\n"),
+            # N5: YAML plain 여러 줄 스칼라 이음·name: 건너뛰기·// 주석
+            (".github/workflows/build.yml", lambda w: "steps:\n  - run: flutter build apk\n" + "      x\n" * (w // 4) + "  - run: flutter build apk\n"),
+            (".github/workflows/build.yml", lambda w: "steps:\n" + "  - name: a\n" + "      b\n" * (w // 4) + "  - run: flutter build apk\n"),
+            ("Jenkinsfile", lambda w: "".join(f"sh '{'/' * (w // 2)}' {'x' * (w // 2)} // y\n" for _ in range(100))
+             + "sh 'flutter build apk'\n"),
         ]
         for name, gen in cases:
             times = []
             for width in (1800, 3600):
-                for f in ("pubspec.yaml", "build.sh"):
+                for f in ("pubspec.yaml", "build.sh", ".github/workflows/build.yml", "Jenkinsfile"):
                     if os.path.exists(os.path.join(self.t, f)):
                         os.remove(os.path.join(self.t, f))
                 _w(os.path.join(self.t, name), gen(width))
@@ -938,6 +989,17 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual([(r["file"], r["line"], r["severity"]) for r in rs],
                          [("app/.env", 1, "high"), ("app/.env", 2, "medium"), ("app/.env", 6, "high")])
         self.assertNotIn(value, json.dumps(rs))
+        # PR #28 2차 리뷰 N4: react-native-config 는 프로젝트 루트의 .env* 만 읽는다 — 하위 폴더는 보고하지 않는다
+        _w(os.path.join(self.t, "app/server/.env"), "DB_PASSWORD=p\n")
+        _w(os.path.join(self.t, "app/e2e/.env.test"), "TEST_PASSWORD=p\n")
+        rs = [r for r in self.run_checks([("react-native", "app", [])])["results"] if r["check"] == "rn-config-env-secret"]
+        self.assertEqual(sorted({r["file"] for r in rs}), ["app/.env"])
+        _w(os.path.join(self.t, ".env"), "ROOT_SECRET=p\n")                       # 프로파일 루트가 . 이면 루트 .env 만
+        _w(os.path.join(self.t, "package.json"), '{"dependencies": {"react-native-config": "1.5.0"}}')
+        rs = [r for r in self.run_checks([("react-native", ".", [])])["results"] if r["check"] == "rn-config-env-secret"]
+        self.assertEqual(sorted({r["file"] for r in rs}), [".env"])
+        os.remove(os.path.join(self.t, ".env"))
+        os.remove(os.path.join(self.t, "package.json"))
         _w(os.path.join(self.t, "app/package.json"), "[not json")
         self.assertEqual([r["check"] for r in self.run_checks([("react-native", "app", [])])["results"]], ["env-public-secret"])
 
