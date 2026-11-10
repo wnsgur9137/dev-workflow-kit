@@ -36,5 +36,7 @@ rules:
       category: security
       cwe: ["CWE-327: Use of a Broken or Risky Cryptographic Algorithm"]
       stack: ios
-    # // 나 /* 뒤의 키워드는 건너뛴다 (줄 단위, 줄 앞 2000자까지 — 그보다 뒤는 미탐)
-    pattern-regex: '(?m)^(?:(?!//|/\*)[^\n]){0,2000}\b((CC_MD5|CC_SHA1)(_Init|_Update|_Final)?|kCCAlgorithm(DES|3DES|RC4|RC2)|kCCOptionECBMode)\b'
+    # 줄 단위. 문자열 리터럴("…//…")과 닫힌 블록 주석(/* … */)은 한 덩어리로 건너뛰고(소유 수량자), 닫히지 않은 // 나 /* 뒤와
+    # 문자열 안의 키워드는 제외한다. 분기끼리 첫 글자가 겹치지 않아 선형. 닫히지 않은 " 뒤는 미탐 (PR #27 2차 재리뷰 W-A)
+    # 횟수 지정 반복({0,2000})을 중첩하면 PCRE2 가 "regular expression is too large" 로 규칙을 버리므로 쓰지 않는다
+    pattern-regex: '(?m)^(?:/\*(?:[^*\n]|\*(?!/))*+\*/|"(?:[^"\\\n]|\\.)*+"|[^\n"/]|/(?![/*]))*\b((CC_MD5|CC_SHA1)(_Init|_Update|_Final)?|kCCAlgorithm(DES|3DES|RC4|RC2)|kCCOptionECBMode)\b'

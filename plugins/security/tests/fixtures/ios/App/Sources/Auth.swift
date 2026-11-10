@@ -1,7 +1,6 @@
 import Foundation
 
 // I4 — 카멜케이스 가운데의 키워드 (PR #27 재리뷰 W1)
-func debugAuth(userPassword: String, refreshToken: String) {
+func debugAuth(userPassword: String) {
     print("auth: \(userPassword)")
-    debugPrint(refreshToken)
 }

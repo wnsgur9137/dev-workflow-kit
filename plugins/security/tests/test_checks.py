@@ -10,8 +10,10 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "scripts", "lib"))
+sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
 
 import checks  # noqa: E402
+import normalize  # noqa: E402
 import profiles  # noqa: E402
 
 FIXTURE = os.path.join(HERE, "fixtures", "web")
@@ -786,12 +788,19 @@ class ChecksTest(unittest.TestCase):
         conf = {"NSAppTransportSecurity": {"NSExceptionDomains": {
             "a.com": {"NSExceptionAllowsInsecureHTTPLoads": True}, "b.com": {"NSExceptionAllowsInsecureHTTPLoads": True},
             "x" * 120 + ".one.com": {"NSExceptionAllowsInsecureHTTPLoads": True},
-            "x" * 120 + ".two.com": {"NSExceptionAllowsInsecureHTTPLoads": True}}}}
+            "x" * 120 + ".two.com": {"NSExceptionAllowsInsecureHTTPLoads": True},
+            # 97~100자 — package 가 normalize 의 120자 절단에 걸리던 길이 (PR #27 2차 재리뷰 W-B)
+            "a" * 96 + ".com": {"NSExceptionAllowsInsecureHTTPLoads": True, "NSExceptionMinimumTLSVersion": "TLSv1.0"},
+            "a" * 96 + ".net": {"NSExceptionAllowsInsecureHTTPLoads": True, "NSExceptionMinimumTLSVersion": "TLSv1.0"}}}}
         _w(os.path.join(self.t, "Info.plist"), plistlib.dumps(conf).decode().replace("\n", "").replace("\t", ""))
-        rs = self.run_checks([("ios", ".", [])])["results"]
+        data = self.run_checks([("ios", ".", [])])
+        rs = data["results"]
         self.assertEqual({r["line"] for r in rs}, {1})
-        self.assertEqual(len({r["package"] for r in rs}), 4, rs)         # 한 줄이어도, 앞부분이 같아도 서로 다른 id
-        self.assertTrue(all(len(r["package"]) < 130 for r in rs))
+        self.assertEqual(len(rs), 8, rs)
+        self.assertEqual(len({(r["rule_id"], r["package"]) for r in rs}), 8, rs)  # 한 줄이어도, 앞부분이 같아도 서로 다른 id
+        self.assertTrue(all(len(r["package"]) <= 120 for r in rs), [len(r["package"]) for r in rs])
+        ids = [f["id"] for f in normalize.parse_checks(data)[0]]          # normalize 절단 뒤에도 id 가 갈린다
+        self.assertEqual(len(set(ids)), 8, ids)
         os.remove(os.path.join(self.t, "Info.plist"))
         _w(os.path.join(self.t, "C.xcconfig"),
            "API_KEY = $(API_KEY_$(CONFIGURATION))\nCLIENT_SECRET = $(SRCROOT)/Secrets/client\n"

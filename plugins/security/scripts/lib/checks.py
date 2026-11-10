@@ -17,6 +17,7 @@ docs/security/07 스택별 설계/스택 프로파일 개요.md 의 `checks`. �
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -1233,13 +1234,16 @@ def _plist_key(k):
     return f"<key>{escape(str(k))}</key>"
 
 
+ATS_DOMAIN_ID_MAX = 120 - len("ATS:NSExceptionDomains/") - len("/tls")  # 93
+
+
 def _ats_domain_id(domain):
-    """결과 표시·id 용 도메인 — 긴 이름은 잘라 해시를 붙여 앞부분이 같은 도메인끼리 겹치지 않게 한다"""
+    """결과 표시·id 용 도메인 — 긴 이름은 잘라 해시를 붙여 앞부분이 같은 도메인끼리 겹치지 않게 한다.
+    package `ATS:NSExceptionDomains/<도메인>/tls` 가 normalize 의 120자 절단 안에 들어오도록 93자를 기준으로 한다 (PR #27 2차 재리뷰 W-B)"""
     d = str(domain)
-    if len(d) <= 100:
+    if len(d) <= ATS_DOMAIN_ID_MAX:
         return d
-    import hashlib
-    return d[:80] + "…#" + hashlib.sha256(d.encode("utf-8", "replace")).hexdigest()[:12]
+    return d[:70] + "…#" + hashlib.sha256(d.encode("utf-8", "replace")).hexdigest()[:12]
 
 
 def check_ios_ats(ctx):
