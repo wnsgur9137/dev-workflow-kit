@@ -1,0 +1,42 @@
+# I4 — print·NSLog·os_log·Logger 로 민감 정보 출력 (docs/security/07 스택별 설계/iOS.md)
+rules:
+  - id: sensitive-log
+    message: >-
+      토큰·비밀번호로 보이는 값을 로그로 출력합니다. 기기 로그·크래시 리포트로 새어 나갈 수 있습니다.
+      릴리스 빌드에서 제거하거나 os_log 의 privacy: .private 를 쓰세요.
+    severity: INFO
+    languages: [swift]
+    metadata:
+      category: security
+      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
+      owasp: ["M2: Insecure Data Storage"]
+      stack: ios
+    patterns:
+      - pattern-either:
+          - pattern: print(...)
+          - pattern: NSLog(...)
+          - pattern: debugPrint(...)
+          - pattern: os_log(...)
+          - pattern: $L.info(...)
+          - pattern: $L.debug(...)
+          - pattern: $L.notice(...)
+          - pattern: $L.log(...)
+      # 키워드 뒤에 소문자가 이어지면 제외 — userPassword·refreshToken 은 잡고 Tokenizer·secretary 는 잡지 않는다 (PR #27 재리뷰)
+      # tokenCount·passwordField·isTokenValid·password_reset 처럼 흔한 비민감 접미사도 제외 (PR #27 2차 재리뷰 S-A)
+      # 단 passwordField.text·tokenLabel.stringValue 처럼 입력값 자체를 꺼내면 잡는다 (PR #27 3차 재리뷰 W-2).
+      # {0,40} 제한은 지우지 말 것 — 제한 없는 반복은 이차 시간이다 (실측 2배 입력에 3.9배)
+      - pattern-regex: (?i:token|password|passwd|secret|credential)(?-i:s?(?![a-z]|_?(?i:count|type|valid|expir|reset|provider|length)|_?(?i:field|label|view)(?![A-Za-z]{0,40}[?!]*\.(?:text|stringValue|attributedText)\b)))
+  - id: sensitive-log-objc
+    message: >-
+      토큰·비밀번호로 보이는 값을 NSLog 로 출력합니다. 릴리스 빌드에서 제거하세요.
+    severity: INFO
+    languages: [generic]
+    paths:
+      include: ["*.m", "*.mm"]
+    metadata:
+      category: security
+      cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
+      stack: ios
+    # 형식 문자열이나 인자에 키워드 (구간 길이 제한으로 선형)
+    # 키워드 뒤 소문자 제외는 Swift 규칙과 같다 (accessToken 은 잡고 tokenizer 는 잡지 않는다)
+    pattern-regex: '\bNSLog\(@"[^"\n]{0,200}("[^;\n]{0,200})?(?i:token|password|passwd|secret|credential)(?-i:s?(?![a-z]|_?(?i:count|type|valid|expir|reset|provider|length)|_?(?i:field|label|view)(?![A-Za-z]{0,40}[?!]*\.(?:text|stringValue|attributedText)\b)))'

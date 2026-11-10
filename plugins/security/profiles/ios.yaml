@@ -6,6 +6,7 @@ detect: ["**/*.xcodeproj", "**/*.xcworkspace", "**/Package.swift", "**/Podfile"]
 exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**", "**/macos/**"]
 semgrep:
   rulesets: [swift]
+  custom: [ios]
 sca:
   lockfiles: ["**/Package.resolved"]
   # osv-scanner v2.7.0 은 Podfile.lock 을 추출하지 않는다 — 있으면 "점검되지 않음" 경고
@@ -14,4 +15,5 @@ sca:
 artifact:
   types: [ipa]
   analyzer: mobsf
+checks: [ios-ats, ios-xcconfig-secret]
 checklist: ios

@@ -1,0 +1,30 @@
+# I7 — WKWebView 의 파일 URL 접근 허용 (docs/security/07 스택별 설계/iOS.md)
+rules:
+  - id: webview-file-access
+    message: >-
+      WKWebView 의 allowFileAccessFromFileURLs·allowUniversalAccessFromFileURLs 를 켭니다(비공개 설정 키).
+      file:// 페이지나 주입된 JS 가 앱 샌드박스 파일을 읽어 외부로 보낼 수 있습니다. 끄고 loadFileURL(_:allowingReadAccessTo:) 범위를 좁히세요.
+    severity: WARNING
+    languages: [swift]
+    metadata:
+      category: security
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      owasp: ["M1: Improper Platform Usage"]
+      stack: ios
+    patterns:
+      - pattern: $P.setValue(...)
+      # patterns 안의 정규식 매칭 범위는 서로 겹쳐야 하므로 한 정규식으로 쓴다
+      - pattern-regex: setValue\(\s*(true|1|NSNumber\(value:\s*true\)|true\s+as\s+NSNumber)\s*,\s*forKey:\s*"(allowFileAccessFromFileURLs|allowUniversalAccessFromFileURLs)"
+  - id: webview-file-access-objc
+    message: >-
+      WKWebView 의 allowFileAccessFromFileURLs·allowUniversalAccessFromFileURLs 를 켭니다. file:// 페이지나 주입된 JS 가
+      앱 샌드박스 파일을 읽어 외부로 보낼 수 있습니다.
+    severity: WARNING
+    languages: [generic]
+    paths:
+      include: ["*.m", "*.mm"]
+    metadata:
+      category: security
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      stack: ios
+    pattern-regex: 'setValue:[ \t]*(@YES|@\(YES\)|@1|@true)[ \t]+forKey:[ \t]*@"(allowFileAccessFromFileURLs|allowUniversalAccessFromFileURLs)"'
