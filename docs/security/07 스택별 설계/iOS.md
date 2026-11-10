@@ -43,7 +43,7 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 | I1 | Gitleaks (공통) + 스택 검사 — `*.xcconfig`의 비밀 키 평문 값(조건부 `[sdk=…][arch=…]` 여러 개, `//` 는 어디서든 주석, `$(…)`·`${…}` 참조는 안쪽부터 지우고 남은 평문만 판정 — 다 못 지운 중첩 참조와 참조 바로 뒤 경로(`$(SRCROOT)/…`)는 제외, **키 이름만**). plist 의 평문 비밀은 Gitleaks 만 본다 | `ios.xcconfig-secret` | high |
 | I2 | 스택 검사 — `*Info.plist`(대소문자 무시, XML·바이너리)의 `NSAllowsArbitraryLoads`(high — iOS 10+ 에서 무시되는 조합, 즉 `…ForMedia`·`…InWebContent`·`NSAllowsLocalNetworking` 중 하나가 있으면 low), `…InWebContent`·`…ForMedia`(medium), 예외 도메인의 평문 허용(`NSException…`·`NSTemporaryException…`·`NSThirdPartyException…AllowsInsecureHTTPLoads`, medium)·최소 TLS 1.0·1.1(medium). `NSIncludesSubdomains`는 evidence 에 표시. 줄 번호는 `<key>…</key>`를 문서 순서대로 이어 찾고(선형), 결과는 줄과 상관없이 키 경로(package)로 구분(바이너리·한 줄짜리 plist, package 가 120자를 넘는 93자 초과 도메인은 해시 접미사). CDATA·문자 참조로 쓴 정수와 100자 이상 정수가 있는 plist 는 해석하지 않음 | `ios.ats-*` | high / medium / low |
 | I3 | Semgrep 커스텀 — UserDefaults(`standard`·`suiteName:`(`?`·`!`)·이름이 defaults 인 변수·`self.defaults` 같은 속성)의 `set(…, forKey: "…token|password|secret|session_id…")` + 공식 `swift-user-defaults`. Keychain 래퍼의 같은 API 는 제외. 지역 별칭(`let ud = UserDefaults.standard; ud.set(…)`)은 잡지 않는다 | `custom.ios.insecure-storage` | medium |
-| I4 | Semgrep 커스텀 — `print`·`NSLog`·`debugPrint`·`os_log`·`Logger` 인자에 token·password 등(카멜케이스 `userPassword`·`refreshToken` 포함, 뒤에 소문자가 이어지는 `Tokenizer` 등과 `tokenCount`·`passwordField`·`isTokenValid`·`password_reset` 같은 비민감 접미사는 제외), Objective-C `NSLog`의 형식 문자열·인자 | `custom.ios.sensitive-log(-objc)` | low |
+| I4 | Semgrep 커스텀 — `print`·`NSLog`·`debugPrint`·`os_log`·`Logger` 인자에 token·password 등(카멜케이스 `userPassword`·`refreshToken` 포함, 뒤에 소문자가 이어지는 `Tokenizer` 등과 `tokenCount`·`passwordField`·`isTokenValid`·`password_reset` 같은 비민감 접미사는 제외 — 단 `passwordField.text`·`tokenLabel.stringValue`처럼 입력값을 꺼내면 탐지, ObjC 메시지 형태 `[self.passwordField text]`는 미탐), Objective-C `NSLog`의 형식 문자열·인자 | `custom.ios.sensitive-log(-objc)` | low |
 | I5 | OSV-Scanner (공통) — `Package.resolved`. `Podfile.lock`은 "점검되지 않음" 경고 | — | CVSS |
 | I6 | Semgrep 커스텀 — `CC_MD5`·`CC_SHA1`(`_Init` 포함)·`Insecure.MD5/SHA1`(스트리밍 포함)·`kCCAlgorithmDES/3DES/RC4/RC2`·`kCCOptionECBMode` (Swift), Objective-C 는 같은 이름 정규식(줄 단위 — 문자열 리터럴과 같은 줄에서 닫힌 블록 주석은 건너뛰고, 닫히지 않은 `//`·`/*` 뒤와 문자열 안의 이름은 제외) | `custom.ios.weak-crypto(-objc)` | medium |
 | I7 | Semgrep 커스텀 — `setValue(true|1|NSNumber(value: true), forKey: "allowFileAccessFromFileURLs"|"allowUniversalAccessFromFileURLs")`, Objective-C `setValue:@YES forKey:@"…"` | `custom.ios.webview-file-access(-objc)` | medium |
@@ -72,7 +72,7 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 ## 한계
 - Semgrep Swift 지원 범위가 다른 언어보다 좁음 → 커스텀 규칙 품질에 의존
 - Objective-C는 Semgrep 지원이 제한적 → 시크릿·바이너리 점검 위주
-- 줄 단위 정규식 규칙(`*-objc`)은 여러 줄 블록 주석의 가운데 줄을 주석으로 알아보지 못한다(오탐). `weak-crypto-objc`는 줄에서 닫히지 않은 `"`(예: 문자 리터럴 `'"'`) 뒤를 보지 않는다(미탐)
+- 줄 단위 정규식 규칙(`*-objc`)은 여러 줄 블록 주석의 가운데 줄을 주석으로 알아보지 못한다(오탐). `weak-crypto-objc`는 줄에서 닫히지 않은 `"`(예: 문자 리터럴 `'"'`·`'\"'`) 뒤를 보지 않고, 한 줄이 약 13만 자를 넘는 파일은 PCRE2 한도에 걸려 놓칠 수 있다(미탐)
 - xcconfig: 참조 바로 뒤 경로처럼 보이는 값(`$(PREFIX)/평문`), `${`가 섞인 평문, `$(VAR:default=…)`의 기본값은 판정하지 않는다
 - plist 정수 사전 차단은 UTF-8 바이트 기준이라 UTF-16 plist 는 거치지 않는다. 거대 정수는 Python 의 int 자릿수 제한(3.11+, 또는 CVE-2020-10735 패치 버전)에 걸려 "plist 를 해석하지 못했습니다" 경고로 끝난다 — 그보다 오래된 Python 은 지원하지 않는다
 
