@@ -840,6 +840,107 @@ class ChecksTest(unittest.TestCase):
         rs = self.run_checks([("flutter", "app", [])])["results"]           # 저장소 전체 검사
         self.assertEqual(sorted((r["file"], r["line"]) for r in rs), [(".github/workflows/ci.yml", 2), ("scripts/release.sh", 1)])
 
+    def test_flutter_env_asset_review_cases(self):
+        """PR #28 리뷰 W3·S2·S3·S8: 흐름 문법·path 매핑·같은 들여쓰기·작은따옴표·예시 파일·디렉터리 asset"""
+        cases = [
+            ("flutter:\n  assets: [.env, assets/]\n", [2]),                                   # 인라인 흐름
+            ("flutter:\n  assets: [\n    assets/,\n    '.env.prod'\n  ]\n", [2]),               # 여러 줄 흐름
+            ("flutter:\n  assets:\n    - path: .env\n      flavors: [prod]\n    - path: a/\n", [3]),   # 3.19+ path
+            ("flutter:\n  assets:\n    - {path: config/.env, flavors: [x]}\n", [3]),
+            ("flutter:\n  assets:\n  - .env\n  fonts: []\n", [3]),                            # 같은 들여쓰기
+            ("flutter:\n  assets:\n    - '.env.staging'\n", [3]),                             # 작은따옴표
+            ("flutter:\n  assets:\n    - .env.dist\n    - .env.defaults\n    - .env.local.example\n", []),
+            ("flutter:\n  assets:\n    - path: a.png\n      flavors:\n        - .env\n", []),     # 항목 안의 목록
+            ("flutter:\n  assets: [.env.example]\n", []),
+            ("flutter:\n  fonts:\n    - .env\n", []),
+        ]
+        for text, want in cases:
+            _w(os.path.join(self.t, "pubspec.yaml"), text)
+            rs = self.run_checks([("flutter", ".", [])])["results"]
+            self.assertEqual([r["line"] for r in rs], want, text)
+        # 디렉터리 asset — flutter_tools 는 폴더 바로 아래 숨김 파일까지 넣는다 (하위 폴더는 아님)
+        _w(os.path.join(self.t, "pubspec.yaml"), "flutter:\n  assets:\n    - assets/env/\n    - assets/img/\n")
+        _w(os.path.join(self.t, "assets/env/.env"), "A=1\n")
+        _w(os.path.join(self.t, "assets/env/.env.example"), "A=\n")
+        _w(os.path.join(self.t, "assets/img/deep/.env"), "A=1\n")
+        rs = self.run_checks([("flutter", ".", [])])["results"]
+        self.assertEqual([(r["line"], r["evidence"]) for r in rs], [(3, "flutter.assets 디렉터리 assets/env/ 안의 .env")])
+
+    def test_flutter_build_obfuscate_review_cases(self):
+        """PR #28 리뷰 W1·W2·S4·S8: 줄 이음·접힘 블록·주석·echo·변수 플래그·fvm·대상 이름"""
+        files = {
+            ".github/workflows/a.yml": (
+                "steps:\n"
+                "  - run: flutter build apk --release \\\n      --obfuscate --split-debug-info=s\n"       # 2 줄 이음 → 정상
+                "  - run: >\n      flutter build ipa\n      --obfuscate --split-debug-info=s\n"          # 4 접힘 → 정상
+                "  - run: >-\n      fvm flutter build appbundle\n      --release\n"                      # 7 접힘 → 보고(8)
+                "  # - run: flutter build apk\n"                                                        # 주석
+                "  - run: echo 'next: flutter build apk'\n"                                             # echo
+                "  - run: |\n      flutter build ios --no-codesign\n      flutter test\n"               # 리터럴 → 보고(13)
+                "  - run: flutter build apk --build-number=${{ github.run_number }}\n"                  # 보고(15)
+                "  - run: flutter build apk --profile && flutter build ios-framework\n"                 # 보고(16, ios-framework)
+                "  - run: flutter build apk ${{ matrix.flags }}\n"),                                    # 변수 플래그 → 보류
+            "Makefile": "release:\n\tflutter build apk $(RELEASE_FLAGS)\n\tprintf 'flutter build ipa\\n'\n",
+            "fastlane/Fastfile": 'lane :b do\n  sh("flutter build ipa --release")\nend\n',               # 보고(2)
+            ".circleci/config.yml": "      - run: flutter build appbundle\n",                          # 보고(1)
+            "Jenkinsfile": "sh 'flutter build apk --obfuscate --split-debug-info=s'\n",
+            "bitbucket-pipelines.yml": "script:\n  - flutter build apk\n",                           # 보고(2)
+            "melos.yaml": "scripts:\n  build: flutter build apk --debug\n",
+        }
+        for rel, text in files.items():
+            _w(os.path.join(self.t, rel), text)
+        rs = self.run_checks([("flutter", ".", [])])["results"]
+        self.assertEqual(sorted((r["file"], r["line"], r["evidence"].split(" ")[2]) for r in rs), [
+            (".circleci/config.yml", 1, "appbundle"),
+            (".github/workflows/a.yml", 8, "appbundle"),
+            (".github/workflows/a.yml", 13, "ios"),
+            (".github/workflows/a.yml", 15, "apk"),
+            (".github/workflows/a.yml", 16, "ios-framework"),
+            ("bitbucket-pipelines.yml", 2, "apk"),
+            ("fastlane/Fastfile", 2, "ipa"),
+        ])
+
+    def test_flutter_checks_line_length_is_linear(self):
+        """리뷰 교훈: 줄 길이·줄 이음 길이를 2배로 늘려도 이차가 아니다 (끝까지 가서 결과를 내는지 확인)"""
+        cases = [
+            ("pubspec.yaml", lambda w: "flutter:\n  assets:\n" + "".join(f"    - {'{'}path: a{' ' * w}, flavors: [{'x, ' * (w // 4)}]{'}'}\n" for _ in range(100)) + "    - .env\n"),
+            ("pubspec.yaml", lambda w: "flutter:\n  assets: [\n" + "    a,\n" * (w // 8) + "    .env]\n"),   # MAX_LINE 안
+            ("build.sh", lambda w: "".join(f"flutter {'flutter ' * (w // 16)}build apk{' ' * (w // 2)}\n" for _ in range(100))),
+            ("build.sh", lambda w: ("x" * 30 + " \\\n") * (w // 4) + "flutter build apk\n"),
+            ("build.sh", lambda w: "".join(f"echo '{';' * (w // 2)}' && flutter build apk {'$' * (w // 2)}x\n" for _ in range(100))
+             + "flutter build apk\n"),
+        ]
+        for name, gen in cases:
+            times = []
+            for width in (1800, 3600):
+                for f in ("pubspec.yaml", "build.sh"):
+                    if os.path.exists(os.path.join(self.t, f)):
+                        os.remove(os.path.join(self.t, f))
+                _w(os.path.join(self.t, name), gen(width))
+                t0 = time.time()
+                rs = self.run_checks([("flutter", ".", [])])["results"]
+                times.append(time.time() - t0)
+                self.assertTrue(rs, name)
+            self.assertLess(times[1], max(times[0] * 3.0, 0.3), (name, times))
+
+    def test_rn_config_env_secret(self):
+        """PR #28 리뷰 W9: react-native-config 의존성이 있으면 접두사와 무관하게 .env 의 비밀 이름 변수를 보고 (값 미포함)"""
+        value = "Zq9" + "rnConfigValue"
+        _w(os.path.join(self.t, "app/.env"),
+           f"API_SECRET={value}\nSTRIPE_API_KEY=k\nAPI_URL=u\nEXPO_PUBLIC_A_SECRET=x\nMAPBOX_PUBLIC_TOKEN=t\nDB_PASSWORD=p\n")
+        _w(os.path.join(self.t, "app/.env.example"), "API_SECRET=\n")
+        _w(os.path.join(self.t, "app/package.json"), '{"dependencies": {"react-native": "0.73.0"}}')
+        rs = self.run_checks([("react-native", "app", [])])["results"]
+        self.assertEqual([r["rule_id"] for r in rs], ["web.env-public-secret"])     # 의존성 없음 → 공개 접두사만
+        _w(os.path.join(self.t, "app/package.json"),
+           '{"dependencies": {"react-native": "0.73.0", "react-native-config": "1.5.0"}}')
+        rs = [r for r in self.run_checks([("react-native", "app", [])])["results"] if r["check"] == "rn-config-env-secret"]
+        self.assertEqual([(r["file"], r["line"], r["severity"]) for r in rs],
+                         [("app/.env", 1, "high"), ("app/.env", 2, "medium"), ("app/.env", 6, "high")])
+        self.assertNotIn(value, json.dumps(rs))
+        _w(os.path.join(self.t, "app/package.json"), "[not json")
+        self.assertEqual([r["check"] for r in self.run_checks([("react-native", "app", [])])["results"]], ["env-public-secret"])
+
     def test_flutter_and_rn_fixture_expectations(self):
         import shutil
         for name, extra, want in (
@@ -850,6 +951,7 @@ class ChecksTest(unittest.TestCase):
             ("react-native", ("env.fixture", ".env"),
              [("android.manifest-exported-component", "android/app/src/main/AndroidManifest.xml", "android"),
               ("ios.ats-arbitrary-loads", "ios/App/Info.plist", "ios"),
+              ("react-native.config-env-secret", ".env", "react-native"),
               ("web.env-public-secret", ".env", "react-native")]),
         ):
             t = os.path.join(self.tmp.name, name)

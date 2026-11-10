@@ -1,0 +1,16 @@
+# 음성 사례 — 기준선 must_not_find (줄 이음·접힘 블록의 --obfuscate, 주석, echo, debug 빌드, 변수 플래그)
+name: safe
+on: pull_request
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # - run: flutter build apk
+      - run: echo "next: flutter build apk"
+      - run: flutter build apk --release \
+          --obfuscate --split-debug-info=build/symbols
+      - run: >
+          flutter build ipa
+          --obfuscate --split-debug-info=build/symbols
+      - run: flutter build apk --debug
+      - run: flutter build appbundle ${{ env.RELEASE_FLAGS }}
