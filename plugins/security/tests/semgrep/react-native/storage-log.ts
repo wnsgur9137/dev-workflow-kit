@@ -1,7 +1,7 @@
 const TOKEN_KEY = 'k'
 const prefix = 'app'
 
-export async function save(token: string, authToken: string, userPassword: string, password: string, user: any, x: boolean, hasToken: boolean, showPassword: boolean) {
+export async function save(token: string, authToken: string, userPassword: string, password: string, user: any, x: boolean, hasToken: boolean, showPassword: boolean, verbose: boolean, someFlag: boolean, p: string, hasher: any) {
   // ruleid: insecure-storage
   await AsyncStorage.setItem('authToken', token)
   // ruleid: insecure-storage
@@ -28,6 +28,15 @@ export async function save(token: string, authToken: string, userPassword: strin
   await AsyncStorage.setItem('PASSWORDLESS_ENABLED', '1')
   // ok: insecure-storage
   await AsyncStorage.setItem('last_token_refresh_at', '1')
+  // 3차 리뷰 S5 — 버전 꼬리·복수 id
+  // ruleid: insecure-storage
+  await AsyncStorage.setItem('access_token_v2', token)
+  // ruleid: insecure-storage
+  await AsyncStorage.setItem('TOKEN_KEY_V2', token)
+  // ruleid: insecure-storage
+  await AsyncStorage.setItem('token_ids', token)
+  // ok: insecure-storage
+  await AsyncStorage.setItem('token_version', '2')
 
   // ruleid: sensitive-log
   console.log('saved', token)
@@ -101,4 +110,23 @@ export async function save(token: string, authToken: string, userPassword: strin
     // ruleid: sensitive-log
     console.log('release', token)
   }
+  // 3차 리뷰 S4 — 호출·생성 대상 이름, 값이 리터럴인 객체 키, 뒤에 오는 __DEV__ 는 제외
+  // ok: sensitive-log
+  console.log('x', validatePassword(p))
+  // ok: sensitive-log
+  console.log('x', new Token())
+  // ok: sensitive-log
+  console.log('form', { password: '***' })
+  // ruleid: sensitive-log
+  console.log('x', hasher(token))
+  // ruleid: sensitive-log
+  console.log('form', { password: p })
+  // ruleid: sensitive-log
+  console.log('x', validatePassword(password))
+  if (verbose && __DEV__) {
+    // ok: sensitive-log
+    console.log(token)
+  }
+  // ok: sensitive-log
+  someFlag && __DEV__ && console.log(token)
 }

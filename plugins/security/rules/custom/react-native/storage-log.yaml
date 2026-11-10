@@ -18,7 +18,7 @@ rules:
       - pattern: AsyncStorage.setItem($KEY, ...)
       - metavariable-regex:
           metavariable: $KEY
-          regex: ^['"`]?[\w$.@:/{}-]{0,100}?(?i:(?:token|password|passwd|secret|credential|session_?(?:id|token|key))s?(?:_?(?:key|id))?)(?![A-Za-z0-9_])
+          regex: ^['"`]?[\w$.@:/{}-]{0,100}?(?i:(?:token|password|passwd|secret|credential|session_?(?:id|token|key))s?(?:_?(?:key|id)s?)?(?:_?v\d{1,3})?)(?![A-Za-z0-9_])
   - id: sensitive-log
     message: >-
       토큰·비밀번호로 보이는 값을 __DEV__ 분기 밖에서 로그로 출력합니다. 릴리스 빌드에도 남아 기기 로그로 새어 나갈 수 있습니다.
@@ -42,6 +42,9 @@ rules:
               - pattern-not-inside: |
                   if (__DEV__ && $C) { ... }
               - pattern-not-inside: __DEV__ && $E
+              - pattern-not-inside: $A && __DEV__ && $E
+              - pattern-not-inside: |
+                  if ($A && __DEV__) { ... }
               - pattern-not-inside: |
                   if (!__DEV__) { ... } else $E
           - patterns:
@@ -70,6 +73,11 @@ rules:
                     - pattern: $V
                     - pattern: $O.$V
                     - pattern: '{..., $V: $W, ...}'
+                # 호출·생성 대상 이름(validatePassword(p)·new Token())과 값이 리터럴인 객체 키({ password: '***' })는 제외 —
+                # 인자로 넘긴 hasher(token) 은 그대로 잡는다 (3차 리뷰 S4)
+                - pattern-not-inside: $V(...)
+                - pattern-not-inside: new $V(...)
+                - pattern-not: '{..., $V: "...", ...}'
                 - metavariable-regex:
                     metavariable: $V
                     regex: ^(?!(?:has|is|show|should|no)[A-Z])(?i:[\w$]{0,100}(?:token|password|passwd|secret|credential)s?)$

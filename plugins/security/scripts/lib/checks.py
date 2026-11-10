@@ -1534,6 +1534,7 @@ BUILD_SCRIPT = re.compile(r"(^|/)(\.github/workflows/[^/]+\.ya?ml|\.circleci/con
 # 명령은 _build_commands 가 공백을 한 칸으로 정규화한 상태 — 공백 수량자를 두지 않는다
 FLUTTER_BUILD = re.compile(r"\bflutter build (apk|appbundle|ipa|ios-framework|ios)(?![\w-])")
 YAML_FOLD = re.compile(r">[1-9+-]{0,2}")
+YAML_BLOCK = re.compile(r"[>|][1-9+-]{0,2}")
 BUILD_YAML_KEY = re.compile(r"[\w.\-]+:(?: |$)")
 NOT_RUN = ("echo", "printf")
 
@@ -1568,9 +1569,10 @@ def _build_commands(text, yaml=False, slash_comments=False):
     """(시작 줄 번호, 명령) — 주석을 지우고, 줄 끝 `\\` 이음과 YAML 접힘 블록(`run: >`)을 한 명령으로 합친다.
     합친 길이는 MAX_LINE 에서 끊는다. 공백은 한 칸으로 정규화한다. 리터럴 블록(`|`)은 줄마다 명령이다.
     yaml 이면 plain 여러 줄 스칼라(`- run: flutter build apk` 다음 줄에 더 깊게 들여쓴 `--obfuscate`)를 한 명령으로 합치고
-    `name:` 값은 명령으로 보지 않는다. slash_comments 면 `//` 주석도 지운다 (PR #28 2차 리뷰 N5)."""
+    `name:` 값은 명령으로 보지 않는다(`name: >`·`name: |` 블록 본문도 버린다, 3차 리뷰 S2). slash_comments 면 `//` 주석도
+    지운다 (PR #28 2차 리뷰 N5)."""
     out, buf, size, start, fold = [], [], 0, None, None
-    plain, discard = None, False
+    plain, discard, skip = None, False, None
 
     def flush():
         nonlocal buf, size, start
@@ -1590,6 +1592,10 @@ def _build_commands(text, yaml=False, slash_comments=False):
     for n, raw in _lines(text):
         line = strip_yaml_comment(_strip_slash_comment(raw) if slash_comments else raw)
         st = line.strip()
+        if skip is not None:
+            if not st or _indent(line) > skip:
+                continue
+            skip = None
         if plain is not None:
             if st and _indent(line) > plain and not (st == "-" or st.startswith("- ")) and not BUILD_YAML_KEY.match(st):
                 if not discard:
@@ -1610,6 +1616,11 @@ def _build_commands(text, yaml=False, slash_comments=False):
             flush()
             continue
         words = st.split()
+        if yaml and words[-2:-1] == ["name:"] and len(words) <= 3 and (len(words) == 2 or words[0] == "-") \
+                and YAML_BLOCK.fullmatch(words[-1]):
+            flush()
+            skip = _indent(line)
+            continue
         if len(words) >= 2 and YAML_FOLD.fullmatch(words[-1]) and (words[-2].endswith(":") or words[-2] == "-"):
             flush()
             fold = _indent(line)

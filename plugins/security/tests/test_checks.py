@@ -946,6 +946,23 @@ class ChecksTest(unittest.TestCase):
                 self.assertEqual([r["line"] for r in rs], want)
                 os.remove(os.path.join(self.t, rel))
 
+    def test_flutter_build_obfuscate_name_block_is_not_command(self):
+        """PR #28 3차 리뷰 S2: `name: >`·`name: |` 블록 본문은 명령이 아니다 (다음 단계·형제 키부터 다시 본다)"""
+        cases = [
+            (".github/workflows/a.yml",
+             "steps:\n  - name: >\n      flutter build apk\n    run: flutter build apk --obfuscate --split-debug-info=s\n", []),
+            (".github/workflows/a.yml", "steps:\n  - name: |\n      flutter build apk\n\n      x\n  - run: flutter build ipa\n", [6]),
+            (".github/workflows/a.yml",
+             "jobs:\n  b:\n    name: >-\n      flutter build apk\n    steps:\n      - run: flutter build apk\n", [6]),
+            (".github/workflows/a.yml", "steps:\n  - run: |\n      flutter build apk\n", [3]),         # run: | 는 그대로
+        ]
+        for rel, text, want in cases:
+            with self.subTest(text=text):
+                _w(os.path.join(self.t, rel), text)
+                rs = self.run_checks([("flutter", ".", [])])["results"]
+                self.assertEqual([r["line"] for r in rs], want)
+                os.remove(os.path.join(self.t, rel))
+
     def test_flutter_checks_line_length_is_linear(self):
         """리뷰 교훈: 줄 길이·줄 이음 길이를 2배로 늘려도 이차가 아니다 (끝까지 가서 결과를 내는지 확인)"""
         cases = [
@@ -958,6 +975,7 @@ class ChecksTest(unittest.TestCase):
             # N5: YAML plain 여러 줄 스칼라 이음·name: 건너뛰기·// 주석
             (".github/workflows/build.yml", lambda w: "steps:\n  - run: flutter build apk\n" + "      x\n" * (w // 4) + "  - run: flutter build apk\n"),
             (".github/workflows/build.yml", lambda w: "steps:\n" + "  - name: a\n" + "      b\n" * (w // 4) + "  - run: flutter build apk\n"),
+            (".github/workflows/build.yml", lambda w: "steps:\n" + "  - name: |\n" + "      b\n" * (w // 4) + "  - run: flutter build apk\n"),
             ("Jenkinsfile", lambda w: "".join(f"sh '{'/' * (w // 2)}' {'x' * (w // 2)} // y\n" for _ in range(100))
              + "sh 'flutter build apk'\n"),
         ]

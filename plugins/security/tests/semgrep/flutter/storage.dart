@@ -25,4 +25,13 @@ Future<void> save(SharedPreferences prefs, String token, String prefix) async {
   await prefs.setString('PASSWORDLESS_ENABLED', '1');
   // ok: insecure-storage
   await prefs.setString('last_token_refresh_at', '1');
+  // 3차 리뷰 S5 — 버전 꼬리·복수 id
+  // ruleid: insecure-storage
+  await prefs.setString('access_token_v2', token);
+  // ruleid: insecure-storage
+  await prefs.setString('TOKEN_KEY_V2', token);
+  // ruleid: insecure-storage
+  await prefs.setString('token_ids', token);
+  // ok: insecure-storage
+  await prefs.setString('token_version', '2');
 }

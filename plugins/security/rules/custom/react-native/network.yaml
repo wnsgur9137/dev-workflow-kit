@@ -25,6 +25,10 @@ rules:
               - metavariable-regex:
                   metavariable: $N
                   regex: ^(get|post|put|patch|delete|head|request)$
+              # 같은 이름 메서드를 가진 Map·URLSearchParams·캐시·저장소·라우터 수신자는 제외 (3차 리뷰 S3). {0,100} 은 선형 유지용
+              - metavariable-regex:
+                  metavariable: $O
+                  regex: ^(?!.{0,100}?(?i:map|cache|params|storage|router|i18n|headers)$)
       - metavariable-regex:
           metavariable: $URL
           regex: ^['"`](?:http|ws)://(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:/?#'"`]|$))
