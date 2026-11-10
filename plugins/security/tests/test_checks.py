@@ -10,8 +10,10 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "scripts", "lib"))
+sys.path.insert(0, os.path.join(HERE, "..", "scripts"))
 
 import checks  # noqa: E402
+import normalize  # noqa: E402
 import profiles  # noqa: E402
 
 FIXTURE = os.path.join(HERE, "fixtures", "web")
@@ -729,6 +731,85 @@ class ChecksTest(unittest.TestCase):
             times.append(time.time() - t0)
             self.assertTrue(rs)
         self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
+    def test_ios_review_cases(self):
+        """PR #27 리뷰 재현 사례 — 줄 번호(부분 문자열·이스케이프), iOS 10+ 무시 조합, 바이너리 plist 구분, xcconfig"""
+        import plistlib
+        conf = {"NSAppTransportSecurity": {
+            "NSAllowsArbitraryLoadsInWebContent": True, "NSAllowsArbitraryLoads": True,
+            "NSExceptionDomains": {"api.example.com": {"NSExceptionAllowsInsecureHTTPLoads": True},
+                                   "example.com": {"NSExceptionAllowsInsecureHTTPLoads": True, "NSIncludesSubdomains": True},
+                                   "a&b.com": {"NSThirdPartyExceptionAllowsInsecureHTTPLoads": True}}}}
+        _w(os.path.join(self.t, "A/Info.plist"), plistlib.dumps(conf).decode())
+        rs = sorted((r["rule_id"], r["severity"], r["line"], r["evidence"]) for r in self.run_checks([("ios", ".", [])])["results"])
+        lines = {r[3].split(":")[0]: r[2] for r in rs if r[0] == "ios.ats-insecure-http-exception"}
+        self.assertEqual(len(set(lines.values())), 3, rs)                 # 세 도메인이 서로 다른 줄
+        arb = [r for r in rs if r[0] == "ios.ats-arbitrary-loads"][0]
+        self.assertEqual(arb[1], "low")                                   # InWebContent 가 있어 iOS 10+ 에서 무시
+        self.assertTrue(any("하위 도메인 포함" in r[3] for r in rs))
+        os.remove(os.path.join(self.t, "A/Info.plist"))
+        with open(os.path.join(self.t, "A/Info.plist"), "wb") as f:     # 바이너리: 줄 없음 → 키 경로로 구분
+            f.write(plistlib.dumps({"NSAppTransportSecurity": {"NSExceptionDomains": {
+                "a.com": {"NSExceptionAllowsInsecureHTTPLoads": True}, "b.com": {"NSExceptionAllowsInsecureHTTPLoads": True}}}},
+                fmt=plistlib.FMT_BINARY))
+        pk = sorted(r["package"] for r in self.run_checks([("ios", ".", [])])["results"])
+        self.assertEqual(pk, ["ATS:NSExceptionDomains/a.com", "ATS:NSExceptionDomains/b.com"])
+        os.remove(os.path.join(self.t, "A/Info.plist"))
+        _w(os.path.join(self.t, "C.xcconfig"),
+           "API_TOKEN[sdk=iphoneos*][arch=arm64] = abcd1234secret\nAUTH_TOKEN =// set by CI\n"
+           "CLIENT_SECRET = $(inherited) realSecretValue\nSIGN_SECRET = $(inherited)\n")
+        self.assertEqual(sorted(r["line"] for r in self.run_checks([("ios", ".", [])])["results"]), [1, 3])
+
+    def test_ios_plist_huge_integer_is_refused(self):
+        _w(os.path.join(self.t, "Info.plist"), "<plist><dict><key>x</key><integer>" + "9" * 5000 + "</integer></dict></plist>")
+        report = self.run_checks([("ios", ".", [])])
+        self.assertTrue(any("긴 정수" in w for w in report["warnings"]))
+
+    def test_ios_ats_lines_are_linear(self):
+        """PR #27 리뷰 CRITICAL: 예외 도메인 수를 2배로 늘려도 시간이 이차로 늘지 않는다.
+        결과를 내지 않는 도메인으로 채워 결과 상한(MAX_RESULTS_PER_CHECK)에서 멈추지 않게 하고, 마지막 도메인 줄로 끝까지 갔는지 본다"""
+        import plistlib
+        times = []
+        for n in (4000, 8000):
+            doms = {f"d{i}.example.com": {"NSIncludesSubdomains": True} for i in range(n)}
+            doms["last.example.com"] = {"NSExceptionAllowsInsecureHTTPLoads": True}
+            body = plistlib.dumps({"NSAppTransportSecurity": {"NSExceptionDomains": doms}}).decode()
+            _w(os.path.join(self.t, "Info.plist"), body)
+            t0 = time.time()
+            rs = self.run_checks([("ios", ".", [])])["results"]
+            times.append(time.time() - t0)
+            want = body[:body.index("<key>last.example.com</key>")].count("\n") + 1
+            self.assertEqual([r["line"] for r in rs], [want])
+        self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
+    def test_ios_rereview_cases(self):
+        """PR #27 재리뷰 재현 사례 — 한 줄짜리·긴 도메인 id, xcconfig 중첩 참조·참조 뒤 경로, CDATA 정수"""
+        import plistlib
+        conf = {"NSAppTransportSecurity": {"NSExceptionDomains": {
+            "a.com": {"NSExceptionAllowsInsecureHTTPLoads": True}, "b.com": {"NSExceptionAllowsInsecureHTTPLoads": True},
+            "x" * 120 + ".one.com": {"NSExceptionAllowsInsecureHTTPLoads": True},
+            "x" * 120 + ".two.com": {"NSExceptionAllowsInsecureHTTPLoads": True},
+            # 97~100자 — package 가 normalize 의 120자 절단에 걸리던 길이 (PR #27 2차 재리뷰 W-B)
+            "a" * 96 + ".com": {"NSExceptionAllowsInsecureHTTPLoads": True, "NSExceptionMinimumTLSVersion": "TLSv1.0"},
+            "a" * 96 + ".net": {"NSExceptionAllowsInsecureHTTPLoads": True, "NSExceptionMinimumTLSVersion": "TLSv1.0"}}}}
+        _w(os.path.join(self.t, "Info.plist"), plistlib.dumps(conf).decode().replace("\n", "").replace("\t", ""))
+        data = self.run_checks([("ios", ".", [])])
+        rs = data["results"]
+        self.assertEqual({r["line"] for r in rs}, {1})
+        self.assertEqual(len(rs), 8, rs)
+        self.assertEqual(len({(r["rule_id"], r["package"]) for r in rs}), 8, rs)  # 한 줄이어도, 앞부분이 같아도 서로 다른 id
+        self.assertTrue(all(len(r["package"]) <= 120 for r in rs), [len(r["package"]) for r in rs])
+        ids = [f["id"] for f in normalize.parse_checks(data)[0]]          # normalize 절단 뒤에도 id 가 갈린다
+        self.assertEqual(len(set(ids)), 8, ids)
+        os.remove(os.path.join(self.t, "Info.plist"))
+        _w(os.path.join(self.t, "C.xcconfig"),
+           "API_KEY = $(API_KEY_$(CONFIGURATION))\nCLIENT_SECRET = $(SRCROOT)/Secrets/client\n"
+           "AUTH_TOKEN = $(A_$(B_$(C_$(D_$(E)))))\nDB_PASSWORD = $(inherited) Zq9realSecret\n")
+        self.assertEqual([r["line"] for r in self.run_checks([("ios", ".", [])])["results"]], [4])
+        os.remove(os.path.join(self.t, "C.xcconfig"))
+        for body in ("<![CDATA[" + "9" * 5000 + "]]>", "&#57;" * 2000):
+            _w(os.path.join(self.t, "Info.plist"), f"<plist><dict><key>x</key><integer>{body}</integer></dict></plist>")
+            self.assertTrue(any("긴 정수" in w for w in self.run_checks([("ios", ".", [])])["warnings"]), body[:20])
 
     def test_ios_fixture_expectations(self):
         import shutil

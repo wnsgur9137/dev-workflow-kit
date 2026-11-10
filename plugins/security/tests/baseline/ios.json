@@ -6,11 +6,30 @@
     {"tool": "toolkit", "rule_id": "ios.ats-insecure-http-exception", "file": "App/Info.plist", "note": "I2"},
     {"tool": "toolkit", "rule_id": "ios.ats-weak-tls", "file": "App/Info.plist", "note": "I2"},
     {"tool": "semgrep", "rule_suffix": "insecure-storage", "file": "App/Sources/Session.swift", "note": "I3"},
+    {"tool": "semgrep", "rule_suffix": "insecure-storage", "file": "App/Sources/Prefs.swift", "note": "I3 self.defaults (PR #27 재리뷰 W2)"},
+    {"tool": "semgrep", "rule_suffix": "insecure-storage", "file": "App/Sources/SuitePrefs.swift", "note": "I3 강제 언래핑 UserDefaults(suiteName:) (PR #27 재리뷰 W2)"},
     {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/Session.swift", "note": "I4"},
+    {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/Auth.swift", "note": "I4 카멜케이스 userPassword (PR #27 재리뷰 W1)"},
+    {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/Refresh.swift", "note": "I4 카멜케이스 refreshToken (PR #27 재리뷰 W1)"},
+    {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/PasswordText.swift", "note": "I4 passwordField.text (PR #27 3차 재리뷰 W-2)"},
+    {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/PasswordHash.swift", "note": "I4 passwordHash (PR #27 3차 재리뷰)"},
     {"tool": "semgrep", "rule_suffix": "sensitive-log-objc", "file": "App/Legacy/Crypto.m", "note": "I4 Objective-C"},
     {"tool": "semgrep", "rule_suffix": "weak-crypto", "file": "App/Sources/Hash.swift", "note": "I6"},
     {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/Crypto.m", "note": "I6 Objective-C"},
+    {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/BlockThenCall.m", "note": "I6 같은 줄 닫힌 블록 주석 뒤 호출 (PR #27 2차 재리뷰 W-A)"},
+    {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/UrlThenCall.m", "note": "I6 URL 문자열 뒤 호출 (PR #27 2차 재리뷰 W-A)"},
+    {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/CallThenNote.m", "note": "I6 호출 뒤 줄 끝 주석 (PR #27 2차 재리뷰 S-B)"},
+    {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/AfterComments.m", "note": "I6 닫힌 블록 주석 여러 개·\"//\" 문자열 뒤 호출 (PR #27 3차 재리뷰 S-1)"},
+    {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/LongLine.m", "note": "I6 수천 자 줄 다음 호출 — PCRE2 한도 (PR #27 3차 재리뷰 W-1)"},
     {"tool": "semgrep", "rule_suffix": "webview-file-access", "file": "App/Sources/Web.swift", "note": "I7"},
     {"tool": "osv-scanner", "package": "github.com/apple/swift-nio-http2@1.19.1", "file": "Package.resolved", "note": "I5"}
+  ],
+  "must_not_find": [
+    {"file": "App/Sources/SecureStore.swift", "rule_suffix": "insecure-storage", "note": "Keychain 래퍼"},
+    {"file": "App/Sources/Cache.swift", "rule_suffix": "insecure-storage", "note": "UserDefaults 가 아닌 객체의 set·setValue"},
+    {"file": "App/Sources/Tokenizer.swift", "rule_suffix": "sensitive-log", "note": "키워드 뒤 소문자(Tokenizer)·비민감 접미사(tokenCount·passwordField·isTokenValid·password_reset)"},
+    {"file": "App/Legacy/Comments.m", "rule_suffix": "weak-crypto-objc", "note": "줄 끝·블록 주석 안의 알고리즘 이름"},
+    {"file": "App/Legacy/InString.m", "rule_suffix": "weak-crypto-objc", "note": "문자열 안의 알고리즘 이름"},
+    {"file": "App/Legacy/Comments.m", "rule_suffix": "sensitive-log-objc", "note": "NSLog tokenizer"}
   ]
 }
