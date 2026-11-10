@@ -16,7 +16,7 @@ void block(HttpClient c) {
   c.badCertificateCallback = (cert, host, port) => host == 'dev.local';
 }
 
-void urls(Dio dio) {
+void urls(Dio dio, String id, String base, String url) {
   // ruleid: insecure-http-url
   final a = Uri.parse('http://api.example.com/v1');
   // ruleid: insecure-http-url
@@ -39,4 +39,14 @@ void urls(Dio dio) {
   final i = Uri.http('localhost:8080', '/v1');
   // ok: insecure-http-url
   final j = Uri.parse('https://api.example.com');
+  // ruleid: insecure-http-url
+  final k = Uri.parse("http://api.example.com/$id");
+  // ruleid: insecure-http-url
+  final l = Uri.parse('http://api.example.com/${id}');
+  // ok: insecure-http-url
+  final m = Uri.parse('http://localhost:8080/$id');
+  // ok: insecure-http-url
+  final n = Uri.parse('$base/v1');
+  // ok: insecure-http-url
+  final o = Uri.parse(url);
 }

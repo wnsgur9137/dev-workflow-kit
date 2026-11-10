@@ -11,13 +11,14 @@ rules:
       owasp: ["M2: Insecure Data Storage"]
       stack: react-native
     # 키는 문자열 리터럴('authToken')·상수(TOKEN_KEY·kTokenKey·Keys.userPassword) 모두 본다 — 1.182.0 JS 에서
-    # 리터럴 메타변수에도 metavariable-regex 가 맞음을 실측(Swift 와 다름). 키워드 뒤에 소문자가 이어지면 제외해
-    # tokenizer_lang·tokenizerLang 은 잡지 않는다 (PR #28 리뷰 S5). {0,100} 제한은 지우지 말 것 (선형 유지)
+    # 리터럴 메타변수에도 metavariable-regex 가 맞음을 실측(Swift 와 다름). 키워드(+ 선택적 Key·_id 꼬리) 뒤에 영문자·숫자·_ 가
+    # 이어지면 제외해 tokenizer_lang·tokenCount·PASSWORDLESS_ENABLED·last_token_refresh_at 은 잡지 않는다 (PR #28 리뷰 S5·N8).
+    # 보간 키(`${prefix}:token`)도 본다. {0,100} 제한은 지우지 말 것 (선형 유지)
     patterns:
       - pattern: AsyncStorage.setItem($KEY, ...)
       - metavariable-regex:
           metavariable: $KEY
-          regex: ^['"`]?[\w$.@:/-]{0,100}?(?i:token|password|passwd|secret|credential|session_?(?:id|token|key))s?(?![a-z])
+          regex: ^['"`]?[\w$.@:/{}-]{0,100}?(?i:(?:token|password|passwd|secret|credential|session_?(?:id|token|key))s?(?:_?(?:key|id))?)(?![A-Za-z0-9_])
   - id: sensitive-log
     message: >-
       토큰·비밀번호로 보이는 값을 __DEV__ 분기 밖에서 로그로 출력합니다. 릴리스 빌드에도 남아 기기 로그로 새어 나갈 수 있습니다.
@@ -27,31 +28,53 @@ rules:
       category: security
       cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
       stack: react-native
-    # 인자 자체(식별자·멤버 접근, 템플릿 리터럴 보간, 객체 값)의 이름을 본다 — 'Refresh token expired' 같은 문장은 잡지 않는다.
-    # if (__DEV__) { … } 의 then 쪽은 제외하고 else 쪽은 focus-metavariable 로 다시 본다 (PR #28 리뷰 W6, 1.182.0 실측)
+    # 인자 식(문자열 연결·함수 호출·??·!·as·대괄호·템플릿 보간·객체) 안의 식별자·멤버 이름·객체 키·대괄호 키를
+    # metavariable-pattern 으로 찾는다(PR #28 2차 리뷰 N1 — 인자 식 전체를 정규식으로 보던 방식은 'token: ' + token 을 놓쳤다).
+    # 문자열 리터럴은 대괄호 키(user['token'])일 때만 본다 — 'Refresh token expired' 같은 문장·라벨은 잡지 않는다.
+    # __DEV__ 분기: if (__DEV__) / if (__DEV__ && …) 의 then 쪽, __DEV__ && console.log(…), if (!__DEV__) … else 의 else 쪽은
+    # 제외하고, 앞 두 if 의 else 쪽과 if (!__DEV__) 의 then 쪽은 focus-metavariable 로 다시 본다 (리뷰 W6·N8, 1.182.0 실측)
     patterns:
       - pattern-either:
           - patterns:
-              - pattern-either:
-                  - pattern: console.$F(..., $X, ...)
-                  - pattern: console.$F(..., `...${$X}...`, ...)
-                  - pattern: 'console.$F(..., {..., $X, ...}, ...)'
-                  - pattern: 'console.$F(..., {..., $K: $X, ...}, ...)'
+              - pattern: console.$F(..., $X, ...)
               - pattern-not-inside: |
                   if (__DEV__) { ... }
+              - pattern-not-inside: |
+                  if (__DEV__ && $C) { ... }
+              - pattern-not-inside: __DEV__ && $E
+              - pattern-not-inside: |
+                  if (!__DEV__) { ... } else $E
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      if (__DEV__) { ... } else $ELSE
+                  - pattern-inside: |
+                      if (__DEV__ && $C) { ... } else $ELSE
+              - focus-metavariable: $ELSE
+              - pattern: console.$F(..., $X, ...)
           - patterns:
               - pattern-inside: |
-                  if (__DEV__) { ... } else $ELSE
-              - focus-metavariable: $ELSE
-              - pattern-either:
-                  - pattern: console.$F(..., $X, ...)
-                  - pattern: console.$F(..., `...${$X}...`, ...)
-                  - pattern: 'console.$F(..., {..., $X, ...}, ...)'
-                  - pattern: 'console.$F(..., {..., $K: $X, ...}, ...)'
+                  if (!__DEV__) { $...THEN } else $E
+              - focus-metavariable: $...THEN
+              - pattern: console.$F(..., $X, ...)
       - metavariable-regex:
           metavariable: $F
           regex: ^(log|info|debug|warn|error)$
-      # 앞쪽 단어 경계 없음 — authToken·userPassword 를 잡는다. 끝 고정이라 tokenizer·tokenCount 는 잡지 않는다
-      - metavariable-regex:
+      # 이름 끝 고정 — authToken·userPassword 는 잡고 tokenizer·tokenCount 는 잡지 않는다. has·is·show·should·no 로
+      # 시작하는 불리언 이름(hasToken·showPassword)은 제외 (리뷰 N8). {0,100} 제한은 지우지 말 것 (선형 유지)
+      - metavariable-pattern:
           metavariable: $X
-          regex: (?i)^[\w$.]{0,100}(token|password|passwd|secret|credential)s?$
+          pattern-either:
+            - patterns:
+                - pattern-either:
+                    - pattern: $V
+                    - pattern: $O.$V
+                    - pattern: '{..., $V: $W, ...}'
+                - metavariable-regex:
+                    metavariable: $V
+                    regex: ^(?!(?:has|is|show|should|no)[A-Z])(?i:[\w$]{0,100}(?:token|password|passwd|secret|credential)s?)$
+            - patterns:
+                - pattern: $O[$V]
+                - metavariable-regex:
+                    metavariable: $V
+                    regex: ^['"`](?i:[\w$]{0,100}(?:token|password|passwd|secret|credential)s?)['"`]$

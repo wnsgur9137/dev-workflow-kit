@@ -12,9 +12,10 @@ rules:
       owasp: ["M2: Insecure Data Storage"]
       stack: flutter
     # 키는 문자열 리터럴·상수(kTokenKey·Keys.userPassword) 모두 본다 — 1.182.0 Dart 에서 리터럴 메타변수에도
-    # metavariable-regex 가 맞음을 실측. 키워드 뒤에 소문자가 이어지면 제외(tokenizer_lang, PR #28 리뷰 S5). {0,100} 은 선형 유지용
+    # metavariable-regex 가 맞음을 실측. 키워드(+ 선택적 Key·_id 꼬리) 뒤에 영문자·숫자·_ 가 이어지면 제외(tokenizer_lang·
+    # tokenCount·PASSWORDLESS_ENABLED·last_token_refresh_at, PR #28 리뷰 S5·N8). 보간 키('${prefix}_token')도 본다. {0,100} 은 선형 유지용
     patterns:
       - pattern: $P.setString($KEY, ...)
       - metavariable-regex:
           metavariable: $KEY
-          regex: ^['"]?[\w$.@:/-]{0,100}?(?i:token|password|passwd|secret|credential|session_?(?:id|token|key))s?(?![a-z])
+          regex: ^['"]?[\w$.@:/{}-]{0,100}?(?i:(?:token|password|passwd|secret|credential|session_?(?:id|token|key))s?(?:_?(?:key|id))?)(?![A-Za-z0-9_])

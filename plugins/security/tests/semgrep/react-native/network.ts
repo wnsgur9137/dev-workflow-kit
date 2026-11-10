@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-export async function load() {
+export async function load(api: any, cache: any, id: string, base: string, url: string) {
   // ruleid: insecure-http-url
   await fetch('http://api.example.com/v1/items')
   // ruleid: insecure-http-url
@@ -19,4 +19,18 @@ export async function load() {
   await axios.post('https://api.example.com/v1', {})
   // ok: insecure-http-url
   const local = new WebSocket('ws://127.0.0.1:8080')
+  // ruleid: insecure-http-url
+  await fetch(`http://api.example.com/${id}`)
+  // ruleid: insecure-http-url
+  await axios({ method: 'get', url: 'http://api.example.com/x' })
+  // ruleid: insecure-http-url
+  await api.get('http://api.example.com/x')
+  // ok: insecure-http-url
+  await fetch(`http://localhost:8081/${id}`)
+  // ok: insecure-http-url
+  await fetch(`${base}/v1`)
+  // ok: insecure-http-url
+  await api.get(url)
+  // ok: insecure-http-url
+  await cache.set('http://api.example.com/x', 1)
 }

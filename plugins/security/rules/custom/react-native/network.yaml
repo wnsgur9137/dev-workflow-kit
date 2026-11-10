@@ -10,9 +10,21 @@ rules:
       cwe: ["CWE-319: Cleartext Transmission of Sensitive Information"]
       owasp: ["M3: Insecure Communication"]
       stack: react-native
-    # 로컬 개발 주소(localhost·127.0.0.1·에뮬레이터 10.0.2.2)는 제외 — 호스트가 그 이름으로 끝나야 한다 (Flutter F4 와 같은 정규식)
-    pattern-either:
-      - pattern: fetch("=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...)
-      - pattern: axios.$M("=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...)
-      - pattern: 'axios.create({..., baseURL: "=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...})'
-      - pattern: new WebSocket("=~/^ws:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...)
+    # 로컬 개발 주소(localhost·127.0.0.1·에뮬레이터 10.0.2.2)는 제외 — 호스트가 그 이름으로 끝나야 한다 (Flutter F4 와 같은 정규식).
+    # URL 인자는 메타변수 + metavariable-regex 로 소스 텍스트(따옴표 포함)를 보므로 보간 템플릿(`http://host/${id}`)도 잡는다.
+    # axios 설정 객체(axios({ url }))·인스턴스 호출(api.get·post·put·patch·delete·head·request)도 본다 (리뷰 N6, 1.182.0 실측)
+    patterns:
+      - pattern-either:
+          - pattern: fetch($URL, ...)
+          - pattern: axios.$M($URL, ...)
+          - pattern: 'axios.create({..., baseURL: $URL, ...})'
+          - pattern: 'axios({..., url: $URL, ...})'
+          - pattern: new WebSocket($URL, ...)
+          - patterns:
+              - pattern: $O.$N($URL, ...)
+              - metavariable-regex:
+                  metavariable: $N
+                  regex: ^(get|post|put|patch|delete|head|request)$
+      - metavariable-regex:
+          metavariable: $URL
+          regex: ^['"`](?:http|ws)://(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:/?#'"`]|$))
