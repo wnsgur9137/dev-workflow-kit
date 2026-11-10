@@ -369,6 +369,51 @@ class ParserTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(m(raw), want)
 
+    def test_mask_literal_values_value_before_key_label(self):
+        """PR #28 3차 리뷰 M1·S1: `(` 첫 인자여도 뒤에 forKey:·key: 라벨이 이어지면 값으로 보고 가린다.
+        인자를 줄마다 나눈 호출(\n·\r\n)의 첫 인자 키는 남긴다"""
+        m = normalize.mask_literal_values
+        cases = [
+            ('UserDefaults.standard.set("Password123", forKey: "password")',
+             'UserDefaults.standard.set("[MASKED]", forKey: "password")'),
+            ('UserDefaults.standard.set("tokenABCdef99", forKey: "authToken")',
+             'UserDefaults.standard.set("[MASKED]", forKey: "authToken")'),
+            ("defaults.set('my-secret-pass', forKey: 'secret')", "defaults.set('[MASKED]', forKey: 'secret')"),
+            ('defaults.set("tokenX",forKey:"authToken")', 'defaults.set("[MASKED]",forKey:"authToken")'),
+            ('defaults.set(\n  "tokenX",\n  forKey: "authToken")', 'defaults.set(\n  "[MASKED]",\n  forKey: "authToken")'),
+            # 키는 계속 남는다
+            ('UserDefaults.standard.set(token, forKey: "authToken")', 'UserDefaults.standard.set(token, forKey: "authToken")'),
+            ('KeychainWrapper.set(value: "pw-secret-1", key: "userPassword")',
+             'KeychainWrapper.set(value: "[MASKED]", key: "userPassword")'),
+            ("await prefs.setString('access_token', token);", "await prefs.setString('access_token', token);"),
+            ("AsyncStorage.setItem('password', 'Password123')", "AsyncStorage.setItem('password', '[MASKED]')"),
+            ("lookup('authToken', default: 'x')", "lookup('authToken', default: '[MASKED]')"),
+            # S1: 여러 줄 인자
+            ("AsyncStorage.setItem(\n  'refresh_token',\n  'tok_abc')", "AsyncStorage.setItem(\n  'refresh_token',\n  '[MASKED]')"),
+            ("AsyncStorage.setItem(\r\n  'refresh_token',\r\n  'tok_abc')",
+             "AsyncStorage.setItem(\r\n  'refresh_token',\r\n  '[MASKED]')"),
+        ]
+        for raw, want in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(m(raw), want)
+
+    def test_mask_literal_values_label_lookahead_is_linear(self):
+        """M1·S1 의 앞 훑기(상수 길이)·줄바꿈 포함 뒤 훑기도 입력 2배에 시간이 2배 수준이다"""
+        import time
+        gens = (
+            lambda k: "set('token', forKey: 'authToken')" * 20_000 * k,   # 라벨 앞 값 반복
+            lambda k: ("('token'," + " " * 30 + "\n") * 20_000 * k,         # 라벨 없이 공백만 이어짐
+            lambda k: ("(" + "\r\n" * 10_000 * k + "'token'") * 5,         # 줄바꿈 뒤 키 자리
+        )
+        for gen in gens:
+            times = []
+            for k in (1, 2):
+                text = gen(k)
+                t0 = time.time()
+                normalize.mask_literal_values(text)
+                times.append(time.time() - t0)
+            self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
     def test_mask_literal_values_key_position_and_comments_are_linear(self):
         """N2·N3 의 키 자리 역방향 확인·여러 줄 리터럴·주석 처리도 입력 2배에 시간이 2배 수준이다"""
         import time

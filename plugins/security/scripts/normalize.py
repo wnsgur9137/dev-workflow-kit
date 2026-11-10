@@ -95,16 +95,31 @@ _LITERAL_KEY_NAME = re.compile(r"[\w.\-:]{1,80}")
 _LITERAL_KEY_LABELS = ("forkey", "key")
 
 
-def _literal_key_position(text: str, k: int) -> bool:
-    """k 의 따옴표가 키 자리인가 — `(`·`[` 바로 뒤 첫 인자, 또는 `forKey:`·`key:` 뒤 (사이 공백 허용).
+_LITERAL_LOOKAHEAD = 40
+
+
+def _value_label_follows(text: str, e: int) -> bool:
+    """e(닫는 따옴표 다음)부터 공백·`,`·공백 뒤에 `forKey:`·`key:` 라벨이 바로 오는가 — 그러면 앞 리터럴은 값이다
+    (Swift `set("<값>", forKey: "k")`, PR #28 3차 리뷰 M1). 앞으로 훑는 길이는 상수(_LITERAL_LOOKAHEAD)로 막아 전체 선형."""
+    m = text[e:e + _LITERAL_LOOKAHEAD].lstrip(" \t\r\n")
+    if not m.startswith(","):
+        return False
+    m = m[1:].lstrip(" \t\r\n")
+    c = m.find(":")
+    return c > 0 and m[:c].lower() in _LITERAL_KEY_LABELS
+
+
+def _literal_key_position(text: str, k: int, e: int = -1) -> bool:
+    """k 의 따옴표가 키 자리인가 — `(`·`[` 바로 뒤 첫 인자(단 뒤에 `forKey:`·`key:` 라벨이 이어지면 값), 또는
+    `forKey:`·`key:` 뒤 (사이 공백·줄바꿈 허용). e 는 닫는 따옴표 다음 위치(닫히지 않았으면 -1).
     뒤로 훑는 구간은 앞 토큰과 이 따옴표 사이의 공백·이름 하나뿐이라 따옴표마다 겹치지 않는다 (전체 선형)."""
     i = k - 1
-    while i >= 0 and text[i] in " \t":
+    while i >= 0 and text[i] in " \t\r\n":
         i -= 1
     if i < 0:
         return False
     if text[i] in "([":
-        return True
+        return text[i] == "[" or e < 0 or not _value_label_follows(text, e)
     if text[i] != ":":
         return False
     e = i
@@ -115,8 +130,8 @@ def _literal_key_position(text: str, k: int) -> bool:
 
 
 def mask_literal_values(text: str) -> str:
-    """문자열 리터럴(작은·큰따옴표, 백틱, 삼중 따옴표)의 내용을 가린다. 키 자리(`(`·`[` 바로 뒤 첫 인자, `forKey:`·`key:` 뒤)의
-    키 이름(비밀 단어를 포함한 공백 없는 짧은 이름)만 남긴다 — 값 자리의 리터럴은 비밀 단어가 있어도 가린다
+    """문자열 리터럴(작은·큰따옴표, 백틱, 삼중 따옴표)의 내용을 가린다. 키 자리(`(`·`[` 바로 뒤 첫 인자 — 뒤에 `forKey:`·`key:` 라벨이
+    이어지면 값, `forKey:`·`key:` 뒤)의 키 이름(비밀 단어를 포함한 공백 없는 짧은 이름)만 남긴다 — 값 자리의 리터럴은 비밀 단어가 있어도 가린다
     (setItem('password', 'Password123'), PR #28 2차 리뷰 N2). 백틱·삼중 따옴표는 줄을 넘겨 닫는 따옴표까지 가리고,
     리터럴 밖의 `//` 와 공백 뒤 `# ` 주석은 줄 끝까지 그대로 둔다 (N3). 선형 스캔."""
     out, k, n = [], 0, len(text)
@@ -141,7 +156,7 @@ def mask_literal_values(text: str) -> str:
         closed = j < n and text.startswith(q, j)
         body = text[k + len(q):min(j, n)]
         keep = not body or (len(q) == 1 and _LITERAL_KEY_NAME.fullmatch(body) and _LITERAL_KEY_WORD.search(body)
-                            and _literal_key_position(text, k))
+                            and _literal_key_position(text, k, j + len(q) if closed else -1))
         out.append(q + (body if keep else "[MASKED]") + (q if closed else ""))
         k = j + len(q) if closed else min(j, n)
     return "".join(out)
