@@ -12,8 +12,6 @@ class DevOverrides extends HttpOverrides {
 Future<void> saveSession(String token) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.setString('access_token', token);
-  await prefs.setBool('onboarded', true);
 }
 
 final legacyApi = Uri.parse('http://api.example.com/v1');
-final localApi = Uri.parse('http://localhost:8080');

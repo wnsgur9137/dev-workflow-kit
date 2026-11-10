@@ -10,5 +10,6 @@
 | F4 인증서 검증 우회·평문 HTTP | `lib/api.dart` | `bad-certificate-callback`, `insecure-http-url` |
 | F5 SharedPreferences 토큰 | `lib/api.dart` | `insecure-storage` |
 | F6 취약 의존성 | `pubspec.lock.fixture`(테스트에서 `pubspec.lock` 으로 복사) | `dio@4.0.0` |
+| 음성 사례 | `lib/safe.dart`(localhost·10.0.2.2·https, `tokenizer_lang`), `.github/workflows/safe.yml`(줄 이음·접힘 블록의 `--obfuscate`, 주석, echo, `--debug`, 변수 플래그) | 기준선 `must_not_find` |
 | 네이티브 Android | `android/app/src/main/AndroidManifest.xml` | `android.manifest-debuggable` (profile android) |
 | 네이티브 iOS | `ios/Runner/Info.plist` | `ios.ats-arbitrary-loads` (profile ios) |

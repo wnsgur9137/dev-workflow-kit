@@ -1,0 +1,18 @@
+# R3 — 평문 HTTP 요청 (docs/security/07 스택별 설계/Flutter·React Native.md)
+rules:
+  - id: insecure-http-url
+    message: >-
+      평문 http:// 주소로 요청합니다. Android 9+·iOS ATS 기본 설정에서 막히거나, 허용돼 있다면 통신이 노출됩니다. https 를 쓰세요.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: ["CWE-319: Cleartext Transmission of Sensitive Information"]
+      owasp: ["M3: Insecure Communication"]
+      stack: react-native
+    # 로컬 개발 주소(localhost·127.0.0.1·에뮬레이터 10.0.2.2)는 제외 — 호스트가 그 이름으로 끝나야 한다 (Flutter F4 와 같은 정규식)
+    pattern-either:
+      - pattern: fetch("=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...)
+      - pattern: axios.$M("=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...)
+      - pattern: 'axios.create({..., baseURL: "=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...})'
+      - pattern: new WebSocket("=~/^ws:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...)

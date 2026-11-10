@@ -25,9 +25,12 @@ rules:
       cwe: ["CWE-319: Cleartext Transmission of Sensitive Information"]
       owasp: ["M3: Insecure Communication"]
       stack: flutter
-    # 로컬 개발 주소(localhost·127.0.0.1·에뮬레이터 10.0.2.2)는 제외
+    # 로컬 개발 주소(localhost·127.0.0.1·에뮬레이터 10.0.2.2)는 제외 — 호스트가 그 이름으로 끝나야 한다
+    # (localhost.evil.com·10.0.2.20 은 잡는다, PR #28 리뷰 S1). Uri.http(호스트, …)·Dio BaseOptions(baseUrl:)도 본다.
+    # http.get(Uri.parse(…)) 는 안쪽 Uri.parse 로 잡힌다
     pattern-either:
-      - pattern: Uri.parse("=~/^http:\/\/(?!localhost|127\.0\.0\.1|10\.0\.2\.2)/")
-      - pattern: $H.get(Uri.parse("=~/^http:\/\/(?!localhost|127\.0\.0\.1|10\.0\.2\.2)/"), ...)
-      - pattern: $D.get("=~/^http:\/\/(?!localhost|127\.0\.0\.1|10\.0\.2\.2)/", ...)
-      - pattern: $D.post("=~/^http:\/\/(?!localhost|127\.0\.0\.1|10\.0\.2\.2)/", ...)
+      - pattern: Uri.parse("=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/")
+      - pattern: Uri.http("=~/^(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?::|$))/", ...)
+      - pattern: BaseOptions(..., baseUrl:"=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...)
+      - pattern: $D.get("=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...)
+      - pattern: $D.post("=~/^http:\/\/(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:\/?#]|$))/", ...)

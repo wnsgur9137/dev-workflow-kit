@@ -10,9 +10,14 @@ rules:
       cwe: ["CWE-312: Cleartext Storage of Sensitive Information"]
       owasp: ["M2: Insecure Data Storage"]
       stack: react-native
+    # 키는 문자열 리터럴('authToken')·상수(TOKEN_KEY·kTokenKey·Keys.userPassword) 모두 본다 — 1.182.0 JS 에서
+    # 리터럴 메타변수에도 metavariable-regex 가 맞음을 실측(Swift 와 다름). 키워드 뒤에 소문자가 이어지면 제외해
+    # tokenizer_lang·tokenizerLang 은 잡지 않는다 (PR #28 리뷰 S5). {0,100} 제한은 지우지 말 것 (선형 유지)
     patterns:
-      - pattern: AsyncStorage.setItem(...)
-      - pattern-regex: (?i)setItem\(\s*['"`][^'"`\n]{0,100}(token|password|passwd|secret|credential|session_?(id|token|key))
+      - pattern: AsyncStorage.setItem($KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: ^['"`]?[\w$.@:/-]{0,100}?(?i:token|password|passwd|secret|credential|session_?(?:id|token|key))s?(?![a-z])
   - id: sensitive-log
     message: >-
       토큰·비밀번호로 보이는 값을 __DEV__ 분기 밖에서 로그로 출력합니다. 릴리스 빌드에도 남아 기기 로그로 새어 나갈 수 있습니다.
@@ -22,12 +27,31 @@ rules:
       category: security
       cwe: ["CWE-532: Insertion of Sensitive Information into Log File"]
       stack: react-native
+    # 인자 자체(식별자·멤버 접근, 템플릿 리터럴 보간, 객체 값)의 이름을 본다 — 'Refresh token expired' 같은 문장은 잡지 않는다.
+    # if (__DEV__) { … } 의 then 쪽은 제외하고 else 쪽은 focus-metavariable 로 다시 본다 (PR #28 리뷰 W6, 1.182.0 실측)
     patterns:
       - pattern-either:
-          - pattern: console.log(...)
-          - pattern: console.info(...)
-          - pattern: console.debug(...)
-      - pattern-not-inside: |
-          if (__DEV__) { ... }
-      # 단어 경계 — Tokenizer·secretary 같은 이름은 잡지 않는다
-      - pattern-regex: (?i)\b(token|access_?token|password|passwd|secret|credential)s?\b
+          - patterns:
+              - pattern-either:
+                  - pattern: console.$F(..., $X, ...)
+                  - pattern: console.$F(..., `...${$X}...`, ...)
+                  - pattern: 'console.$F(..., {..., $X, ...}, ...)'
+                  - pattern: 'console.$F(..., {..., $K: $X, ...}, ...)'
+              - pattern-not-inside: |
+                  if (__DEV__) { ... }
+          - patterns:
+              - pattern-inside: |
+                  if (__DEV__) { ... } else $ELSE
+              - focus-metavariable: $ELSE
+              - pattern-either:
+                  - pattern: console.$F(..., $X, ...)
+                  - pattern: console.$F(..., `...${$X}...`, ...)
+                  - pattern: 'console.$F(..., {..., $X, ...}, ...)'
+                  - pattern: 'console.$F(..., {..., $K: $X, ...}, ...)'
+      - metavariable-regex:
+          metavariable: $F
+          regex: ^(log|info|debug|warn|error)$
+      # 앞쪽 단어 경계 없음 — authToken·userPassword 를 잡는다. 끝 고정이라 tokenizer·tokenCount 는 잡지 않는다
+      - metavariable-regex:
+          metavariable: $X
+          regex: (?i)^[\w$.]{0,100}(token|password|passwd|secret|credential)s?$

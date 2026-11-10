@@ -169,7 +169,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 | Android (Kotlin·Java) | Manifest `debuggable`·`allowBackup`·`usesCleartextTraffic`·권한 없는 exported 컴포넌트, network_security_config 평문·사용자 CA, release 난독화 꺼짐, WebView JS 인터페이스·파일 접근, `MODE_WORLD_READABLE`, `gradle.properties` 서명 비밀번호(키 이름만) | [Android](docs/security/07%20스택별%20설계/Android.md) |
 | iOS (Swift·Objective-C) | Info.plist ATS 예외(`NSAllowsArbitraryLoads`·평문 예외 도메인·낮은 TLS), `UserDefaults` 토큰·비밀번호 저장, 민감 정보 로그, MD5·SHA1·DES·ECB, WKWebView 파일 URL 접근, xcconfig 평문 비밀(키 이름만) | [iOS](docs/security/07%20스택별%20설계/iOS.md) |
 | Flutter (Dart) | `.env` asset 번들, CI 릴리스 빌드 `--obfuscate` 없음, `badCertificateCallback` → true, 평문 HTTP URL, `shared_preferences` 토큰. 하위 `android/`·`ios/`는 네이티브 프로파일 | [Flutter·RN](docs/security/07%20스택별%20설계/Flutter·React%20Native.md) |
-| React Native | 공개 변수(`EXPO_PUBLIC_` 등) 비밀, `AsyncStorage` 토큰, WebView `originWhitelist={['*']}`, `__DEV__` 밖 민감 로그. 하위 `android/`·`ios/`는 네이티브 프로파일 | [Flutter·RN](docs/security/07%20스택별%20설계/Flutter·React%20Native.md) |
+| React Native | 공개 변수(`EXPO_PUBLIC_` 등)·`react-native-config` `.env`의 비밀 이름(키 이름만), `AsyncStorage` 토큰, WebView `originWhitelist`의 `'*'`, 평문 HTTP 요청, `__DEV__` 밖 민감 로그. 하위 `android/`·`ios/`는 네이티브 프로파일 | [Flutter·RN](docs/security/07%20스택별%20설계/Flutter·React%20Native.md) |
 | Web (Next.js·React·Vite 등) | 공개 접두사 변수(`NEXT_PUBLIC_`·`VITE_` 등)에 비밀 이름, API 라우트 인증 누락(휴리스틱), SSRF, `next.config` 보안 헤더·원격 이미지 와일드카드·브라우저 소스맵, 설치 스크립트 있는 의존성 목록 | [Web](docs/security/07%20스택별%20설계/Web.md) |
 
 모든 컨테이너는 `--network none`·읽기 전용 루트·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.

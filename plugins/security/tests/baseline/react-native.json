@@ -2,12 +2,19 @@
   "_doc": "tests/fixtures/react-native 를 /security:scan-code 로 점검했을 때 반드시 나와야 하는 결과 (S-Flutter·RN 기준선, R1~R5 는 docs/security/07 스택별 설계/Flutter·React Native.md). 하위 android/·ios/ 는 네이티브 프로파일로만 잡혀야 한다.",
   "must_find": [
     {"tool": "toolkit", "rule_id": "web.env-public-secret", "file": ".env", "severity": "high", "note": "R1 .env"},
+    {"tool": "toolkit", "rule_id": "react-native.config-env-secret", "file": ".env", "severity": "high", "note": "R1 react-native-config (접두사 무관)"},
     {"tool": "semgrep", "rule_suffix": "public-env-secret", "file": "src/config.ts", "note": "R1 소스"},
     {"tool": "semgrep", "rule_suffix": "react-native.insecure-storage", "file": "src/session.ts", "note": "R2"},
-    {"tool": "semgrep", "rule_suffix": "webview-origin-wildcard", "file": "src/Browser.tsx", "note": "R3"},
+    {"tool": "semgrep", "rule_suffix": "webview-origin-wildcard", "file": "src/Browser.tsx", "note": "R3 WebView"},
+    {"tool": "semgrep", "rule_suffix": "react-native.insecure-http-url", "file": "src/api.ts", "note": "R3 평문 HTTP"},
     {"tool": "semgrep", "rule_suffix": "react-native.sensitive-log", "file": "src/session.ts", "note": "R4"},
     {"tool": "osv-scanner", "package": "lodash@4.17.20", "file": "package-lock.json", "note": "R5"},
     {"tool": "toolkit", "rule_id": "android.manifest-exported-component", "file": "android/app/src/main/AndroidManifest.xml", "note": "네이티브 하위 경로"},
     {"tool": "toolkit", "rule_id": "ios.ats-arbitrary-loads", "file": "ios/App/Info.plist", "note": "네이티브 하위 경로"}
+  ],
+  "must_not_find": [
+    {"file": "src/safe.ts", "rule_suffix": "react-native.insecure-storage", "note": "theme·tokenizer_lang (R2 음성)"},
+    {"file": "src/safe.ts", "rule_suffix": "react-native.sensitive-log", "note": "문장 속 token·tokenizer·__DEV__ 안 (R4 음성)"},
+    {"file": "src/safe.ts", "rule_suffix": "react-native.insecure-http-url", "note": "localhost (R3 음성)"}
   ]
 }

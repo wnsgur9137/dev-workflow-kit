@@ -63,20 +63,24 @@ exclude_paths: ["**/node_modules/**", "**/ios/Pods/**", "**/android/build/**"]
 
 | # | 구현 | 규칙·검사 ID | 심각도 |
 |---|---|---|---|
-| F1 | 스택 검사 — `pubspec.yaml`의 `flutter.assets`에 `.env`·`.env.*`(예시 파일 제외) | `flutter.env-asset` | high |
-| F3 | 스택 검사(저장소 전체) — `.github/workflows/*.yml`·`codemagic.yaml`·`bitrise.yml`·`.gitlab-ci.yml`·`azure-pipelines.yml`·`Makefile`·`*.sh`·`fastlane/Fastfile`의 `flutter build apk|appbundle|aab|ipa|ios`에 `--obfuscate` 없음(`--debug`·`--profile` 제외). 빌드 명령이 없으면 판단하지 않음 | `flutter.build-no-obfuscate` | medium |
-| F4 | Semgrep 커스텀(Dart) — `badCertificateCallback = (...) => true`(cascade 포함), `Uri.parse`·`dio.get/post`의 `http://`(localhost·127.0.0.1·10.0.2.2 제외) | `custom.flutter.bad-certificate-callback`, `custom.flutter.insecure-http-url` | high / medium |
-| F5 | Semgrep 커스텀(Dart) — `setString('…token|password|secret…', …)` | `custom.flutter.insecure-storage` | medium |
+| F1 | 스택 검사 — `pubspec.yaml` 최상위 `flutter.assets`의 `.env`·`.env.*`. 블록 목록(같은 들여쓰기 포함)·흐름 문법(`assets: [.env, a/]`, 여러 줄)·Flutter 3.19+ `- path: .env`·`- {path: …, flavors: […]}`를 읽는다. 예시 파일(이름 조각에 `example`·`sample`·`template`·`dist`·`defaults`)은 제외. 디렉터리 항목(`- assets/env/`)은 그 폴더 바로 아래의 `.env*` 파일이 있으면 보고 | `flutter.env-asset` | high |
+| F3 | 스택 검사(저장소 전체) — `.github/workflows/*.yml`·`.circleci/config.yml`·`codemagic.yaml`·`bitrise.yml`·`.gitlab-ci.yml`·`azure-pipelines.yml`·`bitbucket-pipelines.yml`·`melos.yaml`·`Jenkinsfile`·`Makefile`·`*.sh`·`fastlane/Fastfile`의 `flutter build apk|appbundle|ipa|ios|ios-framework`에 `--obfuscate` 없음. 주석을 지우고 줄 끝 `\` 이음·YAML 접힘 블록(`run: >`)을 한 명령으로 합친다(`MAX_LINE` 상한). `--debug`·`--profile`, `echo`·`printf` 출력 문구는 제외하고, 플래그를 변수(`$(FLAGS)`·`${{ … }}`)로 넘기면 판단을 보류한다. 빌드 명령이 없으면 판단하지 않음 | `flutter.build-no-obfuscate` | medium |
+| F4 | Semgrep 커스텀(Dart) — `badCertificateCallback = (...) => true`(cascade 포함), `Uri.parse`·`Uri.http`·Dio `BaseOptions(baseUrl:)`·`dio.get/post`의 `http://`(호스트가 정확히 localhost·127.0.0.1·10.0.2.2 이면 제외 — `localhost.evil.com`·`10.0.2.20`은 잡음) | `custom.flutter.bad-certificate-callback`, `custom.flutter.insecure-http-url` | high / medium |
+| F5 | Semgrep 커스텀(Dart) — `setString(<키>, …)`의 키(리터럴·상수 `kTokenKey`)가 token·password·secret 등. 키워드 뒤에 소문자가 이어지면 제외(`tokenizer_lang`) | `custom.flutter.insecure-storage` | medium |
 | F6 | OSV-Scanner — `pubspec.lock` | — | CVSS |
-| R1 | Gitleaks + web 의 공개 변수 규칙(`EXPO_PUBLIC_` 포함, Semgrep `public-env-*`·검사 `env-public-secret`) | `custom.web.public-env-*`, `web.env-public-secret` | high |
-| R2 | Semgrep 커스텀 — `AsyncStorage.setItem('…token|password…', …)` | `custom.react-native.insecure-storage` | medium |
-| R3 | Semgrep 커스텀 — `<WebView … originWhitelist={['*']} />` | `custom.react-native.webview-origin-wildcard` | medium |
-| R4 | Semgrep 커스텀 — `console.log/info/debug`에 token·password 등, `if (__DEV__) { … }` 안 제외 | `custom.react-native.sensitive-log` | low |
+| R1 | Gitleaks + web 의 공개 변수 규칙(`EXPO_PUBLIC_` 포함, Semgrep `public-env-*`·검사 `env-public-secret`) + `react-native-config` 의존성이 있으면 `.env*`의 비밀 이름 변수를 접두사와 무관하게 보고(값 미포함) | `custom.web.public-env-*`, `web.env-public-secret`, `react-native.config-env-secret` | high (API 키 이름은 medium) |
+| R2 | Semgrep 커스텀 — `AsyncStorage.setItem(<키>, …)`의 키(리터럴·상수 `TOKEN_KEY`·`kTokenKey`)가 token·password 등. 키워드 뒤 소문자 제외 | `custom.react-native.insecure-storage` | medium |
+| R3 | Semgrep 커스텀 — `<WebView … originWhitelist={[…, '*', …]} />`, `fetch`·`axios.*`·`axios.create({baseURL})`의 `http://`·`new WebSocket('ws://…')`(로컬 개발 주소 제외) | `custom.react-native.webview-origin-wildcard`, `custom.react-native.insecure-http-url` | medium |
+| R4 | Semgrep 커스텀 — `console.log/info/debug/warn/error`의 인자(식별자·멤버 접근·템플릿 보간·객체 값) 이름이 token·password 등으로 끝남(`authToken`·`user.accessToken`). `if (__DEV__) { … }`의 then 쪽만 제외하고 else 쪽은 잡는다. 문자열 문장(`'Refresh token expired'`)은 잡지 않음 | `custom.react-native.sensitive-log` | low |
 | R5 | OSV-Scanner — npm lockfile | — | CVSS |
 
 - 하위 `ios/`·`android/`는 감지기가 네이티브 프로파일을 그 하위 경로에만 붙이고, 커스텀 규칙·스택 검사 결과도 그 경로의 프로파일로 귀속된다(E2E 가 하위 경로 밖 귀속이 없는지 확인).
-- RN 이 함께 쓰는 web 커스텀 규칙의 결과는 `react-native`로 귀속한다(규칙을 쓰는 프로파일 중 파일을 덮는 것).
-- Semgrep 1.182.0 의 Dart 파서로 cascade(`..badCertificateCallback`)·문자열 정규식 리터럴이 동작함을 실측했다. 문자열 리터럴 메타변수의 키 이름은 Swift 와 같이 `pattern-regex`로 본다.
+- 커스텀 규칙은 Semgrep 이 저장소 전체에 한 번 돌리므로 귀속을 이렇게 정한다(`normalize.py` `ProfileIndex.for_custom`): 파일을 덮는 가장 깊은 프로파일이 그 규칙을 쓰면 그 프로파일(RN 이 함께 쓰는 web 규칙 결과는 `react-native`), 그 프로파일이 규칙을 쓰지 않고 그 언어 확장자를 보는 다른 스택이면 **버린다**(모노레포 `apps/web`의 `react-native.sensitive-log`), 어느 프로파일도 덮지 않는 파일(서버가 `api/`에만 잡힌 저장소의 루트 `Dockerfile` 등)은 남겨 규칙을 쓰는 프로파일로 귀속한다.
+- CWE-312·532·798 규칙(저장·로그·하드코딩 비밀)의 evidence 는 문자열 리터럴 값을 `[MASKED]`로 가리고 키 이름(비밀 단어를 포함한 짧은 이름)만 남긴다 — `setItem('password', '<값>')`처럼 키=값 형태가 아닌 인자 값 노출 방지. E2E 가 리포트 폴더(raw 포함)에 픽스처 리터럴이 없는지 확인한다.
+- 규칙 단위 테스트: `tests/semgrep/<스택>/`(규칙 파일과 같은 이름, `ruleid:`·`ok:` 주석)을 고정 이미지의 `semgrep --test`로 돌린다(`test_real_semgrep_rule_unit_tests`). 음성 예는 픽스처 `lib/safe.dart`·`.github/workflows/safe.yml`·`src/safe.ts`로 분리해 기준선 `must_not_find`로 고정했다.
+- Semgrep 1.182.0 실측: Dart 파서로 cascade(`..badCertificateCallback`)·문자열 정규식 리터럴이 동작하고, Dart·JS 에서는 문자열 리터럴 메타변수에도 `metavariable-regex`가 맞는다(Swift 와 다름). `if (__DEV__) {…} else $ELSE` + `focus-metavariable`로 else 쪽만 다시 볼 수 있다.
+- F1 디렉터리 asset: flutter_tools `asset.dart`의 `_parseAssetsFromFolder`는 `listSync()` 결과에서 하위 폴더만 빼고 숨김 파일을 거르지 않는다(바로 아래 파일만, 재귀 없음) — 그래서 폴더 바로 아래 `.env*`만 본다.
+- 한계: R4 는 `__DEV__ && console.log(token)`·삼항·`if (!__DEV__) return` 뒤의 로그처럼 `if (__DEV__) { … }` 블록이 아닌 분기는 구분하지 않는다(뒤 두 경우는 보고됨). F3 는 변수로 넘긴 플래그·다른 스크립트를 호출하는 빌드는 판단하지 않는다. F4·R3 은 변수에 담은 URL 을 따라가지 않는다.
 - F2(`--dart-define` 값의 바이너리 평문)·R6(번들 산출물의 키)는 P2 MobSF 단계에서 다룬다.
 
 ## 공통 수동 체크리스트

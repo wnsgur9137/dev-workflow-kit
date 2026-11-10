@@ -11,7 +11,10 @@ rules:
       cwe: ["CWE-312: Cleartext Storage of Sensitive Information"]
       owasp: ["M2: Insecure Data Storage"]
       stack: flutter
-    # 문자열 리터럴 메타변수의 metavariable-regex 대신 pattern-regex 로 키 이름을 본다 (Swift 와 같은 이유)
+    # 키는 문자열 리터럴·상수(kTokenKey·Keys.userPassword) 모두 본다 — 1.182.0 Dart 에서 리터럴 메타변수에도
+    # metavariable-regex 가 맞음을 실측. 키워드 뒤에 소문자가 이어지면 제외(tokenizer_lang, PR #28 리뷰 S5). {0,100} 은 선형 유지용
     patterns:
-      - pattern: $P.setString(...)
-      - pattern-regex: (?i)setString\(\s*['"][^'"\n]{0,100}(token|password|passwd|secret|credential|session_?(id|token|key))
+      - pattern: $P.setString($KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: ^['"]?[\w$.@:/-]{0,100}?(?i:token|password|passwd|secret|credential|session_?(?:id|token|key))s?(?![a-z])
