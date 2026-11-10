@@ -92,25 +92,58 @@ def mask_secrets(text: str) -> str:
 SENSITIVE_VALUE_CWES = {"CWE-312", "CWE-532", "CWE-798"}
 _LITERAL_KEY_WORD = re.compile(r"(?i)(password|passwd|pwd|secret|token|credential|api[_\-]?key|auth|session)")
 _LITERAL_KEY_NAME = re.compile(r"[\w.\-:]{1,80}")
+_LITERAL_KEY_LABELS = ("forkey", "key")
+
+
+def _literal_key_position(text: str, k: int) -> bool:
+    """k 의 따옴표가 키 자리인가 — `(`·`[` 바로 뒤 첫 인자, 또는 `forKey:`·`key:` 뒤 (사이 공백 허용).
+    뒤로 훑는 구간은 앞 토큰과 이 따옴표 사이의 공백·이름 하나뿐이라 따옴표마다 겹치지 않는다 (전체 선형)."""
+    i = k - 1
+    while i >= 0 and text[i] in " \t":
+        i -= 1
+    if i < 0:
+        return False
+    if text[i] in "([":
+        return True
+    if text[i] != ":":
+        return False
+    e = i
+    i -= 1
+    while i >= 0 and (text[i].isalnum() or text[i] == "_") and e - i <= 8:
+        i -= 1
+    return text[i + 1:e].lower() in _LITERAL_KEY_LABELS
 
 
 def mask_literal_values(text: str) -> str:
-    """문자열 리터럴('…' "…" `…`) 중 키 이름(비밀 단어를 포함한 공백 없는 짧은 이름)만 남기고 나머지 내용은 가린다.
-    키=값 마스킹은 setItem('password', 'hunter2') 처럼 쉼표로 이어진 인자 값을 못 가린다 (PR #28 리뷰). 선형 스캔."""
+    """문자열 리터럴(작은·큰따옴표, 백틱, 삼중 따옴표)의 내용을 가린다. 키 자리(`(`·`[` 바로 뒤 첫 인자, `forKey:`·`key:` 뒤)의
+    키 이름(비밀 단어를 포함한 공백 없는 짧은 이름)만 남긴다 — 값 자리의 리터럴은 비밀 단어가 있어도 가린다
+    (setItem('password', 'Password123'), PR #28 2차 리뷰 N2). 백틱·삼중 따옴표는 줄을 넘겨 닫는 따옴표까지 가리고,
+    리터럴 밖의 `//` 와 공백 뒤 `# ` 주석은 줄 끝까지 그대로 둔다 (N3). 선형 스캔."""
     out, k, n = [], 0, len(text)
     while k < n:
         c = text[k]
+        if c == "/" and text.startswith("//", k) or (
+                c == "#" and (k == 0 or text[k - 1] in " \t\n") and (k + 1 == n or text[k + 1] in " \t\n#")):
+            e = text.find("\n", k)
+            e = n if e < 0 else e
+            out.append(text[k:e])
+            k = e
+            continue
         if c not in "'\"`":
             out.append(c)
             k += 1
             continue
-        j = k + 1
-        while j < n and text[j] != c and text[j] != "\n":
+        q = c * 3 if c != "`" and text.startswith(c * 3, k) else c
+        multiline = len(q) == 3 or c == "`"
+        j = k + len(q)
+        while j < n and not text.startswith(q, j) and (multiline or text[j] != "\n"):
             j += 2 if text[j] == "\\" else 1
-        body = text[k + 1:min(j, n)]
-        keep = not body or (_LITERAL_KEY_NAME.fullmatch(body) and _LITERAL_KEY_WORD.search(body))
-        out.append(c + (body if keep else "[MASKED]") + (c if j < n and text[j] == c else ""))
-        k = j + 1 if j < n and text[j] == c else j
+        closed = j < n and text.startswith(q, j)
+        body = text[k + len(q):min(j, n)]
+        keep = not body or (len(q) == 1 and _LITERAL_KEY_NAME.fullmatch(body) and _LITERAL_KEY_WORD.search(body)
+                            and _literal_key_position(text, k))
+        out.append(q + (body if keep else "[MASKED]") + (q if closed else ""))
+        k = j + len(q) if closed else min(j, n)
     return "".join(out)
 
 

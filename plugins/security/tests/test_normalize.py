@@ -337,6 +337,57 @@ class ParserTest(unittest.TestCase):
             times.append(time.time() - t0)
         self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
 
+    def test_mask_literal_values_keeps_only_key_position_names(self):
+        """PR #28 2차 리뷰 N2·N3: 키 자리(`(`·`[` 첫 인자, forKey:·key: 뒤)의 이름만 남기고 값 자리는 비밀 단어가 있어도 가린다.
+        백틱·삼중 따옴표는 줄을 넘겨 가리고, 리터럴 밖 // ·# 주석은 그대로 둔다"""
+        m = normalize.mask_literal_values
+        cases = [
+            ("AsyncStorage.setItem('password', 'Password123')", "AsyncStorage.setItem('password', '[MASKED]')"),
+            ("AsyncStorage.setItem('refresh_token', 'tok_session_9f8a7b6c5d')",
+             "AsyncStorage.setItem('refresh_token', '[MASKED]')"),
+            ("console.log('auth', 'sessionAuth2024')", "console.log('auth', '[MASKED]')"),
+            ('val x = """secret"""', 'val x = """[MASKED]"""'),
+            ("AsyncStorage.setItem('password', `\nhunter2hunter2`)", "AsyncStorage.setItem('password', `[MASKED]`)"),
+            ("x = " + "'" * 3 + "a\nb" + "'" * 3, "x = " + "'" * 3 + "[MASKED]" + "'" * 3),
+            ("prefs.setString('token', value); // user's token is here",
+             "prefs.setString('token', value); // user's token is here"),
+            ("x = user['token']  # it's 'fine'", "x = user['token']  # it's 'fine'"),
+            # iOS·Flutter 규칙 evidence 의 키는 그대로 남는다
+            ('UserDefaults.standard.set(token, forKey: "authToken")', 'UserDefaults.standard.set(token, forKey: "authToken")'),
+            ("await prefs.setString('access_token', token);", "await prefs.setString('access_token', token);"),
+            ('KeychainWrapper.set(value: "pw-secret-1", key: "userPassword")',
+             'KeychainWrapper.set(value: "[MASKED]", key: "userPassword")'),
+            # 키 자리여도 비밀 단어가 없거나 공백이 있으면 가린다
+            ("console.log('Refresh token expired')", "console.log('[MASKED]')"),
+            ("setItem('theme', 'dark')", "setItem('[MASKED]', '[MASKED]')"),
+            # # 이 주석이 아닌 곳(Swift raw 문자열·JS private 필드)은 리터럴을 계속 가린다
+            ('let s = #"hunter2"#', 'let s = #"[MASKED]"#'),
+            ("this.#t = 'hunter2'", "this.#t = '[MASKED]'"),
+            ("a = 'x' + ''", "a = '[MASKED]' + ''"),
+        ]
+        for raw, want in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(m(raw), want)
+
+    def test_mask_literal_values_key_position_and_comments_are_linear(self):
+        """N2·N3 의 키 자리 역방향 확인·여러 줄 리터럴·주석 처리도 입력 2배에 시간이 2배 수준이다"""
+        import time
+        gens = (
+            lambda k: ("(" + " " * 20_000 * k + "'token'") * 5,       # 키 자리 앞 공백
+            lambda k: ("key:" * 20_000 * k + "'a'") * 5,              # 이름·콜론 반복
+            lambda k: "`" + "a\n" * 50_000 * k,                       # 닫히지 않은 여러 줄 백틱
+            lambda k: '"""' + '"" ' * 30_000 * k,                     # 닫히지 않은 삼중 따옴표
+            lambda k: ("// '\n" + " # '\n") * 30_000 * k,             # 주석 반복
+        )
+        for gen in gens:
+            times = []
+            for k in (1, 2):
+                text = gen(k)
+                t0 = time.time()
+                normalize.mask_literal_values(text)
+                times.append(time.time() - t0)
+            self.assertLess(times[1], max(times[0] * 3.0, 0.3), times)
+
     def test_identifiers_keep_credential_masking(self):
         """PR #26 리뷰: 식별자는 고엔트로피 마스킹만 빼고 URL 자격증명·접두사 토큰은 계속 가린다"""
         tok = "ghp" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"

@@ -471,8 +471,8 @@ test_real_scan_code_react_native_baseline() {
   if grep -rqF "fixture-rn-secret" "$XP_RUN" || grep -rqF "fixture-rn-config-secret" "$XP_RUN"; then
     fail ".env 값이 리포트에 남음"
   fi
-  # PR #28 리뷰 W5: setItem('password', '<값>') 의 리터럴 값도 리포트 폴더(raw 포함) 어디에도 남지 않는다
-  if grep -rqF "fixture-rn-hunter2" "$XP_RUN"; then
+  # PR #28 리뷰 W5·N2: setItem('password', '<값>') 의 리터럴 값(비밀 단어 포함)도 리포트 폴더(raw 포함) 어디에도 남지 않는다
+  if grep -rqF "fixture-password-hunter2" "$XP_RUN"; then
     fail "저장소 리터럴 값이 리포트에 남음"
   fi
 }
