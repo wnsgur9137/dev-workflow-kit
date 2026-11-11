@@ -32,7 +32,7 @@ rules:
     # metavariable-pattern 으로 찾는다(PR #28 2차 리뷰 N1 — 인자 식 전체를 정규식으로 보던 방식은 'token: ' + token 을 놓쳤다).
     # 문자열 리터럴은 대괄호 키(user['token'])일 때만 본다 — 'Refresh token expired' 같은 문장·라벨은 잡지 않는다.
     # __DEV__ 분기: if (__DEV__) / if (__DEV__ && …) 의 then 쪽, __DEV__ && console.log(…), if (!__DEV__) … else 의 else 쪽은
-    # 제외하고, 앞 두 if 의 else 쪽과 if (!__DEV__) 의 then 쪽은 focus-metavariable 로 다시 본다 (리뷰 W6·N8, 1.182.0 실측)
+    # 제외하고, 앞 세 if(if ($A && __DEV__) 포함, 4차 리뷰 N2)의 else 쪽과 if (!__DEV__) 의 then 쪽은 focus-metavariable 로 다시 본다 (리뷰 W6·N8, 1.182.0 실측)
     patterns:
       - pattern-either:
           - patterns:
@@ -53,6 +53,8 @@ rules:
                       if (__DEV__) { ... } else $ELSE
                   - pattern-inside: |
                       if (__DEV__ && $C) { ... } else $ELSE
+                  - pattern-inside: |
+                      if ($A && __DEV__) { ... } else $ELSE
               - focus-metavariable: $ELSE
               - pattern: console.$F(..., $X, ...)
           - patterns:

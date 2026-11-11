@@ -950,6 +950,12 @@ class ChecksTest(unittest.TestCase):
         """PR #28 3차 리뷰 S2: `name: >`·`name: |` 블록 본문은 명령이 아니다 (다음 단계·형제 키부터 다시 본다)"""
         cases = [
             (".github/workflows/a.yml",
+             "steps:\n  - name: >\n      flutter build apk\n    run: flutter build apk --release\n", [4]),
+            # 4차 리뷰 N1: `- name: >`·`- name: |` 의 형제 키 run: 은 명령이다
+            (".github/workflows/a.yml",
+             "steps:\n      - name: >\n          Build release APK\n        run: flutter build apk --release\n", [4]),
+            (".github/workflows/a.yml", "steps:\n      - name: |\n          Build\n        run: flutter build appbundle\n", [4]),
+            (".github/workflows/a.yml",
              "steps:\n  - name: >\n      flutter build apk\n    run: flutter build apk --obfuscate --split-debug-info=s\n", []),
             (".github/workflows/a.yml", "steps:\n  - name: |\n      flutter build apk\n\n      x\n  - run: flutter build ipa\n", [6]),
             (".github/workflows/a.yml",

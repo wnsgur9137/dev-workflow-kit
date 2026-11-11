@@ -129,4 +129,17 @@ export async function save(token: string, authToken: string, userPassword: strin
   }
   // ok: sensitive-log
   someFlag && __DEV__ && console.log(token)
+  // 4차 리뷰 N2 — 뒤에 오는 __DEV__ 의 else·else if 쪽은 릴리스 빌드에서 실행된다
+  if (x && __DEV__) { a() } else {
+    // ruleid: sensitive-log
+    console.log(token)
+  }
+  if (verbose && __DEV__) {
+    a()
+  } else if (x) {
+    // ruleid: sensitive-log
+    console.log('release', token)
+  }
+  // ruleid: sensitive-log
+  if (x && __DEV__) a(); else console.log(token)
 }

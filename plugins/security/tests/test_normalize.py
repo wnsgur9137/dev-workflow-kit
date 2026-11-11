@@ -392,6 +392,17 @@ class ParserTest(unittest.TestCase):
             ("AsyncStorage.setItem(\n  'refresh_token',\n  'tok_abc')", "AsyncStorage.setItem(\n  'refresh_token',\n  '[MASKED]')"),
             ("AsyncStorage.setItem(\r\n  'refresh_token',\r\n  'tok_abc')",
              "AsyncStorage.setItem(\r\n  'refresh_token',\r\n  '[MASKED]')"),
+            # 4차 리뷰 N3: 배열 리터럴 요소는 값(여러 줄·한 줄), 대괄호 접근·사전 키는 키, 줄 끝 주석 안의 `(` 는 보지 않는다
+            ("const API_TOKENS = [\n  'secret-AbC123xyz',\n  'secret-Def456',\n]",
+             "const API_TOKENS = [\n  '[MASKED]',\n  '[MASKED]',\n]"),
+            ("x = ['secret-x']", "x = ['[MASKED]']"),
+            ("f(['secret-x'])", "f(['[MASKED]'])"),
+            ("foo() // call(\n'tokenSecret9'", "foo() // call(\n'[MASKED]'"),
+            ("user['token']", "user['token']"),
+            ("a?.['token']", "a?.['token']"),
+            ("rows[0]['password'] = 'x'", "rows[0]['password'] = '[MASKED]'"),
+            ('["password": "v1"]', '["password": "[MASKED]"]'),
+            ('let d = [\n  "authToken": t]', 'let d = [\n  "authToken": t]'),
         ]
         for raw, want in cases:
             with self.subTest(raw=raw):

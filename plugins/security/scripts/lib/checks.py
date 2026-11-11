@@ -1619,7 +1619,7 @@ def _build_commands(text, yaml=False, slash_comments=False):
         if yaml and words[-2:-1] == ["name:"] and len(words) <= 3 and (len(words) == 2 or words[0] == "-") \
                 and YAML_BLOCK.fullmatch(words[-1]):
             flush()
-            skip = _indent(line)
+            skip = line.index("name:")    # 키 열 — 본문은 이보다 깊고, `- name: >` 의 형제 키(run:)는 같은 열 (4차 리뷰 N1)
             continue
         if len(words) >= 2 and YAML_FOLD.fullmatch(words[-1]) and (words[-2].endswith(":") or words[-2] == "-"):
             flush()
