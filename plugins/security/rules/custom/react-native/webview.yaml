@@ -1,0 +1,17 @@
+# R3 — WebView 의 모든 출처 허용 (docs/security/07 스택별 설계/Flutter·React Native.md)
+rules:
+  - id: webview-origin-wildcard
+    message: >-
+      WebView 의 originWhitelist 에 '*' 가 있어 어떤 출처든 로드합니다. 신뢰하지 않는 URL 이 들어오면 앱 안에서 피싱·JS 브리지 악용이
+      가능합니다. 필요한 출처만 나열하고 onShouldStartLoadWithRequest 로 이동을 검증하세요.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: ["CWE-940: Improper Verification of Source of a Communication Channel"]
+      owasp: ["M1: Improper Platform Usage"]
+      stack: react-native
+    # 배열 어디에든 '*' 가 있으면 (['*', 'about:blank'] 포함, PR #28 리뷰 S6). 'https://*' 같은 스킴 한정은 제외
+    pattern-either:
+      - pattern: <WebView ... originWhitelist={[..., '*', ...]} ... />
+      - pattern: <WebView ... originWhitelist={[..., "*", ...]} ... />

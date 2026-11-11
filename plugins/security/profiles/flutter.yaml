@@ -6,11 +6,13 @@ detect:
   - { file: "**/pubspec.yaml", has_dependency: [flutter] }
 exclude_paths: ["**/.dart_tool/**", "**/build/**", "**/*.g.dart", "**/*.freezed.dart"]
 semgrep:
-  rulesets: []   # semgrep-rules 에 dart 규칙셋이 없다 — generic + 커스텀 규칙(S-Flutter·RN)으로 점검
+  rulesets: []   # semgrep-rules 에 dart 규칙셋이 없다 — generic + 커스텀 규칙으로 점검
+  custom: [flutter]
 sca:
   lockfiles: ["**/pubspec.lock"]
   missing_lockfile_hint: "앱 저장소는 pubspec.lock 을 커밋하세요"
 artifact:
   types: [apk, aab, ipa]
   analyzer: mobsf
+checks: [flutter-env-asset, flutter-build-obfuscate]
 checklist: flutter

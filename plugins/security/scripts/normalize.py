@@ -88,6 +88,90 @@ def mask_secrets(text: str) -> str:
     return text
 
 
+# 저장·로그·하드코딩 비밀 CWE — 이 규칙들의 evidence 는 문자열 리터럴 값을 가린다 (setItem('password', '<값>') 의 값)
+SENSITIVE_VALUE_CWES = {"CWE-312", "CWE-532", "CWE-798"}
+_LITERAL_KEY_WORD = re.compile(r"(?i)(password|passwd|pwd|secret|token|credential|api[_\-]?key|auth|session)")
+_LITERAL_KEY_NAME = re.compile(r"[\w.\-:]{1,80}")
+_LITERAL_KEY_LABELS = ("forkey", "key")
+
+
+_LITERAL_LOOKAHEAD = 40
+
+
+def _value_label_follows(text: str, e: int) -> bool:
+    """e(닫는 따옴표 다음)부터 공백·`,`·공백 뒤에 `forKey:`·`key:` 라벨이 바로 오는가 — 그러면 앞 리터럴은 값이다
+    (Swift `set("<값>", forKey: "k")`, PR #28 3차 리뷰 M1). 앞으로 훑는 길이는 상수(_LITERAL_LOOKAHEAD)로 막아 전체 선형."""
+    m = text[e:e + _LITERAL_LOOKAHEAD].lstrip(" \t\r\n")
+    if not m.startswith(","):
+        return False
+    m = m[1:].lstrip(" \t\r\n")
+    c = m.find(":")
+    return c > 0 and m[:c].lower() in _LITERAL_KEY_LABELS
+
+
+def _dict_colon_follows(text: str, e: int) -> bool:
+    """e(닫는 따옴표 다음)부터 공백 뒤에 `:` 가 오는가 — 사전 리터럴의 키(Swift `["password": v]`). 상수 길이만 본다."""
+    return text[e:e + _LITERAL_LOOKAHEAD].lstrip(" \t\r\n").startswith(":")
+
+
+def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0) -> bool:
+    """k 의 따옴표가 키 자리인가 — `(` 바로 뒤 첫 인자(단 뒤에 `forKey:`·`key:` 라벨이 이어지면 값), 대괄호 접근
+    `name[`·`)[`·`][` 뒤, `[` 뒤 사전 키(뒤에 `:`), 또는 `forKey:`·`key:` 뒤 (사이 공백·줄바꿈 허용). 배열 리터럴
+    (`= [`·`([`·줄 처음 `[`)의 요소는 값이다 (PR #28 4차 리뷰 N3). e 는 닫는 따옴표 다음 위치(닫히지 않았으면 -1).
+    lo 는 직전 줄 끝 주석의 끝 — 주석 안의 `(`·`[`·라벨은 보지 않는다(N3). 뒤로 훑는 구간은 앞 토큰과 이 따옴표
+    사이의 공백·이름 하나뿐이라 따옴표마다 겹치지 않는다 (전체 선형)."""
+    i = k - 1
+    while i >= lo and text[i] in " \t\r\n":
+        i -= 1
+    if i < lo:
+        return False
+    if text[i] == "(":
+        return e < 0 or not _value_label_follows(text, e)
+    if text[i] == "[":
+        b = text[i - 1] if i > lo else ""
+        return b.isalnum() or b in "_$.])" or (e >= 0 and _dict_colon_follows(text, e))
+    if text[i] != ":":
+        return False
+    e = i
+    i -= 1
+    while i >= 0 and (text[i].isalnum() or text[i] == "_") and e - i <= 8:
+        i -= 1
+    return text[i + 1:e].lower() in _LITERAL_KEY_LABELS
+
+
+def mask_literal_values(text: str) -> str:
+    """문자열 리터럴(작은·큰따옴표, 백틱, 삼중 따옴표)의 내용을 가린다. 키 자리(`(`·`[` 바로 뒤 첫 인자 — 뒤에 `forKey:`·`key:` 라벨이
+    이어지면 값, `forKey:`·`key:` 뒤)의 키 이름(비밀 단어를 포함한 공백 없는 짧은 이름)만 남긴다 — 값 자리의 리터럴은 비밀 단어가 있어도 가린다
+    (setItem('password', 'Password123'), PR #28 2차 리뷰 N2). 백틱·삼중 따옴표는 줄을 넘겨 닫는 따옴표까지 가리고,
+    리터럴 밖의 `//` 와 공백 뒤 `# ` 주석은 줄 끝까지 그대로 둔다 (N3). 선형 스캔."""
+    out, k, n, lo = [], 0, len(text), 0
+    while k < n:
+        c = text[k]
+        if c == "/" and text.startswith("//", k) or (
+                c == "#" and (k == 0 or text[k - 1] in " \t\n") and (k + 1 == n or text[k + 1] in " \t\n#")):
+            e = text.find("\n", k)
+            e = n if e < 0 else e
+            out.append(text[k:e])
+            k = lo = e
+            continue
+        if c not in "'\"`":
+            out.append(c)
+            k += 1
+            continue
+        q = c * 3 if c != "`" and text.startswith(c * 3, k) else c
+        multiline = len(q) == 3 or c == "`"
+        j = k + len(q)
+        while j < n and not text.startswith(q, j) and (multiline or text[j] != "\n"):
+            j += 2 if text[j] == "\\" else 1
+        closed = j < n and text.startswith(q, j)
+        body = text[k + len(q):min(j, n)]
+        keep = not body or (len(q) == 1 and _LITERAL_KEY_NAME.fullmatch(body) and _LITERAL_KEY_WORD.search(body)
+                            and _literal_key_position(text, k, j + len(q) if closed else -1, lo))
+        out.append(q + (body if keep else "[MASKED]") + (q if closed else ""))
+        k = j + len(q) if closed else min(j, n)
+    return "".join(out)
+
+
 def clean_text(text, limit: int, single_line: bool = False) -> str:
     if text is None:
         return ""
@@ -132,6 +216,18 @@ def finding_id(*parts) -> str:
 # ---------------------------------------------------------------------------
 # 프로파일 귀속
 # ---------------------------------------------------------------------------
+# 프로파일 언어 규칙셋이 보는 확장자 — 커스텀 규칙 결과가 다른 스택의 코드인지 판단할 때만 쓴다 (ProfileIndex.for_custom)
+RULESET_EXTS = {
+    "javascript": (".js", ".jsx", ".mjs", ".cjs"),
+    "typescript": (".ts", ".tsx", ".mts", ".cts"),
+    "swift": (".swift",),
+    "kotlin": (".kt", ".kts"),
+    "java": (".java",),
+    "python": (".py",),
+    "go": (".go",),
+}
+
+
 class ProfileIndex:
     """감지 결과(프로파일, 하위 경로)로 finding 의 profile 필드를 정한다."""
 
@@ -142,23 +238,53 @@ class ProfileIndex:
     def labels(self):
         return [_profiles.format_profile_label(n, r) for n, r, _ in self.detected]
 
-    def _candidates(self, file, pred):
-        best, depth = None, -1
+    def _covering(self, file):
+        """이 파일을 덮는 감지 프로파일 — [(깊이, 이름)] (하위 경로 제외 반영)."""
         f = file or "."
+        out = []
         for name, root, excluded in self.detected:
             if not _profiles._is_under(f, root):
                 continue
             if any(_profiles._is_under(f, x) for x in excluded):
                 continue
-            if not pred(name):
-                continue
-            d = 0 if root == "." else root.count("/") + 1
-            if d > depth:
+            out.append((0 if root == "." else root.count("/") + 1, name))
+        return out
+
+    def _candidates(self, file, pred):
+        best, depth = None, -1
+        for d, name in self._covering(file):
+            if pred(name) and d > depth:
                 best, depth = name, d
         return best
 
     def for_language(self, file, lang):
         return self._candidates(file, lambda n: lang in (self.defs.get(n, {}).get("semgrep", {}).get("rulesets") or [])) or "common"
+
+    def for_custom(self, file, custom):
+        """커스텀 규칙(rules/custom/<스택>)의 결과를 귀속할 프로파일 — None 이면 결과를 버린다.
+        Semgrep 은 커스텀 규칙을 저장소 전체에 한 번 돌리므로(scan-code.sh), 규칙을 쓰지 않는 다른 스택의 파일에도 맞는다.
+          1) 파일을 덮는 가장 깊은 프로파일(소유 프로파일)이 이 규칙을 쓰면 그 프로파일
+             (예: react-native 가 web 규칙을 함께 쓰면 RN 앱의 결과는 react-native)
+          2) 소유 프로파일이 규칙을 쓰지 않고 그 프로파일의 언어 규칙셋이 이 파일 확장자를 본다면 다른 스택의 코드다 → 버린다
+             (예: 모노레포 apps/web 의 console.log(token) 에 맞은 react-native.sensitive-log)
+          3) 그 밖(어느 프로파일도 덮지 않는 루트 Dockerfile 등)은 버리지 않는다 — 서버 프로파일이 api/ 에만 잡혀도
+             루트 Dockerfile 의 dockerfile-copy-env 는 남아야 한다. 규칙을 쓰는 프로파일 중 파일을 덮는 가장 깊은 것,
+             없으면 감지된 것 중 규칙을 쓰는 첫 프로파일, 그것도 없으면 스택 이름으로 귀속한다."""
+        def uses(n):
+            return custom in (self.defs.get(n, {}).get("semgrep", {}).get("custom") or [])
+        cover = self._covering(file)
+        if cover:
+            top = max(d for d, _ in cover)
+            owners = [n for d, n in cover if d == top]
+            for n in owners:
+                if uses(n):
+                    return n
+            exts = {e for n in owners for rs in (self.defs.get(n, {}).get("semgrep", {}).get("rulesets") or [])
+                    for e in RULESET_EXTS.get(rs, ())}
+            if exts and (file or "").lower().endswith(tuple(exts)):
+                return None
+        return (self._candidates(file, uses)
+                or next((n for n, _, _ in self.detected if uses(n)), None) or custom)
 
     def for_lockfile(self, file):
         def pred(n):
@@ -254,7 +380,9 @@ def parse_semgrep(data, index: ProfileIndex, target=None):
         lang, custom = _semgrep_origin(check_id)
         file = strip_container_prefix(r.get("path", ""))
         line = (r.get("start") or {}).get("line")
-        profile = custom if custom else (index.for_language(file, lang) if lang and lang != "generic" else "common")
+        profile = index.for_custom(file, custom) if custom else (index.for_language(file, lang) if lang and lang != "generic" else "common")
+        if profile is None:            # 다른 스택 코드에 맞은 커스텀 규칙 (ProfileIndex.for_custom)
+            continue
         refs = []
         for c in meta.get("cwe", []) if isinstance(meta.get("cwe"), list) else [meta.get("cwe")] if meta.get("cwe") else []:
             m = re.match(r"(CWE-\d+)", str(c))
@@ -277,6 +405,8 @@ def parse_semgrep(data, index: ProfileIndex, target=None):
             lines = extra.get("lines") or ""
             if not lines.strip() or lines.strip() == "requires login":
                 lines = read_source_lines(target, file, line, (r.get("end") or {}).get("line"))
+            if SENSITIVE_VALUE_CWES.intersection(refs):
+                lines = mask_literal_values(lines)
         rule_short = check_id.split(".")[-1] if check_id else "semgrep"
         out.append({
             "id": finding_id("semgrep", check_id, file, line),

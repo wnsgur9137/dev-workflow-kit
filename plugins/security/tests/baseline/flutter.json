@@ -1,0 +1,18 @@
+{
+  "_doc": "tests/fixtures/flutter 를 /security:scan-code 로 점검했을 때 반드시 나와야 하는 결과 (S-Flutter·RN 기준선, F1~F6 은 docs/security/07 스택별 설계/Flutter·React Native.md). 하위 android/·ios/ 는 네이티브 프로파일로만 잡혀야 한다.",
+  "must_find": [
+    {"tool": "toolkit", "rule_id": "flutter.env-asset", "file": "pubspec.yaml", "severity": "high", "note": "F1"},
+    {"tool": "toolkit", "rule_id": "flutter.build-no-obfuscate", "file": ".github/workflows/release.yml", "note": "F3"},
+    {"tool": "semgrep", "rule_suffix": "bad-certificate-callback", "file": "lib/api.dart", "severity": "high", "note": "F4"},
+    {"tool": "semgrep", "rule_suffix": "insecure-http-url", "file": "lib/api.dart", "note": "F4"},
+    {"tool": "semgrep", "rule_suffix": "flutter.insecure-storage", "file": "lib/api.dart", "note": "F5"},
+    {"tool": "osv-scanner", "package": "dio@4.0.0", "file": "pubspec.lock", "note": "F6"},
+    {"tool": "toolkit", "rule_id": "android.manifest-debuggable", "file": "android/app/src/main/AndroidManifest.xml", "note": "네이티브 하위 경로"},
+    {"tool": "toolkit", "rule_id": "ios.ats-arbitrary-loads", "file": "ios/Runner/Info.plist", "note": "네이티브 하위 경로"}
+  ],
+  "must_not_find": [
+    {"file": "lib/safe.dart", "rule_suffix": "insecure-http-url", "note": "localhost·10.0.2.2·https (F4 음성)"},
+    {"file": "lib/safe.dart", "rule_suffix": "flutter.insecure-storage", "note": "tokenizer_lang·setBool (F5 음성)"},
+    {"file": ".github/workflows/safe.yml", "tool": "toolkit", "note": "줄 이음·접힘 블록의 --obfuscate, 주석, echo, --debug, 변수 플래그 (F3 음성)"}
+  ]
+}

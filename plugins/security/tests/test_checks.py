@@ -825,6 +825,230 @@ class ChecksTest(unittest.TestCase):
             ("ios.xcconfig-secret", "App/Config.xcconfig"),
         ])
 
+    def test_flutter_env_asset(self):
+        _w(os.path.join(self.t, "pubspec.yaml"), "name: a\ndependencies:\n  flutter:\n    sdk: flutter\nflutter:\n  assets:\n"
+           "    - assets/\n    - \"config/.env.production\"  # 주석\n    - .env.example\n  fonts: []\nother:\n  assets:\n    - .env\n")
+        rs = self.run_checks([("flutter", ".", [])])["results"]
+        self.assertEqual([(r["rule_id"], r["line"]) for r in rs], [("flutter.env-asset", 8)])
+
+    def test_flutter_build_obfuscate(self):
+        _w(os.path.join(self.t, ".github/workflows/ci.yml"),
+           "steps:\n  - run: flutter build apk --release\n  - run: flutter build ios --obfuscate --split-debug-info=s\n"
+           "  - run: flutter build apk --debug\n  - run: flutter test\n")
+        _w(os.path.join(self.t, "scripts/release.sh"), "flutter build appbundle\n")
+        _w(os.path.join(self.t, "docs/build.md"), "flutter build apk\n")       # 문서 — 대상 아님
+        rs = self.run_checks([("flutter", "app", [])])["results"]           # 저장소 전체 검사
+        self.assertEqual(sorted((r["file"], r["line"]) for r in rs), [(".github/workflows/ci.yml", 2), ("scripts/release.sh", 1)])
+
+    def test_flutter_env_asset_review_cases(self):
+        """PR #28 리뷰 W3·S2·S3·S8: 흐름 문법·path 매핑·같은 들여쓰기·작은따옴표·예시 파일·디렉터리 asset"""
+        cases = [
+            ("flutter:\n  assets: [.env, assets/]\n", [2]),                                   # 인라인 흐름
+            ("flutter:\n  assets: [\n    assets/,\n    '.env.prod'\n  ]\n", [2]),               # 여러 줄 흐름
+            ("flutter:\n  assets:\n    - path: .env\n      flavors: [prod]\n    - path: a/\n", [3]),   # 3.19+ path
+            ("flutter:\n  assets:\n    - {path: config/.env, flavors: [x]}\n", [3]),
+            ("flutter:\n  assets:\n  - .env\n  fonts: []\n", [3]),                            # 같은 들여쓰기
+            ("flutter:\n  assets:\n    - '.env.staging'\n", [3]),                             # 작은따옴표
+            ("flutter:\n  assets:\n    - .env.dist\n    - .env.defaults\n    - .env.local.example\n", []),
+            ("flutter:\n  assets:\n    - path: a.png\n      flavors:\n        - .env\n", []),     # 항목 안의 목록
+            ("flutter:\n  assets: [.env.example]\n", []),
+            ("flutter:\n  fonts:\n    - .env\n", []),
+        ]
+        for text, want in cases:
+            _w(os.path.join(self.t, "pubspec.yaml"), text)
+            rs = self.run_checks([("flutter", ".", [])])["results"]
+            self.assertEqual([r["line"] for r in rs], want, text)
+        # 디렉터리 asset — flutter_tools 는 폴더 바로 아래 숨김 파일까지 넣는다 (하위 폴더는 아님)
+        _w(os.path.join(self.t, "pubspec.yaml"), "flutter:\n  assets:\n    - assets/env/\n    - assets/img/\n")
+        _w(os.path.join(self.t, "assets/env/.env"), "A=1\n")
+        _w(os.path.join(self.t, "assets/env/.env.example"), "A=\n")
+        _w(os.path.join(self.t, "assets/img/deep/.env"), "A=1\n")
+        rs = self.run_checks([("flutter", ".", [])])["results"]
+        self.assertEqual([(r["line"], r["evidence"]) for r in rs], [(3, "flutter.assets 디렉터리 assets/env/ 안의 .env")])
+
+    def test_flutter_env_asset_second_review_cases(self):
+        """PR #28 2차 리뷰 N7: 중첩 괄호가 있는 여러 줄 흐름, flavors 가 앞에 오는 매핑, 루트 폴더 asset(./)"""
+        cases = [
+            ("flutter:\n  assets: [\n    {path: a.json, flavors: [dev]},\n    .env\n  ]\n", [2]),
+            ("flutter:\n  assets: [{path: a.json, flavors: [dev]}, .env]\n", [2]),
+            ("flutter:\n  assets:\n    - flavors: [dev]\n      path: .env\n", [4]),
+            ("flutter:\n  assets:\n    - flavors:\n        - dev\n      path: .env.prod\n    - a/\n", [5]),
+            ("flutter:\n  assets:\n    - path: a.png\n      flavors: [dev]\n", []),
+            ("flutter:\n  assets: [\n    {path: a.json, flavors: [dev]},\n  ]\nother: .env\n", []),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                _w(os.path.join(self.t, "pubspec.yaml"), text)
+                rs = self.run_checks([("flutter", ".", [])])["results"]
+                self.assertEqual([r["line"] for r in rs], want)
+        _w(os.path.join(self.t, "pubspec.yaml"), "flutter:\n  assets:\n    - ./\n")
+        _w(os.path.join(self.t, ".env"), "A=1\n")
+        rs = self.run_checks([("flutter", ".", [])])["results"]
+        self.assertEqual([(r["line"], r["evidence"]) for r in rs], [(3, "flutter.assets 디렉터리 ./ 안의 .env")])
+        os.makedirs(os.path.join(self.t, "app"))
+        os.rename(os.path.join(self.t, "pubspec.yaml"), os.path.join(self.t, "app/pubspec.yaml"))
+        os.rename(os.path.join(self.t, ".env"), os.path.join(self.t, "app/.env"))
+        rs = self.run_checks([("flutter", "app", [])])["results"]
+        self.assertEqual([r["file"] for r in rs], ["app/pubspec.yaml"])
+
+    def test_flutter_build_obfuscate_review_cases(self):
+        """PR #28 리뷰 W1·W2·S4·S8: 줄 이음·접힘 블록·주석·echo·변수 플래그·fvm·대상 이름"""
+        files = {
+            ".github/workflows/a.yml": (
+                "steps:\n"
+                "  - run: flutter build apk --release \\\n      --obfuscate --split-debug-info=s\n"       # 2 줄 이음 → 정상
+                "  - run: >\n      flutter build ipa\n      --obfuscate --split-debug-info=s\n"          # 4 접힘 → 정상
+                "  - run: >-\n      fvm flutter build appbundle\n      --release\n"                      # 7 접힘 → 보고(8)
+                "  # - run: flutter build apk\n"                                                        # 주석
+                "  - run: echo 'next: flutter build apk'\n"                                             # echo
+                "  - run: |\n      flutter build ios --no-codesign\n      flutter test\n"               # 리터럴 → 보고(13)
+                "  - run: flutter build apk --build-number=${{ github.run_number }}\n"                  # 보고(15)
+                "  - run: flutter build apk --profile && flutter build ios-framework\n"                 # 보고(16, ios-framework)
+                "  - run: flutter build apk ${{ matrix.flags }}\n"),                                    # 변수 플래그 → 보류
+            "Makefile": "release:\n\tflutter build apk $(RELEASE_FLAGS)\n\tprintf 'flutter build ipa\\n'\n",
+            "fastlane/Fastfile": 'lane :b do\n  sh("flutter build ipa --release")\nend\n',               # 보고(2)
+            ".circleci/config.yml": "      - run: flutter build appbundle\n",                          # 보고(1)
+            "Jenkinsfile": "sh 'flutter build apk --obfuscate --split-debug-info=s'\n",
+            "bitbucket-pipelines.yml": "script:\n  - flutter build apk\n",                           # 보고(2)
+            "melos.yaml": "scripts:\n  build: flutter build apk --debug\n",
+        }
+        for rel, text in files.items():
+            _w(os.path.join(self.t, rel), text)
+        rs = self.run_checks([("flutter", ".", [])])["results"]
+        self.assertEqual(sorted((r["file"], r["line"], r["evidence"].split(" ")[2]) for r in rs), [
+            (".circleci/config.yml", 1, "appbundle"),
+            (".github/workflows/a.yml", 8, "appbundle"),
+            (".github/workflows/a.yml", 13, "ios"),
+            (".github/workflows/a.yml", 15, "apk"),
+            (".github/workflows/a.yml", 16, "ios-framework"),
+            ("bitbucket-pipelines.yml", 2, "apk"),
+            ("fastlane/Fastfile", 2, "ipa"),
+        ])
+
+    def test_flutter_build_obfuscate_second_review_cases(self):
+        """PR #28 2차 리뷰 N5: YAML plain 여러 줄 스칼라는 한 명령, 단계 name: 은 명령 아님, Jenkinsfile // 주석 제거"""
+        cases = [
+            (".github/workflows/a.yml", "steps:\n  - run: flutter build apk\n      --obfuscate --split-debug-info=s\n", []),
+            (".gitlab-ci.yml", "build:\n  script:\n    - flutter build apk\n      --obfuscate --split-debug-info=s\n", []),
+            (".github/workflows/a.yml",
+             "steps:\n  - name: flutter build apk\n    run: flutter build apk --obfuscate --split-debug-info=s\n", []),
+            (".github/workflows/a.yml", "steps:\n  - name: Build\n    run: flutter build apk\n    shell: bash\n", [3]),
+            (".github/workflows/a.yml", "steps:\n  - run: flutter build apk\n  - run: flutter test\n      --obfuscate\n", [2]),
+            (".github/workflows/a.yml", "steps:\n  - run: |\n      flutter build ipa\n        --obfuscate\n", [3]),   # 리터럴은 줄마다
+            ("Jenkinsfile", "// sh 'flutter build apk'\nsh 'curl http://x' // flutter build ipa\n", []),
+            ("Jenkinsfile", "sh 'flutter build apk' // --obfuscate\n", [1]),
+            ("scripts/b.sh", "flutter build apk\n  --obfuscate\n", [1]),                                        # YAML 아님
+        ]
+        for rel, text, want in cases:
+            with self.subTest(rel=rel, text=text):
+                _w(os.path.join(self.t, rel), text)
+                rs = self.run_checks([("flutter", ".", [])])["results"]
+                self.assertEqual([r["line"] for r in rs], want)
+                os.remove(os.path.join(self.t, rel))
+
+    def test_flutter_build_obfuscate_name_block_is_not_command(self):
+        """PR #28 3차 리뷰 S2: `name: >`·`name: |` 블록 본문은 명령이 아니다 (다음 단계·형제 키부터 다시 본다)"""
+        cases = [
+            (".github/workflows/a.yml",
+             "steps:\n  - name: >\n      flutter build apk\n    run: flutter build apk --release\n", [4]),
+            # 4차 리뷰 N1: `- name: >`·`- name: |` 의 형제 키 run: 은 명령이다
+            (".github/workflows/a.yml",
+             "steps:\n      - name: >\n          Build release APK\n        run: flutter build apk --release\n", [4]),
+            (".github/workflows/a.yml", "steps:\n      - name: |\n          Build\n        run: flutter build appbundle\n", [4]),
+            (".github/workflows/a.yml",
+             "steps:\n  - name: >\n      flutter build apk\n    run: flutter build apk --obfuscate --split-debug-info=s\n", []),
+            (".github/workflows/a.yml", "steps:\n  - name: |\n      flutter build apk\n\n      x\n  - run: flutter build ipa\n", [6]),
+            (".github/workflows/a.yml",
+             "jobs:\n  b:\n    name: >-\n      flutter build apk\n    steps:\n      - run: flutter build apk\n", [6]),
+            (".github/workflows/a.yml", "steps:\n  - run: |\n      flutter build apk\n", [3]),         # run: | 는 그대로
+        ]
+        for rel, text, want in cases:
+            with self.subTest(text=text):
+                _w(os.path.join(self.t, rel), text)
+                rs = self.run_checks([("flutter", ".", [])])["results"]
+                self.assertEqual([r["line"] for r in rs], want)
+                os.remove(os.path.join(self.t, rel))
+
+    def test_flutter_checks_line_length_is_linear(self):
+        """리뷰 교훈: 줄 길이·줄 이음 길이를 2배로 늘려도 이차가 아니다 (끝까지 가서 결과를 내는지 확인)"""
+        cases = [
+            ("pubspec.yaml", lambda w: "flutter:\n  assets:\n" + "".join(f"    - {'{'}path: a{' ' * w}, flavors: [{'x, ' * (w // 4)}]{'}'}\n" for _ in range(100)) + "    - .env\n"),
+            ("pubspec.yaml", lambda w: "flutter:\n  assets: [\n" + "    a,\n" * (w // 8) + "    .env]\n"),   # MAX_LINE 안
+            ("build.sh", lambda w: "".join(f"flutter {'flutter ' * (w // 16)}build apk{' ' * (w // 2)}\n" for _ in range(100))),
+            ("build.sh", lambda w: ("x" * 30 + " \\\n") * (w // 4) + "flutter build apk\n"),
+            ("build.sh", lambda w: "".join(f"echo '{';' * (w // 2)}' && flutter build apk {'$' * (w // 2)}x\n" for _ in range(100))
+             + "flutter build apk\n"),
+            # N5: YAML plain 여러 줄 스칼라 이음·name: 건너뛰기·// 주석
+            (".github/workflows/build.yml", lambda w: "steps:\n  - run: flutter build apk\n" + "      x\n" * (w // 4) + "  - run: flutter build apk\n"),
+            (".github/workflows/build.yml", lambda w: "steps:\n" + "  - name: a\n" + "      b\n" * (w // 4) + "  - run: flutter build apk\n"),
+            (".github/workflows/build.yml", lambda w: "steps:\n" + "  - name: |\n" + "      b\n" * (w // 4) + "  - run: flutter build apk\n"),
+            ("Jenkinsfile", lambda w: "".join(f"sh '{'/' * (w // 2)}' {'x' * (w // 2)} // y\n" for _ in range(100))
+             + "sh 'flutter build apk'\n"),
+        ]
+        for name, gen in cases:
+            times = []
+            for width in (1800, 3600):
+                for f in ("pubspec.yaml", "build.sh", ".github/workflows/build.yml", "Jenkinsfile"):
+                    if os.path.exists(os.path.join(self.t, f)):
+                        os.remove(os.path.join(self.t, f))
+                _w(os.path.join(self.t, name), gen(width))
+                t0 = time.time()
+                rs = self.run_checks([("flutter", ".", [])])["results"]
+                times.append(time.time() - t0)
+                self.assertTrue(rs, name)
+            self.assertLess(times[1], max(times[0] * 3.0, 0.3), (name, times))
+
+    def test_rn_config_env_secret(self):
+        """PR #28 리뷰 W9: react-native-config 의존성이 있으면 접두사와 무관하게 .env 의 비밀 이름 변수를 보고 (값 미포함)"""
+        value = "Zq9" + "rnConfigValue"
+        _w(os.path.join(self.t, "app/.env"),
+           f"API_SECRET={value}\nSTRIPE_API_KEY=k\nAPI_URL=u\nEXPO_PUBLIC_A_SECRET=x\nMAPBOX_PUBLIC_TOKEN=t\nDB_PASSWORD=p\n")
+        _w(os.path.join(self.t, "app/.env.example"), "API_SECRET=\n")
+        _w(os.path.join(self.t, "app/package.json"), '{"dependencies": {"react-native": "0.73.0"}}')
+        rs = self.run_checks([("react-native", "app", [])])["results"]
+        self.assertEqual([r["rule_id"] for r in rs], ["web.env-public-secret"])     # 의존성 없음 → 공개 접두사만
+        _w(os.path.join(self.t, "app/package.json"),
+           '{"dependencies": {"react-native": "0.73.0", "react-native-config": "1.5.0"}}')
+        rs = [r for r in self.run_checks([("react-native", "app", [])])["results"] if r["check"] == "rn-config-env-secret"]
+        self.assertEqual([(r["file"], r["line"], r["severity"]) for r in rs],
+                         [("app/.env", 1, "high"), ("app/.env", 2, "medium"), ("app/.env", 6, "high")])
+        self.assertNotIn(value, json.dumps(rs))
+        # PR #28 2차 리뷰 N4: react-native-config 는 프로젝트 루트의 .env* 만 읽는다 — 하위 폴더는 보고하지 않는다
+        _w(os.path.join(self.t, "app/server/.env"), "DB_PASSWORD=p\n")
+        _w(os.path.join(self.t, "app/e2e/.env.test"), "TEST_PASSWORD=p\n")
+        rs = [r for r in self.run_checks([("react-native", "app", [])])["results"] if r["check"] == "rn-config-env-secret"]
+        self.assertEqual(sorted({r["file"] for r in rs}), ["app/.env"])
+        _w(os.path.join(self.t, ".env"), "ROOT_SECRET=p\n")                       # 프로파일 루트가 . 이면 루트 .env 만
+        _w(os.path.join(self.t, "package.json"), '{"dependencies": {"react-native-config": "1.5.0"}}')
+        rs = [r for r in self.run_checks([("react-native", ".", [])])["results"] if r["check"] == "rn-config-env-secret"]
+        self.assertEqual(sorted({r["file"] for r in rs}), [".env"])
+        os.remove(os.path.join(self.t, ".env"))
+        os.remove(os.path.join(self.t, "package.json"))
+        _w(os.path.join(self.t, "app/package.json"), "[not json")
+        self.assertEqual([r["check"] for r in self.run_checks([("react-native", "app", [])])["results"]], ["env-public-secret"])
+
+    def test_flutter_and_rn_fixture_expectations(self):
+        import shutil
+        for name, extra, want in (
+            ("flutter", None, [("android.manifest-debuggable", "android/app/src/main/AndroidManifest.xml", "android"),
+                               ("flutter.build-no-obfuscate", ".github/workflows/release.yml", "flutter"),
+                               ("flutter.env-asset", "pubspec.yaml", "flutter"),
+                               ("ios.ats-arbitrary-loads", "ios/Runner/Info.plist", "ios")]),
+            ("react-native", ("env.fixture", ".env"),
+             [("android.manifest-exported-component", "android/app/src/main/AndroidManifest.xml", "android"),
+              ("ios.ats-arbitrary-loads", "ios/App/Info.plist", "ios"),
+              ("react-native.config-env-secret", ".env", "react-native"),
+              ("web.env-public-secret", ".env", "react-native")]),
+        ):
+            t = os.path.join(self.tmp.name, name)
+            shutil.copytree(os.path.join(HERE, "fixtures", name), t)
+            if extra:
+                shutil.copy(os.path.join(t, extra[0]), os.path.join(t, extra[1]))
+            detected = profiles.detect_full(t, self.defs)
+            report = checks.run(t, detected, self.defs)
+            self.assertEqual(report["errors"], [], name)
+            self.assertEqual(sorted((r["rule_id"], r["file"], r["profile"]) for r in report["results"]), want, name)
+
     def test_web_fixture_expectations(self):
         """tests/fixtures/web 의 README 표와 같은 결과 (env·lockfile 은 테스트에서 실제 이름으로 복사)"""
         import shutil

@@ -6,10 +6,14 @@ detect:
 exclude_paths: ["**/node_modules/**", "**/ios/Pods/**", "**/android/build/**"]
 semgrep:
   rulesets: [javascript, typescript]
+  # web 커스텀 규칙 전체(public-env-secret·public-env-api-key·next-ssrf-fetch)가 함께 돈다 — 공개 접두사 변수(EXPO_PUBLIC_ 등)
+  # 규칙이 목적이고, next-ssrf-fetch 는 출처가 서버 요청 객체(req·request)라 RN 앱 코드에는 거의 맞지 않는다
+  custom: [react-native, web]
 sca:
   lockfiles: ["**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml"]
   missing_lockfile_hint: "package-lock.json / yarn.lock / pnpm-lock.yaml 을 커밋하세요"
 artifact:
   types: [apk, aab, ipa]
   analyzer: mobsf
+checks: [env-public-secret, rn-config-env-secret]
 checklist: react-native

@@ -1,0 +1,42 @@
+# F4 — 인증서 검증 우회·평문 HTTP URL (docs/security/07 스택별 설계/Flutter·React Native.md)
+rules:
+  - id: bad-certificate-callback
+    message: >-
+      badCertificateCallback 이 항상 true 를 돌려 TLS 인증서 검증을 끕니다. 중간자 공격으로 통신을 가로챌 수 있습니다.
+      개발용이라도 릴리스 빌드에 남지 않게 하고, 자체 서명 인증서는 SecurityContext 에 신뢰 루트로 추가하세요.
+    severity: ERROR
+    languages: [dart]
+    metadata:
+      category: security
+      cwe: ["CWE-295: Improper Certificate Validation"]
+      owasp: ["M3: Insecure Communication"]
+      stack: flutter
+    pattern-either:
+      - pattern: $C.badCertificateCallback = (...) => true
+      - pattern: |
+          $C.badCertificateCallback = (...) { return true; }
+  - id: insecure-http-url
+    message: >-
+      평문 http:// 주소로 요청합니다. Android 9+·iOS ATS 기본 설정에서 막히거나, 허용돼 있다면 통신이 노출됩니다. https 를 쓰세요.
+    severity: WARNING
+    languages: [dart]
+    metadata:
+      category: security
+      cwe: ["CWE-319: Cleartext Transmission of Sensitive Information"]
+      owasp: ["M3: Insecure Communication"]
+      stack: flutter
+    # 로컬 개발 주소(localhost·127.0.0.1·에뮬레이터 10.0.2.2)는 제외 — 호스트가 그 이름으로 끝나야 한다
+    # (localhost.evil.com·10.0.2.20 은 잡는다, PR #28 리뷰 S1). Uri.http(호스트, …)·Dio BaseOptions(baseUrl:)도 본다.
+    # http.get(Uri.parse(…)) 는 안쪽 Uri.parse 로 잡힌다. URL 인자는 메타변수 + metavariable-regex 로 소스 텍스트(따옴표 포함)를
+    # 보므로 보간 문자열('http://host/$id'·"http://host/${id}")도 잡는다 (리뷰 N6, 1.182.0 실측)
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: Uri.parse($URL)
+              - pattern: 'BaseOptions(..., baseUrl: $URL, ...)'
+              - pattern: $D.get($URL, ...)
+              - pattern: $D.post($URL, ...)
+          - metavariable-regex:
+              metavariable: $URL
+              regex: ^['"]http://(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?:[:/?#'"]|$))
+      - pattern: Uri.http("=~/^(?!(?:localhost|127\.0\.0\.1|10\.0\.2\.2)(?::|$))/", ...)

@@ -244,14 +244,15 @@ def _alt(words):
     return "(?:" + "|".join(words) + ")"
 
 
-def _public_env_regexes(start, end):
-    """(비밀 정규식, API 키 정규식). start·end 는 이름 앞뒤 경계 (변수 이름은 ^ $, 대괄호 문자열은 따옴표 포함)."""
+def _public_env_regexes(start, end, prefixes=PUBLIC_ENV_PREFIXES):
+    """(비밀 정규식, API 키 정규식). start·end 는 이름 앞뒤 경계 (변수 이름은 ^ $, 대괄호 문자열은 따옴표 포함).
+    prefixes=("",) 이면 접두사와 무관하게 이름만 본다 (react-native-config)."""
     tail = r"(?:_[A-Za-z0-9_]*)?" + end
 
     def guarded(words, public):
         return r"(?!" + _SEG + _alt(public) + r"(?:_|" + end + r"))" + _SEG + _alt(words) + tail
 
-    prefix = start + _alt(PUBLIC_ENV_PREFIXES)
+    prefix = start + _alt(prefixes)
     secret = prefix + r"(?:" + _SEG + _alt(STRONG_WORDS) + tail + "|" + guarded(TOKEN_WORDS, TOKEN_PUBLIC) + ")"
     return secret, prefix + guarded(KEY_WORDS, KEY_PUBLIC)
 
@@ -261,6 +262,7 @@ PUBLIC_ENV_SECRET_RE, PUBLIC_ENV_KEY_RE = _public_env_regexes("^", "$")
 PUBLIC_ENV_SECRET_BRACKET_RE, PUBLIC_ENV_KEY_BRACKET_RE = _public_env_regexes("^[\"']", "[\"']$")
 _SECRET_NAME = re.compile(PUBLIC_ENV_SECRET_RE)
 _KEY_NAME = re.compile(PUBLIC_ENV_KEY_RE)
+_ANY_SECRET_NAME, _ANY_KEY_NAME = (re.compile(r) for r in _public_env_regexes("^", "$", ("",)))
 ENV_ASSIGN = re.compile(r"[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=")
 
 
@@ -1350,6 +1352,338 @@ def check_ios_xcconfig_secret(ctx):
 
 
 # ---------------------------------------------------------------------------
+# react-native
+# ---------------------------------------------------------------------------
+def _has_npm_dependency(ctx, dep):
+    """프로파일 루트의 package.json 이 dep 을 dependencies·devDependencies 에 둔다."""
+    want = "package.json" if ctx.root == "." else f"{ctx.root}/package.json"
+    for rel, full in ctx.files(lambda rel, name: rel == want):
+        text = ctx.read(full)
+        try:
+            data = json.loads(text) if text else {}
+        except ValueError:
+            return False
+        if not isinstance(data, dict):
+            return False
+        return any(isinstance(data.get(k), dict) and dep in data[k] for k in ("dependencies", "devDependencies"))
+    return False
+
+
+def check_rn_config_env_secret(ctx):
+    """R1 — react-native-config 는 접두사와 무관하게 .env 의 모든 변수를 JS 번들·네이티브 리소스에 넣는다.
+    비밀 이름 변수를 보고한다 (공개 접두사 변수는 env-public-secret 이 보고하므로 제외, 값은 결과에 넣지 않는다).
+    react-native-config 는 프로젝트 루트(package.json 폴더)의 .env*(ENVFILE 도 루트 기준)만 읽으므로 하위 폴더
+    (server/.env·e2e/.env.test)는 보지 않는다 (PR #28 2차 리뷰 N4)."""
+    out = []
+    if not _has_npm_dependency(ctx, "react-native-config"):
+        return out
+    root_dir = "" if ctx.root == "." else ctx.root
+    for rel, full in ctx.files(lambda rel, name: _is_env_name(name) and os.path.dirname(rel) == root_dir):
+        text = ctx.read(full)
+        if text is None:
+            continue
+        for n, line in _lines(text):
+            m = ENV_ASSIGN.match(line)
+            if not m or public_env_severity(m.group(1)):
+                continue
+            name = m.group(1)
+            sev = "high" if _ANY_SECRET_NAME.match(name) else "medium" if _ANY_KEY_NAME.match(name) else None
+            if not sev:
+                continue
+            out.append(ctx.finding(
+                "rn-config-env-secret", "react-native.config-env-secret", sev, "secret" if sev == "high" else "config", rel, n,
+                "react-native-config 가 .env 변수를 앱 번들에 넣습니다 — 비밀 이름 변수가 앱에서 그대로 꺼내집니다",
+                evidence=f"변수 이름: {name} (값은 리포트에 남기지 않습니다)",
+                fix_hint="비밀 값은 앱 .env 에서 빼고 서버를 거쳐 받으세요. 이미 배포됐다면 키를 폐기(rotate)하세요.",
+                references=["CWE-312"]))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# flutter
+# ---------------------------------------------------------------------------
+ENV_EXAMPLE_PARTS = {"example", "sample", "template", "dist", "defaults"}   # .env.example·.env.local.dist·.env.defaults
+
+
+def _is_env_name(base):
+    """.env·.env.* 이면서 예시 파일(이름 조각에 example·sample·template·dist·defaults)이 아닌 것."""
+    if base != ".env" and not base.startswith(".env."):
+        return False
+    return not ENV_EXAMPLE_PARTS.intersection(base[1:].lower().split("."))
+
+
+def _pubspec_assets(text):
+    """pubspec.yaml 최상위 flutter.assets 의 항목 — (줄 번호, 경로).
+    블록 목록(`- .env`, 같은 들여쓰기 포함), 흐름 문법(`assets: [.env, a/]`, 여러 줄 포함),
+    Flutter 3.19+ 매핑 항목(`- path: .env` · `- {path: .env, flavors: [x]}` · `- flavors: [x]` 다음 줄 `path: .env`)을 읽는다.
+    여러 줄 흐름 문법은 괄호 깊이를 세어 깊이 0 의 `]` 에서 끝낸다 (PR #28 2차 리뷰 N7)."""
+    out = []
+    in_flutter, assets_indent, item_indent, flow, flow_line, depth = False, None, None, None, None, 0
+
+    def flow_depth(v, d):
+        quote = None
+        for c in v:
+            if quote:
+                if c == quote:
+                    quote = None
+            elif c in "'\"":
+                quote = c
+            elif c in "[{":
+                d += 1
+            elif c in "]}":
+                d -= 1
+        return d
+
+    def from_item(n, rest):
+        if rest.startswith("{"):
+            e = _flow_entry(rest)
+            path = e.get("path", e.get("short"))
+        else:
+            kv = _kv(rest)
+            if kv and kv[0] == "path":
+                path = kv[1]
+            elif kv and "/" not in kv[0] and "." not in kv[0]:
+                path = None            # flavors: 같은 매핑의 다른 키
+            else:
+                path = _unquote(rest)
+        if path:
+            out.append((n, path))
+
+    for n, raw in _lines(text):
+        line = strip_yaml_comment(raw)
+        st = line.strip()
+        if flow is not None:                       # 여러 줄 흐름 문법 assets: [ … ]
+            flow += " " + st
+            depth = flow_depth(st, depth)
+            if depth <= 0 or len(flow) > MAX_LINE:
+                for x in _split_flow(flow.split("[", 1)[-1].rsplit("]", 1)[0]):
+                    if x:
+                        from_item(flow_line, x)
+                flow = None
+            continue
+        if not st:
+            continue
+        ind = _indent(line)
+        if ind == 0:
+            in_flutter, assets_indent, item_indent = st == "flutter:", None, None
+            continue
+        if not in_flutter:
+            continue
+        if assets_indent is not None:
+            if st.startswith("-") and ind >= assets_indent:
+                if item_indent is None:
+                    item_indent = ind
+                if ind == item_indent:            # 더 깊은 - 는 항목 안의 목록(flavors 등)
+                    from_item(n, st[1:].strip())
+                continue
+            if ind > assets_indent:
+                if item_indent is not None and ind > item_indent:     # 매핑 항목의 다음 줄 path: (flavors 가 앞)
+                    kv = _kv(st)
+                    if kv and kv[0] == "path" and kv[1]:
+                        out.append((n, kv[1]))
+                continue
+            assets_indent, item_indent = None, None
+        kv = _kv(st)
+        if not kv or kv[0] != "assets":
+            continue
+        if kv[1].startswith("["):
+            flow, flow_line, depth = kv[1], n, flow_depth(kv[1], 0)
+            if depth <= 0:
+                for x in _split_flow(kv[1][1:].rsplit("]", 1)[0]):
+                    if x:
+                        from_item(n, x)
+                flow = None
+        elif not kv[1]:
+            assets_indent = ind
+    return out
+
+
+def check_flutter_env_asset(ctx):
+    """F1 — pubspec.yaml 의 flutter.assets 에 .env 가 들어 있어 앱 번들에 그대로 포함된다.
+    디렉터리 항목(`- assets/env/`)은 flutter_tools 가 그 폴더 바로 아래 파일을 숨김 파일까지 모두 넣으므로
+    (하위 폴더는 넣지 않음) 그 폴더에 .env 가 있으면 함께 보고한다."""
+    out, env_files = [], None
+    for rel, full in ctx.files(lambda rel, name: name == "pubspec.yaml"):
+        text = ctx.read(full)
+        if text is None:
+            continue
+        base_dir = os.path.dirname(rel)
+        for n, item in _pubspec_assets(text):
+            if item.endswith("/"):
+                if env_files is None:
+                    env_files = [r for r, _ in ctx.files(lambda r, name: _is_env_name(name))]
+                d = os.path.normpath(os.path.join(base_dir, item))
+                d = "" if d == "." else d                  # - ./ 는 pubspec 폴더(루트면 "") — N7
+                hits = [r for r in env_files if os.path.dirname(r) == d]
+                where = [f"flutter.assets 디렉터리 {item[:100]} 안의 {os.path.basename(r)}" for r in hits]
+            else:
+                where = [f"flutter.assets 항목: {item[:120]}"] if _is_env_name(item.rsplit("/", 1)[-1]) else []
+            for ev in where:
+                out.append(ctx.finding(
+                    "flutter-env-asset", "flutter.env-asset", "high", "secret", rel, n,
+                    ".env 파일을 asset 으로 번들합니다 — 앱 패키지에서 누구나 꺼낼 수 있습니다",
+                    evidence=ev,
+                    fix_hint="비밀 값은 앱에 넣지 말고 서버를 거쳐 받으세요. 공개 설정만 --dart-define 등으로 넣고, 그 값도 바이너리에 평문으로 남는다고 가정하세요.",
+                    references=["CWE-312"]))
+    return out
+
+
+BUILD_SCRIPT = re.compile(r"(^|/)(\.github/workflows/[^/]+\.ya?ml|\.circleci/config\.ya?ml|codemagic\.ya?ml|bitrise\.ya?ml|"
+                          r"\.gitlab-ci\.ya?ml|azure-pipelines\.ya?ml|bitbucket-pipelines\.ya?ml|melos\.ya?ml|"
+                          r"Jenkinsfile|Makefile|[^/]+\.sh|fastlane/Fastfile)$")
+# 명령은 _build_commands 가 공백을 한 칸으로 정규화한 상태 — 공백 수량자를 두지 않는다
+FLUTTER_BUILD = re.compile(r"\bflutter build (apk|appbundle|ipa|ios-framework|ios)(?![\w-])")
+YAML_FOLD = re.compile(r">[1-9+-]{0,2}")
+YAML_BLOCK = re.compile(r"[>|][1-9+-]{0,2}")
+BUILD_YAML_KEY = re.compile(r"[\w.\-]+:(?: |$)")
+NOT_RUN = ("echo", "printf")
+
+
+def _strip_slash_comment(v):
+    """Groovy(Jenkinsfile) 줄 주석 — 따옴표 밖, 줄 처음이나 공백 뒤의 `//` 부터 지운다 (http:// 는 유지). 선형 스캔."""
+    quote = None
+    for k, c in enumerate(v):
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in "'\"":
+            quote = c
+        elif c == "/" and v.startswith("//", k) and (k == 0 or v[k - 1] in " \t"):
+            return v[:k].rstrip()
+    return v
+
+
+def _yaml_plain(st):
+    """YAML 줄(`- …`·`key: …`·`- key: …`)의 (키, 값이 plain 스칼라인가). 키·목록 항목이 아니면 (None, False)."""
+    dash = st == "-" or st.startswith("- ")
+    rest = st[2:].lstrip() if dash else st
+    m = BUILD_YAML_KEY.match(rest)
+    if not m and not dash:
+        return None, False
+    key = rest[:m.end()].rstrip().rstrip(":") if m else None
+    value = rest[m.end():].strip() if m else rest
+    return key, bool(value) and value[0] not in "'\"|>[{&*!"
+
+
+def _build_commands(text, yaml=False, slash_comments=False):
+    """(시작 줄 번호, 명령) — 주석을 지우고, 줄 끝 `\\` 이음과 YAML 접힘 블록(`run: >`)을 한 명령으로 합친다.
+    합친 길이는 MAX_LINE 에서 끊는다. 공백은 한 칸으로 정규화한다. 리터럴 블록(`|`)은 줄마다 명령이다.
+    yaml 이면 plain 여러 줄 스칼라(`- run: flutter build apk` 다음 줄에 더 깊게 들여쓴 `--obfuscate`)를 한 명령으로 합치고
+    `name:` 값은 명령으로 보지 않는다(`name: >`·`name: |` 블록 본문도 버린다, 3차 리뷰 S2). slash_comments 면 `//` 주석도
+    지운다 (PR #28 2차 리뷰 N5)."""
+    out, buf, size, start, fold = [], [], 0, None, None
+    plain, discard, skip = None, False, None
+
+    def flush():
+        nonlocal buf, size, start
+        if buf:
+            out.append((start, " ".join(" ".join(buf).split())))
+        buf, size, start = [], 0, None
+
+    def add(n, st):
+        nonlocal size, start
+        if start is None:
+            start = n
+        buf.append(st)
+        size += len(st) + 1
+        if size > MAX_LINE:
+            flush()
+
+    for n, raw in _lines(text):
+        line = strip_yaml_comment(_strip_slash_comment(raw) if slash_comments else raw)
+        st = line.strip()
+        if skip is not None:
+            if not st or _indent(line) > skip:
+                continue
+            skip = None
+        if plain is not None:
+            if st and _indent(line) > plain and not (st == "-" or st.startswith("- ")) and not BUILD_YAML_KEY.match(st):
+                if not discard:
+                    add(n, st[:-1] if st.endswith("\\") else st)
+                continue
+            flush()
+            plain, discard = None, False
+        if fold is not None:
+            if not st:
+                flush()                   # 빈 줄 = 접힘 블록의 문단 구분
+                continue
+            if _indent(line) > fold:
+                add(n, st[:-1] if st.endswith("\\") else st)
+                continue
+            flush()
+            fold = None
+        if not st:
+            flush()
+            continue
+        words = st.split()
+        if yaml and words[-2:-1] == ["name:"] and len(words) <= 3 and (len(words) == 2 or words[0] == "-") \
+                and YAML_BLOCK.fullmatch(words[-1]):
+            flush()
+            skip = line.index("name:")    # 키 열 — 본문은 이보다 깊고, `- name: >` 의 형제 키(run:)는 같은 열 (4차 리뷰 N1)
+            continue
+        if len(words) >= 2 and YAML_FOLD.fullmatch(words[-1]) and (words[-2].endswith(":") or words[-2] == "-"):
+            flush()
+            fold = _indent(line)
+            continue
+        key, is_plain = _yaml_plain(st) if yaml and not buf else (None, False)
+        if key == "name":
+            flush()
+            plain, discard = (_indent(line), True) if is_plain else (None, False)
+            continue
+        cont = st.endswith("\\")
+        add(n, st[:-1] if cont else st)
+        if is_plain and not cont:
+            plain = _indent(line)
+        elif not cont:
+            flush()
+    flush()
+    return out
+
+
+def _shell_segments(cmd):
+    """따옴표 밖의 ; | & 로 명령을 나눈다 (선형 스캔)."""
+    segs, begin, quote = [], 0, None
+    for k, c in enumerate(cmd):
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in "'\"":
+            quote = c
+        elif c in ";|&":
+            segs.append(cmd[begin:k])
+            begin = k + 1
+    segs.append(cmd[begin:])
+    return segs
+
+
+def check_flutter_build_obfuscate(ctx):
+    """F3 — CI·빌드 스크립트의 릴리스 flutter build 에 --obfuscate 가 없다 (빌드 명령이 없으면 판단하지 않는다).
+    echo·printf 로 출력만 하는 문구와, 플래그를 변수($(FLAGS)·${FLAGS}·$FLAGS)로 넘기는 명령은 판단을 보류한다."""
+    out = []
+    for rel, full in ctx.files(lambda rel, name: bool(BUILD_SCRIPT.search(rel))):
+        text = ctx.read(full)
+        if text is None:
+            continue
+        for n, cmd in _build_commands(text, yaml=rel.endswith((".yml", ".yaml")),
+                                      slash_comments=rel.rsplit("/", 1)[-1] == "Jenkinsfile"):
+            for seg in _shell_segments(cmd):
+                m = FLUTTER_BUILD.search(seg)
+                if not m or any(w.strip("'\"(") in NOT_RUN for w in seg[:m.start()].split()):
+                    continue
+                flags = [f.strip("'\"") for f in seg[m.end():].split()]
+                if (any(f.startswith(("--obfuscate", "$")) for f in flags)
+                        or "--debug" in flags or "--profile" in flags):
+                    continue
+                out.append(ctx.finding(
+                    "flutter-build-obfuscate", "flutter.build-no-obfuscate", "medium", "mobile", rel, n,
+                    "릴리스 flutter build 에 --obfuscate 가 없습니다 — Dart 코드의 클래스·함수 이름이 그대로 남습니다",
+                    evidence=f"flutter build {m.group(1)} (--obfuscate 없음)",
+                    fix_hint="--obfuscate --split-debug-info=<경로> 를 붙이고 심볼 파일은 크래시 분석용으로 따로 보관하세요.",
+                    references=["CWE-656"]))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 등록부
 # ---------------------------------------------------------------------------
 CHECKS = {
@@ -1364,10 +1698,13 @@ CHECKS = {
     "android-properties-secret": check_android_properties_secret,
     "ios-ats": check_ios_ats,
     "ios-xcconfig-secret": check_ios_xcconfig_secret,
+    "rn-config-env-secret": check_rn_config_env_secret,
+    "flutter-env-asset": check_flutter_env_asset,
+    "flutter-build-obfuscate": check_flutter_build_obfuscate,
 }
 # 저장소 전체를 보는 검사 — 인프라 설정처럼 프로파일 하위 경로가 아니라 저장소 루트에 있는 경우가 많은 것.
 # 감지된 프로파일 중 하나라도 이 검사를 쓰면 대상 루트 기준으로 한 번만 실행한다.
-REPO_WIDE = {"compose"}
+REPO_WIDE = {"compose", "flutter-build-obfuscate"}   # CI 설정은 저장소 루트에 있다
 
 
 class _Timeout(Exception):

@@ -432,3 +432,82 @@ test_real_scan_code_ios_baseline() {
     fail "xcconfig 비밀 값이 리포트에 남음"
   fi
 }
+
+# S-Flutter·RN: 크로스플랫폼 픽스처 기준선 — 공용 코드 점검 + 하위 ios/·android/ 에만 네이티브 프로파일 적용
+_real_xplat_baseline() {
+  local name=$1 summary run_dir
+  mkdir -p "$HOME/.cache/dev-workflow-kit-tests"
+  XP_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/$name.XXXXXX")
+  trap 'rm -rf "$XP_DIR"; [ -n "${XP_RUN:-}" ] && rm -rf "$XP_RUN"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+  cp -R "$TESTS_DIR/fixtures/$name/." "$XP_DIR/"
+  [ -f "$XP_DIR/pubspec.lock.fixture" ] && mv "$XP_DIR/pubspec.lock.fixture" "$XP_DIR/pubspec.lock"
+  [ -f "$XP_DIR/package-lock.json.fixture" ] && mv "$XP_DIR/package-lock.json.fixture" "$XP_DIR/package-lock.json"
+  [ -f "$XP_DIR/env.fixture" ] && mv "$XP_DIR/env.fixture" "$XP_DIR/.env"
+  summary=$("$SCAN" "$XP_DIR" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  XP_RUN=$(dirname "$summary")
+  run_dir=$XP_RUN
+  assert_eq "$(awk -F '\t' '$2 != "ok" && $1 != "gitleaks-git"' "$run_dir/raw/status.tsv")" "" "(도구 실패)"
+  _check_baseline "$run_dir/findings.json" "$TESTS_DIR/baseline/$name.json"
+  # 네이티브 규칙(Kotlin·Swift 언어 규칙셋 결과)은 하위 경로 밖 파일에 귀속되지 않는다
+  python3 - "$run_dir/findings.json" <<'PY' || fail "네이티브 프로파일이 하위 경로 밖에 귀속됨"
+import json, sys
+bad = [f for f in json.load(open(sys.argv[1]))["findings"]
+       if f["profile"] in ("android", "ios") and not f["location"]["file"].startswith(("android/", "ios/"))]
+for b in bad:
+    print("    하위 경로 밖:", b["profile"], b["rule_id"], b["location"]["file"])
+sys.exit(1 if bad else 0)
+PY
+}
+
+test_real_scan_code_flutter_baseline() {
+  _real_ready || exit 77
+  _real_xplat_baseline flutter
+}
+
+test_real_scan_code_react_native_baseline() {
+  _real_ready || exit 77
+  _real_xplat_baseline react-native
+  if grep -rqF "fixture-rn-secret" "$XP_RUN" || grep -rqF "fixture-rn-config-secret" "$XP_RUN"; then
+    fail ".env 값이 리포트에 남음"
+  fi
+  # PR #28 리뷰 W5·N2: setItem('password', '<값>') 의 리터럴 값(비밀 단어 포함)도 리포트 폴더(raw 포함) 어디에도 남지 않는다
+  if grep -rqF "fixture-password-hunter2" "$XP_RUN"; then
+    fail "저장소 리터럴 값이 리포트에 남음"
+  fi
+}
+
+# PR #28 리뷰 W7: 커스텀 Semgrep 규칙 단위 테스트 — tests/semgrep/<스택>/ 의 ruleid·ok 주석을 고정 이미지의 semgrep --test 로 확인.
+# 대상은 stdin tar 로 넘긴다 (macOS 임시 폴더는 Docker 에 마운트되지 않는다). 규칙 오류(config_with_errors)도 실패다.
+test_real_semgrep_rule_unit_tests() {
+  _real_ready || exit 77
+  local stack
+  mkdir -p "$SEC_TMP/st/rules" "$SEC_TMP/st/tests"
+  for stack in flutter react-native; do
+    cp -R "$PLUGIN_DIR/rules/custom/$stack" "$SEC_TMP/st/rules/"
+    cp -R "$TESTS_DIR/semgrep/$stack" "$SEC_TMP/st/tests/"
+  done
+  COPYFILE_DISABLE=1 tar -C "$SEC_TMP/st" -cf - rules tests \
+    | docker run --rm -i --network none --entrypoint sh "$(sec_image_ref semgrep)" -c \
+      'mkdir -p /tmp/w && cd /tmp/w && tar xf - && semgrep --metrics=off --disable-version-check --test --json --config rules tests' \
+      >"$SEC_TMP/st.json" 2>"$SEC_TMP/st.err"
+  python3 - "$SEC_TMP/st.json" <<'PY' || fail "Semgrep 규칙 단위 테스트 실패: $(tail -n 3 "$SEC_TMP/st.err")"
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except ValueError:
+    print("    semgrep --test 출력이 JSON 이 아님")
+    sys.exit(1)
+bad = [f"{cfg} {cid} 기대 {m['expected_lines']} 실제 {m['reported_lines']}"
+       for cfg, r in d.get("results", {}).items() for cid, c in r.get("checks", {}).items() if not c.get("passed")
+       for m in c.get("matches", {}).values()]
+for k in ("config_with_errors", "config_missing_tests"):
+    if d.get(k):
+        bad.append(f"{k}: {d[k]}")
+if not d.get("results"):
+    bad.append("테스트 결과 없음")
+for b in bad:
+    print("    " + b)
+sys.exit(1 if bad else 0)
+PY
+}

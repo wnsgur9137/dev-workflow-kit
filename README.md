@@ -117,7 +117,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 
 ## security 플러그인
 
-> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성)를 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS**가 들어가 있고(나머지 스택·`/security:scan-app`·`/security:scan-web`은 아직 없음). 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
+> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성)를 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다(`/security:scan-app`·`/security:scan-web`은 아직 없음). 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
 
 개인 앱·웹 프로젝트를 **Claude Code 안에서, 외부 전송 없이** 점검합니다. 모든 도구는 네트워크가 차단된 컨테이너에서 실행되고, Claude는 정규화된 요약 리포트만 읽습니다. 설계: [보안 툴킷](docs/security/보안%20툴킷.md)
 
@@ -168,6 +168,8 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 | Server (Python·Go·Java·Node, Docker) | Django `DEBUG = True`, Dockerfile `COPY .env`·`ADD <URL>`(+ 공식 `USER` 없음·`:latest`), compose `privileged`·docker.sock·DB 포트 전체 바인딩, Spring 설정 평문 비밀(키 이름만) | [Server](docs/security/07%20스택별%20설계/Server.md) |
 | Android (Kotlin·Java) | Manifest `debuggable`·`allowBackup`·`usesCleartextTraffic`·권한 없는 exported 컴포넌트, network_security_config 평문·사용자 CA, release 난독화 꺼짐, WebView JS 인터페이스·파일 접근, `MODE_WORLD_READABLE`, `gradle.properties` 서명 비밀번호(키 이름만) | [Android](docs/security/07%20스택별%20설계/Android.md) |
 | iOS (Swift·Objective-C) | Info.plist ATS 예외(`NSAllowsArbitraryLoads`·평문 예외 도메인·낮은 TLS), `UserDefaults` 토큰·비밀번호 저장, 민감 정보 로그, MD5·SHA1·DES·ECB, WKWebView 파일 URL 접근, xcconfig 평문 비밀(키 이름만) | [iOS](docs/security/07%20스택별%20설계/iOS.md) |
+| Flutter (Dart) | `.env` asset 번들, CI 릴리스 빌드 `--obfuscate` 없음, `badCertificateCallback` → true, 평문 HTTP URL, `shared_preferences` 토큰. 하위 `android/`·`ios/`는 네이티브 프로파일 | [Flutter·RN](docs/security/07%20스택별%20설계/Flutter·React%20Native.md) |
+| React Native | 공개 변수(`EXPO_PUBLIC_` 등)·`react-native-config` `.env`의 비밀 이름(키 이름만), `AsyncStorage` 토큰, WebView `originWhitelist`의 `'*'`, 평문 HTTP 요청, `__DEV__` 밖 민감 로그. 하위 `android/`·`ios/`는 네이티브 프로파일 | [Flutter·RN](docs/security/07%20스택별%20설계/Flutter·React%20Native.md) |
 | Web (Next.js·React·Vite 등) | 공개 접두사 변수(`NEXT_PUBLIC_`·`VITE_` 등)에 비밀 이름, API 라우트 인증 누락(휴리스틱), SSRF, `next.config` 보안 헤더·원격 이미지 와일드카드·브라우저 소스맵, 설치 스크립트 있는 의존성 목록 | [Web](docs/security/07%20스택별%20설계/Web.md) |
 
 모든 컨테이너는 `--network none`·읽기 전용 루트·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.

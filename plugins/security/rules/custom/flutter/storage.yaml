@@ -1,0 +1,21 @@
+# F5 — shared_preferences 에 토큰·비밀번호 저장 (docs/security/07 스택별 설계/Flutter·React Native.md)
+rules:
+  - id: insecure-storage
+    message: >-
+      shared_preferences 는 암호화되지 않은 파일(Android XML·iOS plist)로 저장됩니다. 토큰·비밀번호는
+      flutter_secure_storage(Keychain·Keystore)에 저장하세요.
+    severity: WARNING
+    languages: [dart]
+    metadata:
+      category: security
+      cwe: ["CWE-312: Cleartext Storage of Sensitive Information"]
+      owasp: ["M2: Insecure Data Storage"]
+      stack: flutter
+    # 키는 문자열 리터럴·상수(kTokenKey·Keys.userPassword) 모두 본다 — 1.182.0 Dart 에서 리터럴 메타변수에도
+    # metavariable-regex 가 맞음을 실측. 키워드(+ 선택적 Key·_id 꼬리) 뒤에 영문자·숫자·_ 가 이어지면 제외(tokenizer_lang·
+    # tokenCount·PASSWORDLESS_ENABLED·last_token_refresh_at, PR #28 리뷰 S5·N8). 보간 키('${prefix}_token')도 본다. {0,100} 은 선형 유지용
+    patterns:
+      - pattern: $P.setString($KEY, ...)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: ^['"]?[\w$.@:/{}-]{0,100}?(?i:(?:token|password|passwd|secret|credential|session_?(?:id|token|key))s?(?:_?(?:key|id)s?)?(?:_?v\d{1,3})?)(?![A-Za-z0-9_])

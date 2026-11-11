@@ -21,7 +21,7 @@
     {
       "name": "security",
       "description": "로컬·네트워크 격리 보안 점검 (/scan-code, /scan-app, /scan-web). Docker 호환 런타임 필수",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "author": {
         "name": "wnsgur9137"
       },
