@@ -497,6 +497,8 @@ class ParserTest(unittest.TestCase):
             ("a.mts", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
             ("App/A.SWIFT", 'let t = dict?["token"]', 'let t = dict?["token"]'),
             ("App/swift.txt", 'let t = dict?["token"]', 'let t = dict?["[MASKED]"]'),   # 확장자만 본다
+            ("App/a.swift.txt", 'let t = dict?["token"]', 'let t = dict?["[MASKED]"]'),  # 끝 확장자만 본다 (4차 S1')
+            ("a.cts", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),                              # 4차 S2'
             ("", "{x: d?['token']}", "{x: d?['token']}"),
             ("", "[d?['token']]", "[d?['token']]"),
             ("lib/a.dart", "m?['tok_secret'] => 1", "m?['[MASKED]'] => 1"),
