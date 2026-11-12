@@ -204,6 +204,10 @@ _make_target() {
   # .semgrepignore 도 무시한다 — 기준선의 src/app.py·web/render.js 결과가 나와야 한다 (루트·하위 폴더 모두)
   printf 'src/\n' >"$t/.semgrepignore"
   printf 'render.js\n' >"$t/web/.semgrepignore"
+  # 대체 이름(실행마다 무작위)의 접두사와 같은 이름·대소문자 변형·심볼릭 링크를 미리 둬도 Semgrep 이 읽지 않아야 한다 (PR #30 C1)
+  printf 'src/\n' >"$t/.dev-workflow-kit-semgrepignore"
+  printf 'render.js\n' >"$t/web/.DEV-WORKFLOW-KIT-SEMGREPIGNORE"
+  printf 'src/\nweb/\n' >"$t/ign.txt" && ln -s ign.txt "$t/.dev-workflow-kit-semgrepignore-0"
   TARGET_DIR=$t
 }
 
@@ -373,8 +377,9 @@ test_real_semgrepignore_is_ignored_but_defaults_kept() {
   printf 'c.py\n' >"$IGN_DIR/src/sub/.semgrepignore"
   mkdir -p "$IGN_DIR/rules"
   printf 'rules:\n- id: ev\n  pattern: eval(...)\n  message: m\n  languages: [python]\n  severity: ERROR\n' >"$IGN_DIR/rules/r.yaml"
-  decoy=$(sed -n 's/^SEMGREPIGNORE_DECOY=//p' "$PLUGIN_DIR/scripts/scan-code.sh")
-  [ -n "$decoy" ] || fail "scan-code.sh 에서 SEMGREPIGNORE_DECOY 를 찾지 못함"
+  decoy=$(sed -n 's/^SEMGREPIGNORE_DECOY_PREFIX=//p' "$PLUGIN_DIR/scripts/scan-code.sh")
+  [ -n "$decoy" ] || fail "scan-code.sh 에서 SEMGREPIGNORE_DECOY_PREFIX 를 찾지 못함"
+  decoy="$decoy-0123456789abcdef"
   img=$(sec_image_ref semgrep)
   scanned=$(docker run --rm --network none -v "$IGN_DIR/src:/src:ro" -v "$IGN_DIR/rules:/r:ro" "$img" \
     semgrep scan --config /r --metrics=off --disable-version-check "--x-semgrepignore-filename=$decoy" --json /src 2>/dev/null |

@@ -163,15 +163,17 @@ fi
 # 대상의 .semgrepignore 대신 읽을 파일 이름 — 대상에 없는 이름을 주면 Semgrep 은 대상의 .semgrepignore 를
 # 모두 무시하고 기본 무시 목록(tests/·test/·*_test.go·build·dist·node_modules·vendor·*.min.js)만 쓴다
 # (1.182.0 실측). 내부 옵션(--x-)이라 이미지 갱신으로 사라지면 Semgrep 이 인자 오류로 실패해 드러난다.
-SEMGREPIGNORE_DECOY=.dev-workflow-kit-semgrepignore
-# 대상 저장소가 도구 결과를 억제하는 설정을 갖고 있으면 알린다 (툴킷은 그 설정을 쓰지 않는다).
-# 위 대체 이름의 파일이 대상에 있으면 Semgrep 이 그 파일을 읽으므로 함께 찾는다.
+# 이름이 고정이면 대상이 그 이름(대소문자 변형·심볼릭 링크 포함)의 파일을 미리 둘 수 있으므로 실행마다 무작위로 정한다.
+SEMGREPIGNORE_DECOY_PREFIX=.dev-workflow-kit-semgrepignore
+DECOY_SUFFIX=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+[ ${#DECOY_SUFFIX} -eq 32 ] || sec_die "무작위 값을 만들 수 없습니다 (/dev/urandom)."
+SEMGREPIGNORE_DECOY="$SEMGREPIGNORE_DECOY_PREFIX-$DECOY_SUFFIX"
+# 대상 저장소가 도구 결과를 억제하는 설정을 갖고 있으면 알린다 (툴킷은 그 설정을 쓰지 않는다)
 SUPPRESS=$(find "$TARGET" \( -name node_modules -o -name .git -o -name Pods -o -name build \) -prune -o -type f \
-  \( -name .gitleaks.toml -o -name .gitleaksignore -o -name .semgrepignore -o -name osv-scanner.toml \
-  -o -name "$SEMGREPIGNORE_DECOY" \) -print 2>/dev/null |
+  \( -name .gitleaks.toml -o -name .gitleaksignore -o -name .semgrepignore -o -name osv-scanner.toml \) -print 2>/dev/null |
   cut -c$((${#TARGET} + 2))- | head -n 5 | tr '\n' ' ')
 if [ -n "$SUPPRESS" ]; then
-  printf '%s\n' "대상 저장소에 결과 억제 설정이 있습니다: ${SUPPRESS}— .gitleaks.toml·.gitleaksignore·.semgrepignore·osv-scanner.toml 은 무시하고 툴킷 설정으로 점검했습니다. ${SEMGREPIGNORE_DECOY} 파일이 있으면 Semgrep 이 그 파일에 적힌 경로를 점검하지 않았을 수 있습니다." >>"$WARNINGS_FILE"
+  printf '%s\n' "대상 저장소에 결과 억제 설정이 있습니다: ${SUPPRESS}— .gitleaks.toml·.gitleaksignore·.semgrepignore·osv-scanner.toml 은 무시하고 툴킷 설정으로 점검했습니다." >>"$WARNINGS_FILE"
 fi
 
 # 컨테이너가 결과 파일을 새로 만들면 컨테이너 umask(644)로 생긴다. 권한 600 빈 파일을 미리 만들어 두면
