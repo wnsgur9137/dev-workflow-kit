@@ -2,8 +2,9 @@
 name: ios
 description: Swift / Objective-C iOS 앱
 detect: ["**/*.xcodeproj", "**/*.xcworkspace", "**/Package.swift", "**/Podfile"]
-# Flutter 의 macos/ 데스크톱 러너는 iOS 앱이 아니다
-exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**", "**/macos/**"]
+# Flutter 의 macos/ 데스크톱 러너는 iOS 앱이 아니다 — 감지에서만 빼고, 루트 iOS 프로젝트의 macos/ 소스는 점검한다
+detect_exclude: ["**/macos/**"]
+exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**"]
 semgrep:
   rulesets: [swift]
   custom: [ios]

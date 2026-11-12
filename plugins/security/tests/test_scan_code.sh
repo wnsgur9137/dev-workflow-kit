@@ -337,7 +337,7 @@ test_real_exclude_paths_are_scoped_to_profile_root() {
   EXCL_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/excl.XXXXXX")
   trap 'rm -rf "$EXCL_DIR"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
   local f img scanned
-  for f in macos/a.py ios/macos/b.py macos/Pods/c.py x/ios/Pods/d.py 'a[1]/macos/e.py' a1/macos/g.py; do
+  for f in macos/a.py ios/macos/b.py ios/.build/h.py macos/Pods/c.py x/ios/Pods/d.py 'a[1]/.build/e.py' a1/.build/g.py; do
     mkdir -p "$EXCL_DIR/src/$(dirname "$f")"
     echo 'eval(x)' >"$EXCL_DIR/src/$f"
   done
@@ -352,8 +352,9 @@ test_real_exclude_paths_are_scoped_to_profile_root() {
   scanned=$(docker run --rm --network none -v "$EXCL_DIR/src:/src:ro" -v "$EXCL_DIR/rules:/r:ro" "$img" \
     semgrep scan --config /r --metrics=off --disable-version-check --json "${args[@]}" /src 2>/dev/null |
     python3 -c 'import json,sys; print(" ".join(sorted(p.replace("/src/","") for p in json.load(sys.stdin)["paths"]["scanned"])))')
-  # 루트 macos 러너·이름만 비슷한 a1/ 은 점검, 나머지는 제외
-  assert_eq "$scanned" "a1/macos/g.py macos/a.py" "(제외 결과)"
+  # 루트 macos 러너·ios 의 macos/(감지에서만 빼는 detect_exclude)·이름만 비슷한 a1/ 은 점검, 나머지는 제외.
+  # a[1] 이 이스케이프되지 않으면 glob 문자 집합으로 a1/.build 까지 빠진다
+  assert_eq "$scanned" "a1/.build/g.py ios/macos/b.py macos/a.py" "(제외 결과)"
 }
 
 # 대상의 .semgrepignore 를 대체 이름 옵션으로 무시하고, Semgrep 기본 무시 목록(tests/ 등)은 그대로 쓴다.

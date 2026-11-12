@@ -250,7 +250,7 @@ def validate_profile(p, fname: str) -> list[str]:
     errs = []
     if not isinstance(p, dict):
         return [f"{fname}: 최상위가 매핑이 아닙니다"]
-    allowed = {"name", "description", "detect", "exclude_if", "exclude_paths",
+    allowed = {"name", "description", "detect", "detect_exclude", "exclude_if", "exclude_paths",
                "semgrep", "sca", "artifact", "checklist", "checks"}
     for k in p:
         if k not in allowed:
@@ -291,7 +291,7 @@ def validate_profile(p, fname: str) -> list[str]:
             else:
                 errs.append(f"{fname}: detect[{i}] 는 glob 문자열, {{file, has_dependency}}, {{glob, root_markers}} 중 하나여야 합니다")
 
-    for key in ("exclude_if", "exclude_paths"):
+    for key in ("detect_exclude", "exclude_if", "exclude_paths"):
         if key in p and not (p[key] == [] or _is_str_list(p[key])):
             errs.append(f"{fname}: {key} 는 문자열 리스트여야 합니다")
 
@@ -641,7 +641,8 @@ def detect_full(target: str, profiles: dict, forced=None):
     raw_hits: dict = {}  # profile -> set(root)  (병합 전)
     for name, p in profiles.items():
         roots = set()
-        excludes = p.get("exclude_paths") or []
+        # 감지 근거에서 뺄 경로 — exclude_paths(스캔 제외)는 감지에도 쓰고, detect_exclude 는 감지에만 쓴다
+        excludes = (p.get("exclude_paths") or []) + (p.get("detect_exclude") or [])
         for item in p["detect"]:
             if isinstance(item, str):
                 pattern, markers = item, None
