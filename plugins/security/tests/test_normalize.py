@@ -403,6 +403,16 @@ class ParserTest(unittest.TestCase):
             ("rows[0]['password'] = 'x'", "rows[0]['password'] = '[MASKED]'"),
             ('["password": "v1"]', '["password": "[MASKED]"]'),
             ('let d = [\n  "authToken": t]', 'let d = [\n  "authToken": t]'),
+            # 5차 리뷰 S1: `!`·`?` 뒤 대괄호 접근은 키, 공백 뒤 삼항·논리 부정의 배열 리터럴은 값
+            ("response.data!['token']", "response.data!['token']"),
+            ('d?["token"]', 'd?["token"]'),
+            ("map!!['token']", "map!!['token']"),
+            ('UserDefaults.standard.dictionary(forKey: "x")?["token"]',
+             'UserDefaults.standard.dictionary(forKey: "[MASKED]")?["token"]'),   # "x" 는 비밀 단어가 없어 원래 가린다
+            ("map?['password'] = 'x'", "map?['password'] = '[MASKED]'"),
+            ("c ? ['secret-x'] : []", "c ? ['[MASKED]'] : []"),
+            ("x = !['secret-x']", "x = !['[MASKED]']"),
+            ("x = ?!?['secret-x']", "x = ?!?['[MASKED]']"),
         ]
         for raw, want in cases:
             with self.subTest(raw=raw):

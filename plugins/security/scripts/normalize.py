@@ -116,7 +116,7 @@ def _dict_colon_follows(text: str, e: int) -> bool:
 
 def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0) -> bool:
     """k 의 따옴표가 키 자리인가 — `(` 바로 뒤 첫 인자(단 뒤에 `forKey:`·`key:` 라벨이 이어지면 값), 대괄호 접근
-    `name[`·`)[`·`][` 뒤, `[` 뒤 사전 키(뒤에 `:`), 또는 `forKey:`·`key:` 뒤 (사이 공백·줄바꿈 허용). 배열 리터럴
+    `name[`·`)[`·`][` 뒤(사이의 `!`·`?` 최대 2자 허용 — `data!['k']`·`d?["k"]`), `[` 뒤 사전 키(뒤에 `:`), 또는 `forKey:`·`key:` 뒤 (사이 공백·줄바꿈 허용). 배열 리터럴
     (`= [`·`([`·줄 처음 `[`)의 요소는 값이다 (PR #28 4차 리뷰 N3). e 는 닫는 따옴표 다음 위치(닫히지 않았으면 -1).
     lo 는 직전 줄 끝 주석의 끝 — 주석 안의 `(`·`[`·라벨은 보지 않는다(N3). 뒤로 훑는 구간은 앞 토큰과 이 따옴표
     사이의 공백·이름 하나뿐이라 따옴표마다 겹치지 않는다 (전체 선형)."""
@@ -128,7 +128,12 @@ def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0) -> bool:
     if text[i] == "(":
         return e < 0 or not _value_label_follows(text, e)
     if text[i] == "[":
-        b = text[i - 1] if i > lo else ""
+        # `[` 바로 앞의 null 단언·옵셔널 기호(`!`·`?`, 최대 2자 — Dart `data!['k']`·Swift `d?["k"]`·Kotlin `m!!['k']`)는
+        # 건너뛰고 그 앞 글자로 판정한다 (PR #28 5차 리뷰 S1). 공백 뒤 삼항 `c ? ['x']` 는 `?` 앞이 공백이라 계속 값이다.
+        p = i - 1
+        while p >= lo and i - p <= 2 and text[p] in "!?":
+            p -= 1
+        b = text[p] if p >= lo else ""
         return b.isalnum() or b in "_$.])" or (e >= 0 and _dict_colon_follows(text, e))
     if text[i] != ":":
         return False
