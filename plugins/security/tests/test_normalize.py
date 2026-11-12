@@ -412,7 +412,24 @@ class ParserTest(unittest.TestCase):
             ("map?['password'] = 'x'", "map?['password'] = '[MASKED]'"),
             ("c ? ['secret-x'] : []", "c ? ['[MASKED]'] : []"),
             ("x = !['secret-x']", "x = !['[MASKED]']"),
-            ("x = ?!?['secret-x']", "x = ?!?['[MASKED]']"),
+            ("x?!?['secret-x']", "x?!?['[MASKED]']"),     # 2자 제한 (리뷰 S1 — 제한을 빼면 x 앞까지 건너뛴다)
+            ("a? ['secret-x']", "a? ['[MASKED]']"),       # `[` 앞 공백은 건너뛰지 않는다 (S1)
+            # PR #29 리뷰 W1: 텍스트 맨 앞 `[`·`![` 는 대괄호 접근이 아니다 (사전 키는 키)
+            ("!['secret_x']", "!['[MASKED]']"),
+            ("?['secret_x']", "?['[MASKED]']"),
+            ("!!['secret_x']", "!!['[MASKED]']"),
+            ("['secret_x']", "['[MASKED]']"),
+            ("['SuperSecret99', 'b']", "['[MASKED]', '[MASKED]']"),
+            ('["password": "v1"]', '["password": "[MASKED]"]'),
+            # W2: 공백 없는 삼항·여러 요소 배열·null 병합 뒤 배열 리터럴은 값
+            ("cond?['SuperSecret99']:[]", "cond?['[MASKED]']:[]"),
+            ("isProd?['api_token_live_123']:['dev']", "isProd?['[MASKED]']:['[MASKED]']"),
+            ("isProd?['api_token_live_123', 'x']:[]", "isProd?['[MASKED]', '[MASKED]']:[]"),
+            ("foo(c?['tok_secret']:[])", "foo(c?['[MASKED]']:[])"),
+            ("const k = cfg.keys??['SuperSecret99']", "const k = cfg.keys??['[MASKED]']"),
+            ("x!['tok_secret',\n 'b']", "x!['[MASKED]',\n '[MASKED]']"),
+            ("x?['token' ]", "x?['token' ]"),
+            ("x!['token'\n]", "x!['token'\n]"),
         ]
         for raw, want in cases:
             with self.subTest(raw=raw):

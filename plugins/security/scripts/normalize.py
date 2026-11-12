@@ -114,6 +114,13 @@ def _dict_colon_follows(text: str, e: int) -> bool:
     return text[e:e + _LITERAL_LOOKAHEAD].lstrip(" \t\r\n").startswith(":")
 
 
+def _subscript_close_follows(text: str, e: int) -> bool:
+    """e(닫는 따옴표 다음)부터 공백 뒤 `]` 가 오고 그 다음이 `:`(삼항의 else·사전 키)가 아닌가 — 한 요소 대괄호 접근
+    (`d?["token"]`). 상수 길이만 본다."""
+    m = text[e:e + _LITERAL_LOOKAHEAD].lstrip(" \t\r\n")
+    return m.startswith("]") and not m[1:].lstrip(" \t\r\n").startswith(":")
+
+
 def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0) -> bool:
     """k 의 따옴표가 키 자리인가 — `(` 바로 뒤 첫 인자(단 뒤에 `forKey:`·`key:` 라벨이 이어지면 값), 대괄호 접근
     `name[`·`)[`·`][` 뒤(사이의 `!`·`?` 최대 2자 허용 — `data!['k']`·`d?["k"]`), `[` 뒤 사전 키(뒤에 `:`), 또는 `forKey:`·`key:` 뒤 (사이 공백·줄바꿈 허용). 배열 리터럴
@@ -130,11 +137,17 @@ def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0) -> bool:
     if text[i] == "[":
         # `[` 바로 앞의 null 단언·옵셔널 기호(`!`·`?`, 최대 2자 — Dart `data!['k']`·Swift `d?["k"]`·Kotlin `m!!['k']`)는
         # 건너뛰고 그 앞 글자로 판정한다 (PR #28 5차 리뷰 S1). 공백 뒤 삼항 `c ? ['x']` 는 `?` 앞이 공백이라 계속 값이다.
+        # 기호를 건너뛰었으면 공백 없는 삼항(`c?['x']:[]`)·여러 요소 배열과 구분하려고 따옴표 바로 뒤가 `]`(그 다음이 `:` 아님)인
+        # 한 요소 접근일 때만 키로 보고, null 병합 `??` 뒤는 늘 배열 리터럴 값이다 (PR #29 리뷰 W2). 앞 글자가 없으면(텍스트 맨 앞)
+        # 대괄호 접근이 아니다 — `"" in "…"` 는 참이라 따로 막는다 (W1).
         p = i - 1
         while p >= lo and i - p <= 2 and text[p] in "!?":
             p -= 1
         b = text[p] if p >= lo else ""
-        return b.isalnum() or b in "_$.])" or (e >= 0 and _dict_colon_follows(text, e))
+        access = b != "" and (b.isalnum() or b in "_$.])")
+        if access and p < i - 1:
+            access = text[p + 1:i] != "??" and e >= 0 and _subscript_close_follows(text, e)
+        return access or (e >= 0 and _dict_colon_follows(text, e))
     if text[i] != ":":
         return False
     e = i
