@@ -114,12 +114,12 @@ def _dict_colon_follows(text: str, e: int) -> bool:
     return text[e:e + _LITERAL_LOOKAHEAD].lstrip(" \t\r\n").startswith(":")
 
 
-_JS_EXTS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")
+_JS_EXTS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts")
 
 
 def _subscript_close_follows(text: str, e: int, strict: bool = False) -> bool:
     """e(닫는 따옴표 다음)부터 공백 뒤 `]` 가 오고 그 다음이 `:`(삼항의 else·사전 키)가 아닌가 — 한 요소 대괄호 접근
-    (`d?["token"]`). strict 면 `]` 뒤 공백 다음이 `;`·`,`·`)`·`}`·`]`·단독 `=` 일 때만 참이다 — 공백 없는 삼항의 then 쪽
+    (`d?["token"]`). strict 면 `]` 뒤 공백 다음이 `;`·`,`·`)`·`}`·`]`·단독 `=`(`==`·`=>` 제외) 일 때만 참이다 — 공백 없는 삼항의 then 쪽
     (`c?['v'].x:[]`·`c?['v'] /* */ : []`)과 창 끝까지 공백뿐인 경우·텍스트 끝은 값으로 본다 (PR #29 재리뷰 N1). 상수 길이만 본다."""
     m = text[e:e + _LITERAL_LOOKAHEAD].lstrip(" \t\r\n")
     if not m.startswith("]"):
@@ -127,7 +127,7 @@ def _subscript_close_follows(text: str, e: int, strict: bool = False) -> bool:
     r = m[1:].lstrip(" \t\r\n")
     if not strict:
         return not r.startswith(":")
-    return r[:1] in (";", ",", ")", "}", "]") or (r.startswith("=") and not r.startswith("=="))
+    return r[:1] in (";", ",", ")", "}", "]") or (r.startswith("=") and not r.startswith(("==", "=>")))
 
 
 def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0, qmode: str = "strict") -> bool:
@@ -148,8 +148,9 @@ def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0, qmode: st
     if text[i] == "[":
         # `[` 바로 앞의 null 단언·옵셔널 기호(`!`·`?`, 최대 2자 — Dart `data!['k']`·Swift `d?["k"]`·Kotlin `m!!['k']`)는
         # 건너뛰고 그 앞 글자로 판정한다 (PR #28 5차 리뷰 S1). 공백 뒤 삼항 `c ? ['x']` 는 `?` 앞이 공백이라 계속 값이다.
-        # 기호를 건너뛰었으면 공백 없는 삼항(`c?['x']:[]`)·여러 요소 배열과 구분하려고 따옴표 바로 뒤가 `]`(그 다음이 `:` 아님)인
-        # 한 요소 접근일 때만 키로 보고, null 병합 `??` 뒤는 늘 배열 리터럴 값이다 (PR #29 리뷰 W2). 앞 글자가 없으면(텍스트 맨 앞)
+        # 기호를 건너뛰었으면 공백 없는 삼항(`c?['x']:[]`)·여러 요소 배열과 구분하려고 따옴표 뒤 공백 다음이 `]`(그 다음이 `:` 아님)인
+        # 한 요소 접근일 때만 키로 보고, null 병합 `??` 뒤는 늘 배열 리터럴 값이다 (PR #29 리뷰 W2). `?` 가 섞이면 qmode(파일 확장자)에
+        # 따라 더 좁힌다 — JS·TS 는 늘 값, Swift 는 위 판정, 그 밖은 `]` 뒤 허용 목록 (재리뷰 N1, docstring 참조). 앞 글자가 없으면(텍스트 맨 앞)
         # 대괄호 접근이 아니다 — `"" in "…"` 는 참이라 따로 막는다 (W1).
         p = i - 1
         while p >= lo and i - p <= 2 and text[p] in "!?":

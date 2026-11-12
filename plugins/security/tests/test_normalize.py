@@ -327,6 +327,22 @@ class ParserTest(unittest.TestCase):
         self.assertIn(pw, ev[4])                      # 다른 CWE 는 그대로
         self.assertNotIn(pw, summary.replace(ev[4], ""))
 
+    def test_sensitive_evidence_passes_file_extension_hint(self):
+        """PR #29 3차 재리뷰 S1: parse_semgrep 이 evidence 파일 경로를 언어 힌트로 넘긴다 — Swift 줄 끝 `d?["token"]` 는 키가
+        남고(확장자 모름이면 가린다), TS 의 `c?['token']` 는 값으로 가린다"""
+        _w(os.path.join(self.target, "App", "A.swift"), 'x\nprint(1); let t = dict?["token"]\n')
+        _w(os.path.join(self.target, "src", "b.ts"), "x\nconst k = c?['token'];\n")
+        res = []
+        for path, check in (("/src/App/A.swift", "custom.ios.i1"), ("/src/src/b.ts", "custom.react-native.r1")):
+            r = self.semgrep_result(path, line=2, check=check)
+            r["extra"]["metadata"]["cwe"] = ["CWE-532: Log"]
+            res.append(r)
+        self.raw("semgrep.json", {"results": res})
+        f, _ = self.run_normalize("ios\t.\t\n")
+        ev = {x["location"]["file"]: x["evidence"] for x in f["findings"]}
+        self.assertEqual(ev["App/A.swift"], 'print(1); let t = dict?["token"]')
+        self.assertEqual(ev["src/b.ts"], "const k = c?['[MASKED]'];")
+
     def test_mask_literal_values_is_linear(self):
         import time
         times = []
@@ -472,6 +488,18 @@ class ParserTest(unittest.TestCase):
             ("App/A.swift", 'x = c ? ["secret_x"] : []', 'x = c ? ["[MASKED]"] : []'),
             # 기호 없는 대괄호 접근은 그대로 키 (재리뷰 S1)
             ("", "c ? m['token'] : d", "c ? m['token'] : d"),
+            # 3차 재리뷰 S1·S2: 확장자 대소문자·JS 계열 확장자, 허용 목록 `}`·`]`, `=>` 는 값
+            ("src/A.TS", "const k = c?['token'];", "const k = c?['[MASKED]'];"),
+            ("a.mjs", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("a.cjs", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("a.js", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("a.tsx", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("a.mts", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("App/A.SWIFT", 'let t = dict?["token"]', 'let t = dict?["token"]'),
+            ("App/swift.txt", 'let t = dict?["token"]', 'let t = dict?["[MASKED]"]'),   # 확장자만 본다
+            ("", "{x: d?['token']}", "{x: d?['token']}"),
+            ("", "[d?['token']]", "[d?['token']]"),
+            ("lib/a.dart", "m?['tok_secret'] => 1", "m?['[MASKED]'] => 1"),
         ]
         for path, raw, want in cases:
             with self.subTest(path=path, raw=raw):
