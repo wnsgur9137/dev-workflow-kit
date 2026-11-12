@@ -12,7 +12,7 @@
     {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/Auth.swift", "note": "I4 카멜케이스 userPassword (PR #27 재리뷰 W1)"},
     {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/Refresh.swift", "note": "I4 카멜케이스 refreshToken (PR #27 재리뷰 W1)"},
     {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/PasswordText.swift", "note": "I4 passwordField.text (PR #27 3차 재리뷰 W-2)"},
-    {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/PasswordHash.swift", "note": "I4 passwordHash (PR #27 3차 재리뷰)"},
+    {"tool": "semgrep", "rule_suffix": "sensitive-log", "file": "App/Sources/PasswordHash.swift", "note": "I4 passwordHash — 제외 목록 확장 가드: 비민감 접미사 제외가 넓어져 Hash 까지 빠지면 실패 (PR #27 3차 재리뷰, 4차 S-3)"},
     {"tool": "semgrep", "rule_suffix": "sensitive-log-objc", "file": "App/Legacy/Crypto.m", "note": "I4 Objective-C"},
     {"tool": "semgrep", "rule_suffix": "weak-crypto", "file": "App/Sources/Hash.swift", "note": "I6"},
     {"tool": "semgrep", "rule_suffix": "weak-crypto-objc", "file": "App/Legacy/Crypto.m", "note": "I6 Objective-C"},
