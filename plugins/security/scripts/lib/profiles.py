@@ -750,11 +750,44 @@ def scoped_exclude(pattern: str, root: str) -> str:
     return f"{_escape_glob(root)}/**/{base}"
 
 
-def venv_dirs(target: str):
-    """`pyvenv.cfg` 가 있는 폴더(Python 가상환경)의 대상 기준 상대 경로 목록.
+# venv_dirs 가 내려가지 않는 폴더 — Semgrep 이 어차피 보지 않는 이름(기본 무시 목록·전역 제외)만 쓴다.
+# 감지용 WALK_SKIP_DIRS 를 쓰면 venv/·out/·target/ 아래의 가상환경을 놓쳐 Semgrep 이 그대로 점검한다 (PR #30 4차 리뷰 S-1)
+_VENV_WALK_SKIP = frozenset(
+    {".git", ".hg", ".svn", "node_modules", "build", "dist", "vendor", ".venv", ".tox", ".env", ".npm", ".yarn",
+     "tests", "test"} | set(GLOBAL_EXCLUDES))
 
-    가상환경은 이름이 제각각(env·venv·.env-3.12 …)이라 이름이 아니라 표식 파일로 찾는다. 심볼릭 링크는 따라가지 않고,
-    찾은 가상환경과 의존성·산출물 폴더(WALK_SKIP_DIRS) 안으로는 내려가지 않는다. 대상 루트 자체는 제외하지 않는다.
+
+def _is_venv(full: str) -> bool:
+    """`pyvenv.cfg` 파일과 site-packages 폴더(`lib/python*/site-packages` 또는 Windows `Lib/site-packages`)가 모두 있는 폴더.
+
+    표식 파일 하나만 두고 소스 폴더를 Semgrep 에서 숨기지 못하도록 구조까지 본다 (PR #30 4차 리뷰 S-2). 심볼릭 링크는 쓰지 않는다.
+    """
+    cfg = os.path.join(full, "pyvenv.cfg")
+    if not os.path.isfile(cfg) or os.path.islink(cfg):
+        return False
+    for lib in ("lib", "Lib"):
+        base = os.path.join(full, lib)
+        if not os.path.isdir(base) or os.path.islink(base):
+            continue
+        if lib == "Lib" and os.path.isdir(os.path.join(base, "site-packages")):
+            return True
+        try:
+            names = os.listdir(base)
+        except OSError:
+            continue
+        for n in names:
+            sp = os.path.join(base, n, "site-packages")
+            if n.startswith("python") and os.path.isdir(sp) and not os.path.islink(sp):
+                return True
+    return False
+
+
+def venv_dirs(target: str):
+    """Python 가상환경 폴더의 대상 기준 상대 경로 목록 (판정은 _is_venv).
+
+    가상환경은 이름이 제각각(env·venv·.env-3.12 …)이라 이름이 아니라 표식 파일과 구조로 찾는다. 심볼릭 링크는 따라가지
+    않고, 찾은 가상환경과 Semgrep 이 보지 않는 폴더 안으로는 내려가지 않는다. 대상 루트 자체는 제외하지 않는다.
+    폴더 수가 MAX_WALK_ENTRIES 를 넘으면 그때까지 찾은 것만 돌려주고 stderr 에 알린다.
     """
     target = os.path.realpath(target)
     found, seen = [], 0
@@ -764,16 +797,16 @@ def venv_dirs(target: str):
             full = os.path.join(root, d)
             if os.path.islink(full):
                 continue
-            cfg = os.path.join(full, "pyvenv.cfg")
             if "\t" in d or "\n" in d or "\r" in d:
                 continue   # 출력(TSV)을 깨뜨리는 이름 — 점검 대상으로 남긴다
-            if os.path.isfile(cfg) and not os.path.islink(cfg):
+            if _is_venv(full):
                 found.append(os.path.relpath(full, target).replace(os.sep, "/"))
-            elif d not in WALK_SKIP_DIRS:
+            elif d not in _VENV_WALK_SKIP:
                 keep.append(d)
         dirs[:] = keep
         seen += len(keep)
         if seen > MAX_WALK_ENTRIES:
+            print(f"가상환경 확인: 폴더가 너무 많아({MAX_WALK_ENTRIES}개 초과) 일부 경로를 보지 못했습니다", file=sys.stderr)
             break
     return sorted(found)
 

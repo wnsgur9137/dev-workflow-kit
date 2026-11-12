@@ -215,11 +215,13 @@ _make_target() {
   printf 'src/\nweb/\n' >"$t/ign.txt" && ln -s ign.txt "$t/.dev-workflow-kit-semgrepignore-0"
   # git 이 무시하는 가상환경(이름과 무관하게 pyvenv.cfg 로 판정)·도구 산출물 — --no-git-ignore 여도 Semgrep 점검에서
   # 빠져야 한다 (PR #30 3차 리뷰 W-A). 기준선과 같은 취약 코드를 넣어 두고 결과가 없는지 본다
-  mkdir -p "$t/pyenv/lib" "$t/site/.next"
+  mkdir -p "$t/pyenv/lib/python3.12/site-packages" "$t/site/.next" "$t/lib/pyenv"
   printf 'home = /usr/bin\n' >"$t/pyenv/pyvenv.cfg"
-  cp "$t/src/app.py" "$t/pyenv/lib/app.py"
+  cp "$t/src/app.py" "$t/pyenv/lib/python3.12/site-packages/app.py"
+  # 같은 이름의 소스 폴더(lib/pyenv, 표식 없음)는 점검돼야 한다 — 제외 패턴의 루트 고정 (PR #30 4차 리뷰 S-3)
+  cp "$t/src/app.py" "$t/lib/pyenv/app.py"
   cp "$t/web/render.js" "$t/site/.next/render.js"
-  printf 'pyenv/\nsite/\n' >>"$t/.gitignore"
+  printf 'pyenv/\nsite/\nlib/\n' >>"$t/.gitignore"
   TARGET_DIR=$t
 }
 
@@ -312,12 +314,14 @@ PY
   leaked=$(python3 - "$RUN_DIR/findings.json" <<'PY'
 import json, sys
 fs = json.load(open(sys.argv[1]))["findings"]
-print(" ".join(sorted({f["location"]["file"] for f in fs
-                       if f["tool"] == "semgrep" and (f["location"]["file"] or "").startswith(("pyenv/", "site/"))})))
+files = {f["location"]["file"] for f in fs if f["tool"] == "semgrep"}
+print(" ".join(sorted(x for x in files if (x or "").startswith(("pyenv/", "site/")))))
+print("anchored" if "lib/pyenv/app.py" in files else "missing")
 PY
 ) || fail "findings.json 을 읽지 못함"
-  assert_eq "$leaked" "" "(가상환경·산출물의 Semgrep 결과)"
-  assert_contains "$(cat "$summary")" "Python 가상환경(pyvenv.cfg 가 있는 폴더) 1개를 Semgrep 점검에서 뺐습니다: pyenv/"
+  assert_eq "$leaked" "
+anchored" "(가상환경·산출물의 Semgrep 결과 / 같은 이름 소스 폴더 lib/pyenv 점검)"
+  assert_contains "$(cat "$summary")" "Python 가상환경(pyvenv.cfg 와 site-packages 가 있는 폴더) 1개를 Semgrep 점검에서 뺐습니다: pyenv/"
 
   # 권한: 리포트 폴더 700, 파일 600
   assert_eq "$(file_mode "$RUN_DIR")" 700

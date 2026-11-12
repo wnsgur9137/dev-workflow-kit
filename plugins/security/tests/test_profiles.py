@@ -311,20 +311,27 @@ class DetectTest(unittest.TestCase):
             self.assertIn("macos/Info.plist", files, out)
 
     def test_venv_dirs_by_marker_file(self):
-        """가상환경은 이름이 아니라 pyvenv.cfg 로 찾는다 (PR #30 3차 리뷰 W-A)"""
+        """가상환경은 이름이 아니라 pyvenv.cfg + site-packages 로 찾는다 (PR #30 3차 W-A, 4차 S-1·S-2)"""
+        sp = "lib/python3.12/site-packages/x.py"
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
-                "pyvenv.cfg": "x",                      # 대상 루트 자체는 제외하지 않는다
-                "env/pyvenv.cfg": "x",
-                "env/lib/inner/pyvenv.cfg": "x",        # 가상환경 안으로는 내려가지 않는다
-                "apps/a[1]/.venv-3.12/pyvenv.cfg": "x",
-                "node_modules/x/pyvenv.cfg": "x",       # 의존성 폴더 안은 보지 않는다
-                "src/env/main.py": "x",                 # 같은 이름이라도 표식이 없으면 소스
-                "fake/pyvenv.cfg/readme": "x",          # pyvenv.cfg 가 폴더면 표식이 아니다
+                "pyvenv.cfg": "x", sp: "x",              # 대상 루트 자체는 제외하지 않는다
+                "env/pyvenv.cfg": "x", "env/" + sp: "x",
+                "env/lib/inner/pyvenv.cfg": "x",         # 가상환경 안으로는 내려가지 않는다
+                "apps/a[1]/.venv-3.12/pyvenv.cfg": "x", "apps/a[1]/.venv-3.12/" + sp: "x",
+                "win/pyvenv.cfg": "x", "win/Lib/site-packages/x.py": "x",   # Windows 배치
+                "venv/py311/pyvenv.cfg": "x", "venv/py311/" + sp: "x",      # Semgrep 이 보는 venv/ 아래도 찾는다
+                "out/v/pyvenv.cfg": "x", "out/v/" + sp: "x",
+                "node_modules/x/pyvenv.cfg": "x", "node_modules/x/" + sp: "x",  # Semgrep 이 안 보는 폴더는 건너뜀
+                "src/env/main.py": "x",                  # 같은 이름이라도 표식이 없으면 소스
+                "src/fake/pyvenv.cfg": "x", "src/fake/app.py": "x",         # 표식만 있고 site-packages 가 없으면 소스
+                "fake/pyvenv.cfg/readme": "x",           # pyvenv.cfg 가 폴더면 표식이 아니다
             })
             os.makedirs(os.path.join(d, "linked"))
             os.symlink(os.path.join(d, "env", "pyvenv.cfg"), os.path.join(d, "linked", "pyvenv.cfg"))
-            self.assertEqual(profiles.venv_dirs(d), ["apps/a[1]/.venv-3.12", "env"])
+            os.symlink(os.path.join(d, "env", "lib"), os.path.join(d, "linked", "lib"))
+            self.assertEqual(profiles.venv_dirs(d),
+                             ["apps/a[1]/.venv-3.12", "env", "out/v", "venv/py311", "win"])
         self.assertEqual(profiles.venv_exclude("env"), "/env")
         self.assertEqual(profiles.venv_exclude("apps/a[1]/v*?"), "/apps/a\\[1\\]/v\\*\\?")
 

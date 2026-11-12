@@ -155,22 +155,28 @@ while IFS="$(printf '\t')" read -r kind value; do
     warning) printf '%s\n' "$value" >>"$WARNINGS_FILE" ;;
   esac
 done <"$PLAN"
-# Python 가상환경(pyvenv.cfg 가 있는 폴더)은 이름과 상관없이 Semgrep 점검에서 뺀다 — --no-git-ignore 로 git 이 무시하던
-# 가상환경까지 보면 서드파티 코드의 결과가 리포트를 덮는다 (PR #30 3차 리뷰 W-A). 뺀 폴더는 summary 에 드러낸다.
+# Python 가상환경(pyvenv.cfg 와 site-packages 가 있는 폴더)은 이름과 상관없이 Semgrep 점검에서 뺀다 — --no-git-ignore 로
+# git 이 무시하던 가상환경까지 보면 서드파티 코드의 결과가 리포트를 덮는다 (PR #30 3차 리뷰 W-A). 뺀 폴더는 summary 에
+# 드러낸다. 이름이 .venv 인 폴더는 Semgrep 기본 무시 목록이 이미 빼므로 경고에서 뺀다 (경고 피로, 4차 리뷰 S-2).
 VENVS_TSV="$RAW/venvs.tsv"
 if ! python3 "$SEC_PROFILES_PY" --dir "$SEC_PROFILE_DIR" venvs "$TARGET" >"$VENVS_TSV" 2>>"$RAW/detect.log"; then
   sec_die "가상환경 폴더 확인 실패: $(tail -n 3 "$RAW/detect.log")"
+fi
+if grep -q '^가상환경 확인:' "$RAW/detect.log" 2>/dev/null; then
+  grep '^가상환경 확인:' "$RAW/detect.log" | head -n 1 >>"$WARNINGS_FILE"
 fi
 VENV_LIST=""
 VENV_COUNT=0
 while IFS="$(printf '\t')" read -r rel pat; do
   [ -n "$pat" ] || continue
   SEMGREP_ARGS+=(--exclude "$pat")
+  case "$rel" in .venv | */.venv) continue ;; esac
   VENV_COUNT=$((VENV_COUNT + 1))
   [ $VENV_COUNT -le 5 ] && VENV_LIST="$VENV_LIST$rel/ "
 done <"$VENVS_TSV"
 if [ $VENV_COUNT -gt 0 ]; then
-  printf '%s\n' "Python 가상환경(pyvenv.cfg 가 있는 폴더) ${VENV_COUNT}개를 Semgrep 점검에서 뺐습니다: ${VENV_LIST}— 소스 폴더라면 그 안의 pyvenv.cfg 를 확인하세요." >>"$WARNINGS_FILE"
+  [ $VENV_COUNT -gt 5 ] && VENV_LIST="${VENV_LIST}외 $((VENV_COUNT - 5))개(전체 목록: raw/venvs.tsv) "
+  printf '%s\n' "Python 가상환경(pyvenv.cfg 와 site-packages 가 있는 폴더) ${VENV_COUNT}개를 Semgrep 점검에서 뺐습니다: ${VENV_LIST}— 소스 폴더라면 그 안의 pyvenv.cfg 를 확인하세요." >>"$WARNINGS_FILE"
 fi
 if [ -d "$SEC_CONF/semgrep-custom" ] && [ -n "$(ls -A "$SEC_CONF/semgrep-custom" 2>/dev/null)" ]; then
   SEMGREP_MOUNTS+=(-v "$SEC_CONF/semgrep-custom:/user:ro")
