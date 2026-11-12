@@ -155,18 +155,52 @@ while IFS="$(printf '\t')" read -r kind value; do
     warning) printf '%s\n' "$value" >>"$WARNINGS_FILE" ;;
   esac
 done <"$PLAN"
+# Python 가상환경(pyvenv.cfg 와 site-packages 가 있는 폴더)은 이름과 상관없이 Semgrep 점검에서 뺀다 — --no-git-ignore 로
+# git 이 무시하던 가상환경까지 보면 서드파티 코드의 결과가 리포트를 덮는다 (PR #30 3차 리뷰 W-A). 뺀 폴더는 summary 에
+# 드러낸다. 이름이 .venv 인 폴더는 Semgrep 기본 무시 목록이 이미 빼므로 경고에서 뺀다 (경고 피로, 4차 리뷰 S-2).
+VENVS_TSV="$RAW/venvs.tsv"
+if ! python3 "$SEC_PROFILES_PY" --dir "$SEC_PROFILE_DIR" venvs "$TARGET" >"$VENVS_TSV" 2>>"$RAW/detect.log"; then
+  sec_die "가상환경 폴더 확인 실패: $(tail -n 3 "$RAW/detect.log")"
+fi
+if grep -q '^가상환경 확인:' "$RAW/detect.log" 2>/dev/null; then
+  grep '^가상환경 확인:' "$RAW/detect.log" | head -n 1 >>"$WARNINGS_FILE"
+fi
+VENV_LIST=""
+VENV_COUNT=0
+while IFS="$(printf '\t')" read -r rel pat; do
+  [ -n "$pat" ] || continue
+  SEMGREP_ARGS+=(--exclude "$pat")
+  case "$rel" in .venv | */.venv) continue ;; esac
+  VENV_COUNT=$((VENV_COUNT + 1))
+  [ $VENV_COUNT -le 5 ] && VENV_LIST="$VENV_LIST$rel/ "
+done <"$VENVS_TSV"
+if [ $VENV_COUNT -gt 0 ]; then
+  [ $VENV_COUNT -gt 5 ] && VENV_LIST="${VENV_LIST}외 $((VENV_COUNT - 5))개(전체 목록: raw/venvs.tsv) "
+  printf '%s\n' "Python 가상환경(pyvenv.cfg 와 site-packages 가 있는 폴더) ${VENV_COUNT}개를 Semgrep 점검에서 뺐습니다: ${VENV_LIST}— 소스 폴더라면 그 안의 pyvenv.cfg 를 확인하세요." >>"$WARNINGS_FILE"
+fi
 if [ -d "$SEC_CONF/semgrep-custom" ] && [ -n "$(ls -A "$SEC_CONF/semgrep-custom" 2>/dev/null)" ]; then
   SEMGREP_MOUNTS+=(-v "$SEC_CONF/semgrep-custom:/user:ro")
   SEMGREP_ARGS+=(--config /user)
 fi
 
-# 대상 저장소가 도구 결과를 억제하는 설정을 갖고 있으면 알린다 (툴킷은 그 설정을 쓰지 않지만,
-# .semgrepignore 는 Semgrep 이 끌 수 없으므로 해당 경로가 점검되지 않을 수 있다)
+# 대상의 .semgrepignore 대신 읽을 파일 이름 — 대상에 없는 이름을 주면 Semgrep 은 대상의 .semgrepignore 를
+# 모두 무시하고 기본 무시 목록(tests/·test/·*_test.go·build·dist·node_modules·vendor·.venv·.tox·.env·.npm·.yarn·*.min.js)만 쓴다
+# (1.182.0 실측). 내부 옵션(--x-)이라 이미지 갱신으로 사라지면 Semgrep 이 인자 오류로 실패해 드러난다.
+# git 저장소인 대상도 git 파일 목록이 아니라 폴더 전체를 본다(--no-git-ignore) — 그렇지 않으면 서브모듈·중첩 저장소와
+# git 이 무시하는 추적되지 않는 파일을 경고 없이 건너뛴다 (PR #30 2차 리뷰 W-1). 의존성·산출물은 기본 무시 목록·전역 제외·
+# 프로파일 exclude_paths·가상환경 제외가 빼지만, 소스 이름과 겹치는 산출물(out/·target/·coverage/)은 프로파일이 감지된
+# 하위 경로 밖이면 점검된다.
+# 이름이 고정이면 대상이 그 이름(대소문자 변형·심볼릭 링크 포함)의 파일을 미리 둘 수 있으므로 실행마다 무작위로 정한다.
+SEMGREPIGNORE_DECOY_PREFIX=.dev-workflow-kit-semgrepignore
+DECOY_SUFFIX=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+[ ${#DECOY_SUFFIX} -eq 32 ] || sec_die "무작위 값을 만들 수 없습니다 (od·/dev/urandom 확인)."
+SEMGREPIGNORE_DECOY="$SEMGREPIGNORE_DECOY_PREFIX-$DECOY_SUFFIX"
+# 대상 저장소가 도구 결과를 억제하는 설정을 갖고 있으면 알린다 (툴킷은 그 설정을 쓰지 않는다)
 SUPPRESS=$(find "$TARGET" \( -name node_modules -o -name .git -o -name Pods -o -name build \) -prune -o -type f \
   \( -name .gitleaks.toml -o -name .gitleaksignore -o -name .semgrepignore -o -name osv-scanner.toml \) -print 2>/dev/null |
   cut -c$((${#TARGET} + 2))- | head -n 5 | tr '\n' ' ')
 if [ -n "$SUPPRESS" ]; then
-  printf '%s\n' "대상 저장소에 결과 억제 설정이 있습니다: ${SUPPRESS}— .gitleaks.toml·.gitleaksignore·osv-scanner.toml 은 무시하고 툴킷 설정으로 점검했지만, .semgrepignore 에 적힌 경로는 Semgrep 이 점검하지 않았을 수 있습니다." >>"$WARNINGS_FILE"
+  printf '%s\n' "대상 저장소에 결과 억제 설정이 있습니다: ${SUPPRESS}— .gitleaks.toml·.gitleaksignore·.semgrepignore·osv-scanner.toml 은 무시하고 툴킷 설정으로 점검했습니다." >>"$WARNINGS_FILE"
 fi
 
 # 컨테이너가 결과 파일을 새로 만들면 컨테이너 umask(644)로 생긴다. 권한 600 빈 파일을 미리 만들어 두면
@@ -199,6 +233,7 @@ run_semgrep() {
     -e SEMGREP_ENABLE_VERSION_CHECK=0 -e SEMGREP_SEND_METRICS=off \
     -v "$TARGET:/src:ro" -v "$RULES_DIR:/rules:ro" ${SEMGREP_MOUNTS[@]+"${SEMGREP_MOUNTS[@]}"} -v "$RAW:/out" \
     "$IMG_SEMGREP" semgrep scan "${SEMGREP_ARGS[@]}" --disable-nosem --metrics=off --disable-version-check \
+    --no-git-ignore "--x-semgrepignore-filename=$SEMGREPIGNORE_DECOY" \
     --json -o /out/semgrep.json /src >"$RAW/semgrep.log" 2>&1
   local rc=$?
   # semgrep: 0 정상, 1 발견 있음(--error 미사용 시에도 일부 버전), 그 외 오류

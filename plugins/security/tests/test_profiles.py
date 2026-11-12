@@ -8,6 +8,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "scripts", "lib"))
 
+import checks  # noqa: E402
 import profiles  # noqa: E402
 
 FIXTURES = os.path.join(HERE, "fixtures", "detect")
@@ -86,6 +87,13 @@ exclude_if: [missing]
         }, "x.yaml")
         self.assertTrue(any("detect[0].file" in e for e in errs))
 
+    def test_detect_exclude_must_be_string_list(self):
+        base = {"name": "x", "detect": ["**/a"], "semgrep": {"rulesets": []}, "sca": {"lockfiles": []}}
+        self.assertEqual(profiles.validate_profile(dict(base, detect_exclude=["**/macos/**"]), "x.yaml"), [])
+        self.assertEqual(profiles.validate_profile(dict(base, detect_exclude=[]), "x.yaml"), [])
+        errs = profiles.validate_profile(dict(base, detect_exclude="**/macos/**"), "x.yaml")
+        self.assertTrue(any("detect_exclude 는 문자열 리스트" in e for e in errs))
+
 
 class GlobTest(unittest.TestCase):
     def test_double_star(self):
@@ -154,8 +162,8 @@ class PlanExcludeTest(unittest.TestCase):
     def test_subpath_profile_is_anchored_to_its_root(self):
         """Flutter 의 ios/ 프로파일이 macos 러너(macos/)나 다른 프로젝트의 build/ 를 제외하지 않는다"""
         ex = self.excludes([("flutter", "."), ("ios", "ios"), ("android", "android"), ("server", "backend")])
-        self.assertIn("ios/**/macos", ex)
-        self.assertNotIn("macos", ex)
+        self.assertIn("ios/**/DerivedData", ex)
+        self.assertFalse(any("macos" in x for x in ex))  # macos 는 감지에서만 뺀다 (detect_exclude)
         self.assertIn("backend/**/build", ex)
         self.assertIn("backend/**/node_modules", ex)
         self.assertIn("build", ex)            # flutter(.) 자체의 제외는 전체 적용
@@ -276,6 +284,67 @@ class DetectTest(unittest.TestCase):
                 "macos/Runner.xcodeproj/project.pbxproj": "x",
             })
             self.assertEqual(profiles.detect(d, self.profiles), [("flutter", "."), ("ios", "ios")])
+
+    def test_detect_exclude_only_affects_detection(self):
+        """ios 의 **/macos/** 는 감지에서만 뺀다 — 루트 iOS 프로젝트의 macos/ 소스는 스캔·스택 검사 대상이다"""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "App.xcodeproj/project.pbxproj": "x",
+                "macos/Info.plist": "x",
+                "macos/Sources/AppDelegate.swift": "x",
+            })
+            self.assertEqual(profiles.detect(d, self.profiles), [("ios", ".")])
+            with tempfile.TemporaryDirectory() as r:
+                ex = [v for k, v in profiles.build_plan([("ios", ".")], self.profiles, r, r) if k == "exclude"]
+            self.assertFalse(any("macos" in x for x in ex), ex)
+            self.assertIn(".build", ex)
+        # 스택 검사(checks.run)도 macos/ 의 Info.plist 를 본다
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "App.xcodeproj/project.pbxproj": "x",
+                "macos/Info.plist": ('<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+                                     '<key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/>'
+                                     '</dict></dict></plist>\n'),
+            })
+            out = checks.run(d, profiles.detect_full(d, self.profiles), self.profiles)
+            files = {r.get("file") for r in out["results"] if str(r.get("rule_id", "")).startswith("ios.ats")}
+            self.assertIn("macos/Info.plist", files, out)
+
+    def test_venv_dirs_by_marker_file(self):
+        """가상환경은 이름이 아니라 pyvenv.cfg + site-packages 로 찾는다 (PR #30 3차 W-A, 4차 S-1·S-2)"""
+        sp = "lib/python3.12/site-packages/x.py"
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "pyvenv.cfg": "x", sp: "x",              # 대상 루트 자체는 제외하지 않는다
+                "env/pyvenv.cfg": "x", "env/" + sp: "x",
+                "env/lib/inner/pyvenv.cfg": "x",         # 가상환경 안으로는 내려가지 않는다
+                "apps/a[1]/.venv-3.12/pyvenv.cfg": "x", "apps/a[1]/.venv-3.12/" + sp: "x",
+                "win/pyvenv.cfg": "x", "win/Lib/site-packages/x.py": "x",   # Windows 배치
+                "venv/py311/pyvenv.cfg": "x", "venv/py311/" + sp: "x",      # Semgrep 이 보는 venv/ 아래도 찾는다
+                "out/v/pyvenv.cfg": "x", "out/v/" + sp: "x",
+                "node_modules/x/pyvenv.cfg": "x", "node_modules/x/" + sp: "x",  # Semgrep 이 안 보는 폴더는 건너뜀
+                "src/env/main.py": "x",                  # 같은 이름이라도 표식이 없으면 소스
+                "src/fake/pyvenv.cfg": "x", "src/fake/app.py": "x",         # 표식만 있고 site-packages 가 없으면 소스
+                "fake/pyvenv.cfg/readme": "x",           # pyvenv.cfg 가 폴더면 표식이 아니다
+            })
+            os.makedirs(os.path.join(d, "linked"))
+            os.symlink(os.path.join(d, "env", "pyvenv.cfg"), os.path.join(d, "linked", "pyvenv.cfg"))
+            os.symlink(os.path.join(d, "env", "lib"), os.path.join(d, "linked", "lib"))
+            self.assertEqual(profiles.venv_dirs(d),
+                             ["apps/a[1]/.venv-3.12", "env", "out/v", "venv/py311", "win"])
+        self.assertEqual(profiles.venv_exclude("env"), "/env")
+        self.assertEqual(profiles.venv_exclude("apps/a[1]/v*?"), "/apps/a\\[1\\]/v\\*\\?")
+
+    def test_global_excludes_avoid_source_like_names(self):
+        for name in (".next", "__pycache__", "Carthage", ".nuxt"):
+            self.assertIn(name, profiles.GLOBAL_EXCLUDES)
+        for name in ("out", "target", "coverage", "env", "src", "lib"):
+            self.assertNotIn(name, profiles.GLOBAL_EXCLUDES)
+
+    def test_macos_only_project_is_not_ios(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {"macos/Runner.xcodeproj/project.pbxproj": "x", "macos/Podfile": "x"})
+            self.assertEqual(profiles.detect(d, self.profiles), [])
 
     def test_symlinked_dirs_are_not_followed(self):
         with tempfile.TemporaryDirectory() as d:

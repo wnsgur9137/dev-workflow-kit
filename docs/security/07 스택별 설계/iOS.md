@@ -20,7 +20,8 @@ profile: ios
 ## 감지 (`profiles/ios.yaml`)
 ```yaml
 detect: ["**/*.xcodeproj", "**/*.xcworkspace", "**/Package.swift", "**/Podfile"]
-exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**", "**/macos/**"]
+detect_exclude: ["**/macos/**"]   # Flutter 의 macos 데스크톱 러너 — 감지에서만 뺀다
+exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**"]
 ```
 
 ## 점검 항목
@@ -74,6 +75,7 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 - Objective-C는 Semgrep 지원이 제한적 → 시크릿·바이너리 점검 위주
 - 줄 단위 정규식 규칙(`*-objc`)은 여러 줄 블록 주석의 가운데 줄을 주석으로 알아보지 못한다(오탐). `weak-crypto-objc`는 줄에서 닫히지 않은 `"`(예: 문자 리터럴 `'"'`·`'\"'`) 뒤를 보지 않고, 한 줄이 약 13만 자를 넘는 파일은 PCRE2 한도에 걸려 놓칠 수 있다(미탐)
 - I4 `sensitive-log`는 이름 정규식이라 field·label·view 뒤에 이름이 더 이어지는 변수(`print(passwordFieldText)`), 숫자 접미사(`passwordField2.text`), 점 앞뒤 공백(`passwordField . text`), 필드 이름 뒤 접미사가 40자를 넘는 경우를 놓친다(미탐, PR #27 4차 리뷰 S-1). 반대로 `passwordField.text?.count`처럼 길이만 찍어도 보고된다(오탐, 길이도 정보 노출이라 그대로 둔다). 정규식을 넓히려면 `Tokenizer`·`tokenCount` 계열 음성 사례를 PCRE2(고정 이미지)로 다시 실측해야 한다
+- 감지: `macos/` 아래에만 Xcode 프로젝트·`Podfile`이 있는 저장소(순수 macOS 앱, react-native-macos 등)는 Flutter 러너와 구별하지 않고 iOS 로 감지하지 않는다 → 점검하려면 `--profile ios`
 - xcconfig: 참조 바로 뒤 경로처럼 보이는 값(`$(PREFIX)/평문`), `${`가 섞인 평문, `$(VAR:default=…)`의 기본값은 판정하지 않는다
 - plist 정수 사전 차단은 UTF-8 바이트 기준이라 UTF-16 plist 는 거치지 않는다. 거대 정수는 Python 의 int 자릿수 제한(3.11+, 또는 CVE-2020-10735 패치 버전)에 걸려 "plist 를 해석하지 못했습니다" 경고로 끝난다 — 그보다 오래된 Python 은 지원하지 않는다
 
