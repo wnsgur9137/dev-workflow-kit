@@ -201,6 +201,9 @@ _make_target() {
   # 대상 저장소의 억제 설정 — 툴킷은 이를 쓰지 않아야 한다 (PR #19 W2, 위협 모델 T5)
   printf "[allowlist]\npaths = ['.*']\n" >"$t/.gitleaks.toml"
   printf '[[PackageOverrides]]\nname = "requests"\nignore = true\n' >"$t/osv-scanner.toml"
+  # .semgrepignore 도 무시한다 — 기준선의 src/app.py·web/render.js 결과가 나와야 한다 (루트·하위 폴더 모두)
+  printf 'src/\n' >"$t/.semgrepignore"
+  printf 'render.js\n' >"$t/web/.semgrepignore"
   TARGET_DIR=$t
 }
 
@@ -351,6 +354,32 @@ test_real_exclude_paths_are_scoped_to_profile_root() {
     python3 -c 'import json,sys; print(" ".join(sorted(p.replace("/src/","") for p in json.load(sys.stdin)["paths"]["scanned"])))')
   # 루트 macos 러너·이름만 비슷한 a1/ 은 점검, 나머지는 제외
   assert_eq "$scanned" "a1/macos/g.py macos/a.py" "(제외 결과)"
+}
+
+# 대상의 .semgrepignore 를 대체 이름 옵션으로 무시하고, Semgrep 기본 무시 목록(tests/ 등)은 그대로 쓴다.
+# 내부 옵션(--x-)이라 이미지를 갱신하면 동작이 바뀔 수 있어 실측으로 고정한다.
+test_real_semgrepignore_is_ignored_but_defaults_kept() {
+  _real_ready || exit 77
+  mkdir -p "$HOME/.cache/dev-workflow-kit-tests"
+  IGN_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/ign.XXXXXX")
+  trap 'rm -rf "$IGN_DIR"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+  local f img decoy scanned
+  for f in src/a.py sub/c.py tests/t.py app/src/test/u.py; do
+    mkdir -p "$IGN_DIR/src/$(dirname "$f")"
+    echo 'eval(x)' >"$IGN_DIR/src/$f"
+  done
+  printf 'src/\n' >"$IGN_DIR/src/.semgrepignore"
+  printf 'c.py\n' >"$IGN_DIR/src/sub/.semgrepignore"
+  mkdir -p "$IGN_DIR/rules"
+  printf 'rules:\n- id: ev\n  pattern: eval(...)\n  message: m\n  languages: [python]\n  severity: ERROR\n' >"$IGN_DIR/rules/r.yaml"
+  decoy=$(sed -n 's/^SEMGREPIGNORE_DECOY=//p' "$PLUGIN_DIR/scripts/scan-code.sh")
+  [ -n "$decoy" ] || fail "scan-code.sh 에서 SEMGREPIGNORE_DECOY 를 찾지 못함"
+  img=$(sec_image_ref semgrep)
+  scanned=$(docker run --rm --network none -v "$IGN_DIR/src:/src:ro" -v "$IGN_DIR/rules:/r:ro" "$img" \
+    semgrep scan --config /r --metrics=off --disable-version-check "--x-semgrepignore-filename=$decoy" --json /src 2>/dev/null |
+    python3 -c 'import json,sys; print(" ".join(sorted(p.replace("/src/","") for p in json.load(sys.stdin)["paths"]["scanned"])))')
+  # 대상의 .semgrepignore(루트 src/, 하위 c.py)는 무시, 기본 무시 목록의 tests/·test/ 는 빠진다
+  assert_eq "$scanned" "src/a.py sub/c.py" "(대상 선택 결과)"
 }
 
 # S-Web: 웹 픽스처 기준선 (W1~W8) — 커스텀 Semgrep 규칙·스택 검사·OSV 가 모두 연결되는지

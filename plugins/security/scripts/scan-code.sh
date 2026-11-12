@@ -160,13 +160,18 @@ if [ -d "$SEC_CONF/semgrep-custom" ] && [ -n "$(ls -A "$SEC_CONF/semgrep-custom"
   SEMGREP_ARGS+=(--config /user)
 fi
 
-# 대상 저장소가 도구 결과를 억제하는 설정을 갖고 있으면 알린다 (툴킷은 그 설정을 쓰지 않지만,
-# .semgrepignore 는 Semgrep 이 끌 수 없으므로 해당 경로가 점검되지 않을 수 있다)
+# 대상의 .semgrepignore 대신 읽을 파일 이름 — 대상에 없는 이름을 주면 Semgrep 은 대상의 .semgrepignore 를
+# 모두 무시하고 기본 무시 목록(tests/·test/·*_test.go·build·dist·node_modules·vendor·*.min.js)만 쓴다
+# (1.182.0 실측). 내부 옵션(--x-)이라 이미지 갱신으로 사라지면 Semgrep 이 인자 오류로 실패해 드러난다.
+SEMGREPIGNORE_DECOY=.dev-workflow-kit-semgrepignore
+# 대상 저장소가 도구 결과를 억제하는 설정을 갖고 있으면 알린다 (툴킷은 그 설정을 쓰지 않는다).
+# 위 대체 이름의 파일이 대상에 있으면 Semgrep 이 그 파일을 읽으므로 함께 찾는다.
 SUPPRESS=$(find "$TARGET" \( -name node_modules -o -name .git -o -name Pods -o -name build \) -prune -o -type f \
-  \( -name .gitleaks.toml -o -name .gitleaksignore -o -name .semgrepignore -o -name osv-scanner.toml \) -print 2>/dev/null |
+  \( -name .gitleaks.toml -o -name .gitleaksignore -o -name .semgrepignore -o -name osv-scanner.toml \
+  -o -name "$SEMGREPIGNORE_DECOY" \) -print 2>/dev/null |
   cut -c$((${#TARGET} + 2))- | head -n 5 | tr '\n' ' ')
 if [ -n "$SUPPRESS" ]; then
-  printf '%s\n' "대상 저장소에 결과 억제 설정이 있습니다: ${SUPPRESS}— .gitleaks.toml·.gitleaksignore·osv-scanner.toml 은 무시하고 툴킷 설정으로 점검했지만, .semgrepignore 에 적힌 경로는 Semgrep 이 점검하지 않았을 수 있습니다." >>"$WARNINGS_FILE"
+  printf '%s\n' "대상 저장소에 결과 억제 설정이 있습니다: ${SUPPRESS}— .gitleaks.toml·.gitleaksignore·.semgrepignore·osv-scanner.toml 은 무시하고 툴킷 설정으로 점검했습니다. ${SEMGREPIGNORE_DECOY} 파일이 있으면 Semgrep 이 그 파일에 적힌 경로를 점검하지 않았을 수 있습니다." >>"$WARNINGS_FILE"
 fi
 
 # 컨테이너가 결과 파일을 새로 만들면 컨테이너 umask(644)로 생긴다. 권한 600 빈 파일을 미리 만들어 두면
@@ -199,6 +204,7 @@ run_semgrep() {
     -e SEMGREP_ENABLE_VERSION_CHECK=0 -e SEMGREP_SEND_METRICS=off \
     -v "$TARGET:/src:ro" -v "$RULES_DIR:/rules:ro" ${SEMGREP_MOUNTS[@]+"${SEMGREP_MOUNTS[@]}"} -v "$RAW:/out" \
     "$IMG_SEMGREP" semgrep scan "${SEMGREP_ARGS[@]}" --disable-nosem --metrics=off --disable-version-check \
+    "--x-semgrepignore-filename=$SEMGREPIGNORE_DECOY" \
     --json -o /out/semgrep.json /src >"$RAW/semgrep.log" 2>&1
   local rc=$?
   # semgrep: 0 정상, 1 발견 있음(--error 미사용 시에도 일부 버전), 그 외 오류
