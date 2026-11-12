@@ -732,8 +732,9 @@ def scoped_exclude(pattern: str, root: str) -> str:
 
     루트(".")에서 감지된 프로파일은 모든 깊이에 적용한다. gitignore 문법에서 가운데 `/` 가 있는 패턴
     (`ios/Pods`)은 루트에 고정되므로 `**/` 를 붙인다. 하위 경로에서 감지된 프로파일은 `<하위 경로>/**/<패턴>`
-    으로 고정해 다른 하위 프로젝트(예: Flutter 의 macos 러너, 다른 프로젝트의 build/ 소스)를 제외하지 않는다.
-    Semgrep 1.182.0 에서 `ios/**/macos` 가 최상위 `macos/` 는 남기고 `ios/macos/` 만 제외하는 것을 실측했다.
+    으로 고정해 다른 하위 프로젝트(예: 다른 프로젝트의 build/ 소스)를 제외하지 않는다.
+    Semgrep 1.182.0 에서 `ios/**/macos` 가 최상위 `macos/` 는 남기고 `ios/macos/` 만 제외하는 것을 실측했다
+    (PR #22 — 지금 iOS 는 macos 를 detect_exclude 로 감지에서만 빼고, 통합 테스트는 `.build` 패턴으로 확인한다).
     """
     base = _semgrep_exclude(pattern)
     root = os.path.normpath(root or ".").strip("/")

@@ -298,9 +298,17 @@ class DetectTest(unittest.TestCase):
                 ex = [v for k, v in profiles.build_plan([("ios", ".")], self.profiles, r, r) if k == "exclude"]
             self.assertFalse(any("macos" in x for x in ex), ex)
             self.assertIn(".build", ex)
-            ctx = checks.Ctx(d, "ios", ".", [], self.profiles["ios"].get("exclude_paths") or [], lambda m: None)
-            rels = [rel for rel, _ in ctx.files(lambda rel, fn: True)]
-            self.assertIn("macos/Info.plist", rels)
+        # 스택 검사(checks.run)도 macos/ 의 Info.plist 를 본다
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "App.xcodeproj/project.pbxproj": "x",
+                "macos/Info.plist": ('<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>'
+                                     '<key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/>'
+                                     '</dict></dict></plist>\n'),
+            })
+            out = checks.run(d, profiles.detect_full(d, self.profiles), self.profiles)
+            files = {r.get("file") for r in out["results"] if str(r.get("rule_id", "")).startswith("ios.ats")}
+            self.assertIn("macos/Info.plist", files, out)
 
     def test_macos_only_project_is_not_ios(self):
         with tempfile.TemporaryDirectory() as d:
