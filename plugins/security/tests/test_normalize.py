@@ -327,6 +327,22 @@ class ParserTest(unittest.TestCase):
         self.assertIn(pw, ev[4])                      # 다른 CWE 는 그대로
         self.assertNotIn(pw, summary.replace(ev[4], ""))
 
+    def test_sensitive_evidence_passes_file_extension_hint(self):
+        """PR #29 3차 재리뷰 S1: parse_semgrep 이 evidence 파일 경로를 언어 힌트로 넘긴다 — Swift 줄 끝 `d?["token"]` 는 키가
+        남고(확장자 모름이면 가린다), TS 의 `c?['token']` 는 값으로 가린다"""
+        _w(os.path.join(self.target, "App", "A.swift"), 'x\nprint(1); let t = dict?["token"]\n')
+        _w(os.path.join(self.target, "src", "b.ts"), "x\nconst k = c?['token'];\n")
+        res = []
+        for path, check in (("/src/App/A.swift", "custom.ios.i1"), ("/src/src/b.ts", "custom.react-native.r1")):
+            r = self.semgrep_result(path, line=2, check=check)
+            r["extra"]["metadata"]["cwe"] = ["CWE-532: Log"]
+            res.append(r)
+        self.raw("semgrep.json", {"results": res})
+        f, _ = self.run_normalize("ios\t.\t\n")
+        ev = {x["location"]["file"]: x["evidence"] for x in f["findings"]}
+        self.assertEqual(ev["App/A.swift"], 'print(1); let t = dict?["token"]')
+        self.assertEqual(ev["src/b.ts"], "const k = c?['[MASKED]'];")
+
     def test_mask_literal_values_is_linear(self):
         import time
         times = []
@@ -403,10 +419,93 @@ class ParserTest(unittest.TestCase):
             ("rows[0]['password'] = 'x'", "rows[0]['password'] = '[MASKED]'"),
             ('["password": "v1"]', '["password": "[MASKED]"]'),
             ('let d = [\n  "authToken": t]', 'let d = [\n  "authToken": t]'),
+            # 5차 리뷰 S1: `!`·`?` 뒤 대괄호 접근은 키, 공백 뒤 삼항·논리 부정의 배열 리터럴은 값
+            ("response.data!['token']", "response.data!['token']"),
+            ('print(d?["token"])', 'print(d?["token"])'),
+            ("map!!['token']", "map!!['token']"),
+            ('UserDefaults.standard.dictionary(forKey: "x")?["token"],',
+             'UserDefaults.standard.dictionary(forKey: "[MASKED]")?["token"],'),   # "x" 는 비밀 단어가 없어 원래 가린다
+            ("map?['password'] = 'x'", "map?['password'] = '[MASKED]'"),
+            ("c ? ['secret-x'] : []", "c ? ['[MASKED]'] : []"),
+            ("x = !['secret-x']", "x = !['[MASKED]']"),
+            ("x?!?['secret-x']", "x?!?['[MASKED]']"),     # 2자 제한 (리뷰 S1 — 제한을 빼면 x 앞까지 건너뛴다)
+            ("a? ['secret-x']", "a? ['[MASKED]']"),       # `[` 앞 공백은 건너뛰지 않는다 (S1)
+            # PR #29 리뷰 W1: 텍스트 맨 앞 `[`·`![` 는 대괄호 접근이 아니다 (사전 키는 키)
+            ("!['secret_x']", "!['[MASKED]']"),
+            ("?['secret_x']", "?['[MASKED]']"),
+            ("!!['secret_x']", "!!['[MASKED]']"),
+            ("['secret_x']", "['[MASKED]']"),
+            ("['SuperSecret99', 'b']", "['[MASKED]', '[MASKED]']"),
+            ('["password": "v1"]', '["password": "[MASKED]"]'),
+            # W2: 공백 없는 삼항·여러 요소 배열·null 병합 뒤 배열 리터럴은 값
+            ("cond?['SuperSecret99']:[]", "cond?['[MASKED]']:[]"),
+            ("isProd?['api_token_live_123']:['dev']", "isProd?['[MASKED]']:['[MASKED]']"),
+            ("isProd?['api_token_live_123', 'x']:[]", "isProd?['[MASKED]', '[MASKED]']:[]"),
+            ("foo(c?['tok_secret']:[])", "foo(c?['[MASKED]']:[])"),
+            ("const k = cfg.keys??['SuperSecret99']", "const k = cfg.keys??['[MASKED]']"),
+            ("x!['tok_secret',\n 'b']", "x!['[MASKED]',\n '[MASKED]']"),
+            ("x?['token' ];", "x?['token' ];"),
+            ("x!['token'\n]", "x!['token'\n]"),
         ]
         for raw, want in cases:
             with self.subTest(raw=raw):
                 self.assertEqual(m(raw), want)
+
+    def test_mask_literal_values_optional_subscript_by_language(self):
+        """PR #29 재리뷰 N1: `?` 뒤 `[` 는 JS·TS 에서 늘 값(`?[` 접근 문법 없음), Swift 에서 한 요소 접근이면 키(삼항은 공백 필수),
+        그 밖(Dart·확장자 모름)은 `]` 뒤가 `;`·`,`·`)`·`}`·`]`·단독 `=` 일 때만 키다."""
+        m = normalize.mask_literal_values
+        cases = [
+            # strict(확장자 모름·Dart): 공백 없는 삼항 then 쪽의 체이닝·주석·창 경계·텍스트 끝은 값
+            ("", "k = c?['tok_secret'].x:[]", "k = c?['[MASKED]'].x:[]"),
+            ("", "k = isProd?['tok_secret'].join(','):''", "k = isProd?['[MASKED]'].join('[MASKED]'):''"),
+            ("", "k = c?['tok_secret'][0]:[]", "k = c?['[MASKED]'][0]:[]"),
+            ("", "k = c?['tok_secret']+y:[]", "k = c?['[MASKED]']+y:[]"),
+            ("", "k = c?['tok_secret']?.x:[]", "k = c?['[MASKED]']?.x:[]"),
+            ("", "k = c?['tok_secret'] ?? d : []", "k = c?['[MASKED]'] ?? d : []"),
+            ("", "c?['tok_secret'] /* x */ : []", "c?['[MASKED]'] /* x */ : []"),
+            ("", "c?['tok_secret'] // then\n : []", "c?['[MASKED]'] // then\n : []"),
+            ("", "c?['tok_secret'] # py\n : []", "c?['[MASKED]'] # py\n : []"),
+            ("", "c?['tok_secret']\n" + " " * 38 + ": []", "c?['[MASKED]']\n" + " " * 38 + ": []"),
+            ("", "c?['tok_secret']" + " " * 60, "c?['[MASKED]']" + " " * 60),
+            ("", "final keys = isProd?['tok_secret']", "final keys = isProd?['[MASKED]']"),
+            ("", "k = c?!['tok_secret'].x:[]", "k = c?!['[MASKED]'].x:[]"),
+            ("", "c?['secret_x'] : []", "c?['[MASKED]'] : []"),
+            ("", "c?['secret_x']\n  : []", "c?['[MASKED]']\n  : []"),
+            ("", "c?['secret_x'] == y", "c?['[MASKED]'] == y"),
+            ("lib/a.dart", "final t = data?['token'];", "final t = data?['token'];"),
+            ("lib/a.dart", "f(data?['token'], 1)", "f(data?['token'], 1)"),
+            ("lib/a.dart", "data?['password'] = 'x';", "data?['password'] = '[MASKED]';"),
+            ("lib/a.dart", "final t = data!['token'].trim()", "final t = data!['token'].trim()"),   # `!` 만이면 삼항이 아니다
+            # JS·TS: `?[` 는 접근이 아니다 — 키처럼 보여도 값
+            ("src/a.ts", "const k = c?['token'];", "const k = c?['[MASKED]'];"),
+            ("src/a.jsx", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("src/a.ts", "const t = data!['token'];", "const t = data!['token'];"),
+            ("src/a.ts", "a?.['token']", "a?.['token']"),
+            # Swift: 삼항 `?` 는 앞뒤 공백이 필수라 `d?[` 는 옵셔널 접근
+            ("App/A.swift", 'let t = dict?["token"]', 'let t = dict?["token"]'),
+            ("App/A.swift", 'print(d?["token"]?.count ?? 0)', 'print(d?["token"]?.count ?? 0)'),
+            ("App/A.swift", 'x = c ? ["secret_x"] : []', 'x = c ? ["[MASKED]"] : []'),
+            # 기호 없는 대괄호 접근은 그대로 키 (재리뷰 S1)
+            ("", "c ? m['token'] : d", "c ? m['token'] : d"),
+            # 3차 재리뷰 S1·S2: 확장자 대소문자·JS 계열 확장자, 허용 목록 `}`·`]`, `=>` 는 값
+            ("src/A.TS", "const k = c?['token'];", "const k = c?['[MASKED]'];"),
+            ("a.mjs", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("a.cjs", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("a.js", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("a.tsx", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("a.mts", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),
+            ("App/A.SWIFT", 'let t = dict?["token"]', 'let t = dict?["token"]'),
+            ("App/swift.txt", 'let t = dict?["token"]', 'let t = dict?["[MASKED]"]'),   # 확장자만 본다
+            ("App/a.swift.txt", 'let t = dict?["token"]', 'let t = dict?["[MASKED]"]'),  # 끝 확장자만 본다 (4차 S1')
+            ("a.cts", "f(c?['tok_secret'])", "f(c?['[MASKED]'])"),                              # 4차 S2'
+            ("", "{x: d?['token']}", "{x: d?['token']}"),
+            ("", "[d?['token']]", "[d?['token']]"),
+            ("lib/a.dart", "m?['tok_secret'] => 1", "m?['[MASKED]'] => 1"),
+        ]
+        for path, raw, want in cases:
+            with self.subTest(path=path, raw=raw):
+                self.assertEqual(m(raw, path), want)
 
     def test_mask_literal_values_label_lookahead_is_linear(self):
         """M1·S1 의 앞 훑기(상수 길이)·줄바꿈 포함 뒤 훑기도 입력 2배에 시간이 2배 수준이다"""

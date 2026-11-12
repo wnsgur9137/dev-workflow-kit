@@ -114,12 +114,30 @@ def _dict_colon_follows(text: str, e: int) -> bool:
     return text[e:e + _LITERAL_LOOKAHEAD].lstrip(" \t\r\n").startswith(":")
 
 
-def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0) -> bool:
+_JS_EXTS = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts")
+
+
+def _subscript_close_follows(text: str, e: int, strict: bool = False) -> bool:
+    """e(닫는 따옴표 다음)부터 공백 뒤 `]` 가 오고 그 다음이 `:`(삼항의 else·사전 키)가 아닌가 — 한 요소 대괄호 접근
+    (`d?["token"]`). strict 면 `]` 뒤 공백 다음이 `;`·`,`·`)`·`}`·`]`·단독 `=`(`==`·`=>` 제외) 일 때만 참이다 — 공백 없는 삼항의 then 쪽
+    (`c?['v'].x:[]`·`c?['v'] /* */ : []`)과 창 끝까지 공백뿐인 경우·텍스트 끝은 값으로 본다 (PR #29 재리뷰 N1). 상수 길이만 본다."""
+    m = text[e:e + _LITERAL_LOOKAHEAD].lstrip(" \t\r\n")
+    if not m.startswith("]"):
+        return False
+    r = m[1:].lstrip(" \t\r\n")
+    if not strict:
+        return not r.startswith(":")
+    return r[:1] in (";", ",", ")", "}", "]") or (r.startswith("=") and not r.startswith(("==", "=>")))
+
+
+def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0, qmode: str = "strict") -> bool:
     """k 의 따옴표가 키 자리인가 — `(` 바로 뒤 첫 인자(단 뒤에 `forKey:`·`key:` 라벨이 이어지면 값), 대괄호 접근
-    `name[`·`)[`·`][` 뒤, `[` 뒤 사전 키(뒤에 `:`), 또는 `forKey:`·`key:` 뒤 (사이 공백·줄바꿈 허용). 배열 리터럴
+    `name[`·`)[`·`][` 뒤(사이의 `!`·`?` 최대 2자 허용 — `data!['k']`·`d?["k"]`), `[` 뒤 사전 키(뒤에 `:`), 또는 `forKey:`·`key:` 뒤 (사이 공백·줄바꿈 허용). 배열 리터럴
     (`= [`·`([`·줄 처음 `[`)의 요소는 값이다 (PR #28 4차 리뷰 N3). e 는 닫는 따옴표 다음 위치(닫히지 않았으면 -1).
     lo 는 직전 줄 끝 주석의 끝 — 주석 안의 `(`·`[`·라벨은 보지 않는다(N3). 뒤로 훑는 구간은 앞 토큰과 이 따옴표
-    사이의 공백·이름 하나뿐이라 따옴표마다 겹치지 않는다 (전체 선형)."""
+    사이의 공백·이름 하나뿐이라 따옴표마다 겹치지 않는다 (전체 선형). qmode 는 `?` 를 건너뛴 대괄호의 판정 —
+    "value"(JS·TS: `?[` 접근 문법이 없어 늘 삼항의 배열), "lenient"(Swift: 삼항 `?` 는 앞뒤 공백이 필수라 `c?[` 는 늘
+    옵셔널 접근), "strict"(Dart·그 밖: `_subscript_close_follows` strict) (PR #29 재리뷰 N1)."""
     i = k - 1
     while i >= lo and text[i] in " \t\r\n":
         i -= 1
@@ -128,8 +146,23 @@ def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0) -> bool:
     if text[i] == "(":
         return e < 0 or not _value_label_follows(text, e)
     if text[i] == "[":
-        b = text[i - 1] if i > lo else ""
-        return b.isalnum() or b in "_$.])" or (e >= 0 and _dict_colon_follows(text, e))
+        # `[` 바로 앞의 null 단언·옵셔널 기호(`!`·`?`, 최대 2자 — Dart `data!['k']`·Swift `d?["k"]`·Kotlin `m!!['k']`)는
+        # 건너뛰고 그 앞 글자로 판정한다 (PR #28 5차 리뷰 S1). 공백 뒤 삼항 `c ? ['x']` 는 `?` 앞이 공백이라 계속 값이다.
+        # 기호를 건너뛰었으면 공백 없는 삼항(`c?['x']:[]`)·여러 요소 배열과 구분하려고 따옴표 뒤 공백 다음이 `]`(그 다음이 `:` 아님)인
+        # 한 요소 접근일 때만 키로 보고, null 병합 `??` 뒤는 늘 배열 리터럴 값이다 (PR #29 리뷰 W2). `?` 가 섞이면 qmode(파일 확장자)에
+        # 따라 더 좁힌다 — JS·TS 는 늘 값, Swift 는 위 판정, 그 밖은 `]` 뒤 허용 목록 (재리뷰 N1, docstring 참조). 앞 글자가 없으면(텍스트 맨 앞)
+        # 대괄호 접근이 아니다 — `"" in "…"` 는 참이라 따로 막는다 (W1).
+        p = i - 1
+        while p >= lo and i - p <= 2 and text[p] in "!?":
+            p -= 1
+        b = text[p] if p >= lo else ""
+        access = b != "" and (b.isalnum() or b in "_$.])")
+        if access and p < i - 1:
+            sym = text[p + 1:i]
+            has_q = "?" in sym
+            access = (sym != "??" and not (has_q and qmode == "value") and e >= 0
+                      and _subscript_close_follows(text, e, has_q and qmode == "strict"))
+        return access or (e >= 0 and _dict_colon_follows(text, e))
     if text[i] != ":":
         return False
     e = i
@@ -139,11 +172,13 @@ def _literal_key_position(text: str, k: int, e: int = -1, lo: int = 0) -> bool:
     return text[i + 1:e].lower() in _LITERAL_KEY_LABELS
 
 
-def mask_literal_values(text: str) -> str:
+def mask_literal_values(text: str, path: str = "") -> str:
     """문자열 리터럴(작은·큰따옴표, 백틱, 삼중 따옴표)의 내용을 가린다. 키 자리(`(`·`[` 바로 뒤 첫 인자 — 뒤에 `forKey:`·`key:` 라벨이
     이어지면 값, `forKey:`·`key:` 뒤)의 키 이름(비밀 단어를 포함한 공백 없는 짧은 이름)만 남긴다 — 값 자리의 리터럴은 비밀 단어가 있어도 가린다
     (setItem('password', 'Password123'), PR #28 2차 리뷰 N2). 백틱·삼중 따옴표는 줄을 넘겨 닫는 따옴표까지 가리고,
-    리터럴 밖의 `//` 와 공백 뒤 `# ` 주석은 줄 끝까지 그대로 둔다 (N3). 선형 스캔."""
+    리터럴 밖의 `//` 와 공백 뒤 `# ` 주석은 줄 끝까지 그대로 둔다 (N3). path 는 `?[` 판정의 언어 힌트(확장자)다. 선형 스캔."""
+    ext = str(path or "").lower()
+    qmode = "value" if ext.endswith(_JS_EXTS) else "lenient" if ext.endswith(".swift") else "strict"
     out, k, n, lo = [], 0, len(text), 0
     while k < n:
         c = text[k]
@@ -166,7 +201,7 @@ def mask_literal_values(text: str) -> str:
         closed = j < n and text.startswith(q, j)
         body = text[k + len(q):min(j, n)]
         keep = not body or (len(q) == 1 and _LITERAL_KEY_NAME.fullmatch(body) and _LITERAL_KEY_WORD.search(body)
-                            and _literal_key_position(text, k, j + len(q) if closed else -1, lo))
+                            and _literal_key_position(text, k, j + len(q) if closed else -1, lo, qmode))
         out.append(q + (body if keep else "[MASKED]") + (q if closed else ""))
         k = j + len(q) if closed else min(j, n)
     return "".join(out)
@@ -406,7 +441,7 @@ def parse_semgrep(data, index: ProfileIndex, target=None):
             if not lines.strip() or lines.strip() == "requires login":
                 lines = read_source_lines(target, file, line, (r.get("end") or {}).get("line"))
             if SENSITIVE_VALUE_CWES.intersection(refs):
-                lines = mask_literal_values(lines)
+                lines = mask_literal_values(lines, file)
         rule_short = check_id.split(".")[-1] if check_id else "semgrep"
         out.append({
             "id": finding_id("semgrep", check_id, file, line),
