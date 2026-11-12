@@ -20,7 +20,8 @@ profile: ios
 ## 감지 (`profiles/ios.yaml`)
 ```yaml
 detect: ["**/*.xcodeproj", "**/*.xcworkspace", "**/Package.swift", "**/Podfile"]
-exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**", "**/macos/**"]
+detect_exclude: ["**/macos/**"]   # Flutter 의 macos 데스크톱 러너 — 감지에서만 뺀다
+exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/Build/**"]
 ```
 
 ## 점검 항목
