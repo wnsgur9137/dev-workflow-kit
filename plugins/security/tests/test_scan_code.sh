@@ -188,9 +188,13 @@ _make_target() {
   GH_TOKEN_FAKE="ghp_$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 36)"
   (
     cd "$t" || exit 1
+    # web/ 은 중첩 git 저장소로 두고 바깥에서는 gitlink(서브모듈 구조)로 커밋한다 — Semgrep 이 git 파일 목록만
+    # 보면 그 안의 web/render.js 를 놓친다 (PR #30 2차 리뷰 W-1, --no-git-ignore 로 점검)
+    (cd web && git init -q && git config user.email t@example.com && git config user.name t &&
+      git add -A && git commit -qm web) &&
     git init -q && git config user.email t@example.com && git config user.name t &&
       printf 'AWS_ACCESS_KEY_ID = "%s"\n' "$AWS_KEY" >config.py &&
-      git add -A && git commit -qm init && git rm -q config.py && git commit -qm "remove key"
+      git add -A 2>/dev/null && git commit -qm init && git rm -q config.py && git commit -qm "remove key"
   ) || return 1
   # 도구의 인라인 억제 주석이 있어도 탐지해야 한다 (--ignore-gitleaks-allow, --disable-nosem)
   printf 'token = "%s"  # gitleaks:allow\n' "$GH_TOKEN_FAKE" >"$t/.env.local"
@@ -204,7 +208,8 @@ _make_target() {
   # .semgrepignore 도 무시한다 — 기준선의 src/app.py·web/render.js 결과가 나와야 한다 (루트·하위 폴더 모두)
   printf 'src/\n' >"$t/.semgrepignore"
   printf 'render.js\n' >"$t/web/.semgrepignore"
-  # 대체 이름(실행마다 무작위)의 접두사와 같은 이름·대소문자 변형·심볼릭 링크를 미리 둬도 Semgrep 이 읽지 않아야 한다 (PR #30 C1)
+  # 대체 이름(실행마다 무작위)의 접두사와 같은 이름을 미리 둬도 Semgrep 이 읽지 않아야 한다 (PR #30 C1 — 회귀 고정의 핵심).
+  # 대소문자 변형은 대소문자를 무시하는 macOS 마운트에서만, 심볼릭 링크는 접미사가 고정되는 변이에서만 보조로 의미가 있다
   printf 'src/\n' >"$t/.dev-workflow-kit-semgrepignore"
   printf 'render.js\n' >"$t/web/.DEV-WORKFLOW-KIT-SEMGREPIGNORE"
   printf 'src/\nweb/\n' >"$t/ign.txt" && ln -s ign.txt "$t/.dev-workflow-kit-semgrepignore-0"
@@ -382,7 +387,7 @@ test_real_semgrepignore_is_ignored_but_defaults_kept() {
   decoy="$decoy-0123456789abcdef"
   img=$(sec_image_ref semgrep)
   scanned=$(docker run --rm --network none -v "$IGN_DIR/src:/src:ro" -v "$IGN_DIR/rules:/r:ro" "$img" \
-    semgrep scan --config /r --metrics=off --disable-version-check "--x-semgrepignore-filename=$decoy" --json /src 2>/dev/null |
+    semgrep scan --config /r --metrics=off --disable-version-check --no-git-ignore "--x-semgrepignore-filename=$decoy" --json /src 2>/dev/null |
     python3 -c 'import json,sys; print(" ".join(sorted(p.replace("/src/","") for p in json.load(sys.stdin)["paths"]["scanned"])))')
   # 대상의 .semgrepignore(루트 src/, 하위 c.py)는 무시, 기본 무시 목록의 tests/·test/ 는 빠진다
   assert_eq "$scanned" "src/a.py sub/c.py" "(대상 선택 결과)"
