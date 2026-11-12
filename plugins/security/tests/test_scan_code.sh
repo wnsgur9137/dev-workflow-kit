@@ -194,7 +194,7 @@ _make_target() {
       git add -A && git commit -qm web) &&
     git init -q && git config user.email t@example.com && git config user.name t &&
       printf 'AWS_ACCESS_KEY_ID = "%s"\n' "$AWS_KEY" >config.py &&
-      git add -A 2>/dev/null && git commit -qm init && git rm -q config.py && git commit -qm "remove key"
+      git -c advice.addEmbeddedRepo=false add -A && git commit -qm init && git rm -q config.py && git commit -qm "remove key"
   ) || return 1
   # 도구의 인라인 억제 주석이 있어도 탐지해야 한다 (--ignore-gitleaks-allow, --disable-nosem)
   printf 'token = "%s"  # gitleaks:allow\n' "$GH_TOKEN_FAKE" >"$t/.env.local"
@@ -213,6 +213,13 @@ _make_target() {
   printf 'src/\n' >"$t/.dev-workflow-kit-semgrepignore"
   printf 'render.js\n' >"$t/web/.DEV-WORKFLOW-KIT-SEMGREPIGNORE"
   printf 'src/\nweb/\n' >"$t/ign.txt" && ln -s ign.txt "$t/.dev-workflow-kit-semgrepignore-0"
+  # git 이 무시하는 가상환경(이름과 무관하게 pyvenv.cfg 로 판정)·도구 산출물 — --no-git-ignore 여도 Semgrep 점검에서
+  # 빠져야 한다 (PR #30 3차 리뷰 W-A). 기준선과 같은 취약 코드를 넣어 두고 결과가 없는지 본다
+  mkdir -p "$t/pyenv/lib" "$t/site/.next"
+  printf 'home = /usr/bin\n' >"$t/pyenv/pyvenv.cfg"
+  cp "$t/src/app.py" "$t/pyenv/lib/app.py"
+  cp "$t/web/render.js" "$t/site/.next/render.js"
+  printf 'pyenv/\nsite/\n' >>"$t/.gitignore"
   TARGET_DIR=$t
 }
 
@@ -299,6 +306,19 @@ PY
   # 억제 설정이 있었다는 사실은 summary 에 드러난다
   assert_contains "$(cat "$summary")" "결과 억제 설정이 있습니다"
 
+  # 가상환경·도구 산출물은 Semgrep 결과에 없고, 뺀 가상환경은 summary 에 드러난다 (PR #30 3차 리뷰 W-A)
+  # python 이 실패하면 빈 출력으로 통과하지 않도록 종료코드를 따로 본다
+  local leaked
+  leaked=$(python3 - "$RUN_DIR/findings.json" <<'PY'
+import json, sys
+fs = json.load(open(sys.argv[1]))["findings"]
+print(" ".join(sorted({f["location"]["file"] for f in fs
+                       if f["tool"] == "semgrep" and (f["location"]["file"] or "").startswith(("pyenv/", "site/"))})))
+PY
+) || fail "findings.json 을 읽지 못함"
+  assert_eq "$leaked" "" "(가상환경·산출물의 Semgrep 결과)"
+  assert_contains "$(cat "$summary")" "Python 가상환경(pyvenv.cfg 가 있는 폴더) 1개를 Semgrep 점검에서 뺐습니다: pyenv/"
+
   # 권한: 리포트 폴더 700, 파일 600
   assert_eq "$(file_mode "$RUN_DIR")" 700
   local bad_modes
@@ -374,12 +394,16 @@ test_real_semgrepignore_is_ignored_but_defaults_kept() {
   IGN_DIR=$(mktemp -d "$HOME/.cache/dev-workflow-kit-tests/ign.XXXXXX")
   trap 'rm -rf "$IGN_DIR"; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
   local f img decoy scanned
-  for f in src/a.py sub/c.py tests/t.py app/src/test/u.py; do
+  for f in src/a.py sub/c.py tests/t.py app/src/test/u.py node_modules/n.py gi/x.py; do
     mkdir -p "$IGN_DIR/src/$(dirname "$f")"
     echo 'eval(x)' >"$IGN_DIR/src/$f"
   done
   printf 'src/\n' >"$IGN_DIR/src/.semgrepignore"
   printf 'c.py\n' >"$IGN_DIR/src/sub/.semgrepignore"
+  # git 저장소로 만든다 — --no-git-ignore 는 git 저장소에서만 효과가 있다 (PR #30 3차 리뷰 S-A)
+  printf 'node_modules/\ngi/\n' >"$IGN_DIR/src/.gitignore"
+  (cd "$IGN_DIR/src" && git init -q && git -c user.email=t@example.com -c user.name=t add -A &&
+    git -c user.email=t@example.com -c user.name=t commit -qm init) || fail "git 저장소를 만들지 못함"
   mkdir -p "$IGN_DIR/rules"
   printf 'rules:\n- id: ev\n  pattern: eval(...)\n  message: m\n  languages: [python]\n  severity: ERROR\n' >"$IGN_DIR/rules/r.yaml"
   decoy=$(sed -n 's/^SEMGREPIGNORE_DECOY_PREFIX=//p' "$PLUGIN_DIR/scripts/scan-code.sh")
@@ -389,8 +413,8 @@ test_real_semgrepignore_is_ignored_but_defaults_kept() {
   scanned=$(docker run --rm --network none -v "$IGN_DIR/src:/src:ro" -v "$IGN_DIR/rules:/r:ro" "$img" \
     semgrep scan --config /r --metrics=off --disable-version-check --no-git-ignore "--x-semgrepignore-filename=$decoy" --json /src 2>/dev/null |
     python3 -c 'import json,sys; print(" ".join(sorted(p.replace("/src/","") for p in json.load(sys.stdin)["paths"]["scanned"])))')
-  # 대상의 .semgrepignore(루트 src/, 하위 c.py)는 무시, 기본 무시 목록의 tests/·test/ 는 빠진다
-  assert_eq "$scanned" "src/a.py sub/c.py" "(대상 선택 결과)"
+  # 대상의 .semgrepignore(루트 src/, 하위 c.py)와 .gitignore(gi/)는 무시, 기본 무시 목록의 tests/·test/·node_modules/ 는 빠진다
+  assert_eq "$scanned" "gi/x.py src/a.py sub/c.py" "(대상 선택 결과)"
 }
 
 # S-Web: 웹 픽스처 기준선 (W1~W8) — 커스텀 Semgrep 규칙·스택 검사·OSV 가 모두 연결되는지

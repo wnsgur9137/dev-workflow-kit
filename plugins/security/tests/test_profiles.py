@@ -310,6 +310,30 @@ class DetectTest(unittest.TestCase):
             files = {r.get("file") for r in out["results"] if str(r.get("rule_id", "")).startswith("ios.ats")}
             self.assertIn("macos/Info.plist", files, out)
 
+    def test_venv_dirs_by_marker_file(self):
+        """가상환경은 이름이 아니라 pyvenv.cfg 로 찾는다 (PR #30 3차 리뷰 W-A)"""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "pyvenv.cfg": "x",                      # 대상 루트 자체는 제외하지 않는다
+                "env/pyvenv.cfg": "x",
+                "env/lib/inner/pyvenv.cfg": "x",        # 가상환경 안으로는 내려가지 않는다
+                "apps/a[1]/.venv-3.12/pyvenv.cfg": "x",
+                "node_modules/x/pyvenv.cfg": "x",       # 의존성 폴더 안은 보지 않는다
+                "src/env/main.py": "x",                 # 같은 이름이라도 표식이 없으면 소스
+                "fake/pyvenv.cfg/readme": "x",          # pyvenv.cfg 가 폴더면 표식이 아니다
+            })
+            os.makedirs(os.path.join(d, "linked"))
+            os.symlink(os.path.join(d, "env", "pyvenv.cfg"), os.path.join(d, "linked", "pyvenv.cfg"))
+            self.assertEqual(profiles.venv_dirs(d), ["apps/a[1]/.venv-3.12", "env"])
+        self.assertEqual(profiles.venv_exclude("env"), "/env")
+        self.assertEqual(profiles.venv_exclude("apps/a[1]/v*?"), "/apps/a\\[1\\]/v\\*\\?")
+
+    def test_global_excludes_avoid_source_like_names(self):
+        for name in (".next", "__pycache__", "Carthage", ".nuxt"):
+            self.assertIn(name, profiles.GLOBAL_EXCLUDES)
+        for name in ("out", "target", "coverage", "env", "src", "lib"):
+            self.assertNotIn(name, profiles.GLOBAL_EXCLUDES)
+
     def test_macos_only_project_is_not_ios(self):
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {"macos/Runner.xcodeproj/project.pbxproj": "x", "macos/Podfile": "x"})

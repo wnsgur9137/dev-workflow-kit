@@ -707,8 +707,15 @@ def format_profile_label(name: str, root: str) -> str:
 COMMON_RULESETS = ("generic",)
 # 소스일 가능성이 거의 없는 의존성·산출물 폴더 — 어느 프로파일이 감지됐는지와 무관하게 전역 제외한다.
 # exclude_paths 를 하위 경로로 한정하면 어느 프로파일에도 속하지 않는 경로(예: Flutter 의 macos/Pods)가 남기 때문이다.
-# node_modules·build·dist·vendor·.venv 는 Semgrep 기본 무시 목록이 이미 뺀다 (1.182.0 실측, PR #22 리뷰).
-GLOBAL_EXCLUDES = ("Pods", "DerivedData", ".gradle", ".dart_tool")
+# node_modules·build·dist·vendor·.venv·.tox·.env·.npm·.yarn 은 Semgrep 기본 무시 목록이 이미 뺀다 (1.182.0 실측).
+# Semgrep 은 --no-git-ignore 로 git 이 무시하는 폴더도 보므로(PR #30), 소스 폴더 이름과 겹치지 않는 도구 캐시·산출물
+# 이름을 함께 뺀다. out·target·coverage·env 처럼 소스 이름과 겹칠 수 있는 이름은 넣지 않는다 (가상환경은 venv_dirs).
+GLOBAL_EXCLUDES = (
+    "Pods", "DerivedData", ".gradle", ".dart_tool", "Carthage", "bower_components",
+    "__pycache__", ".mypy_cache", ".pytest_cache", ".eggs",
+    ".next", ".nuxt", ".svelte-kit", ".output", ".turbo", ".vercel", ".angular", ".expo",
+    ".parcel-cache", ".pnpm-store", "storybook-static", ".terraform",
+)
 
 
 def _semgrep_exclude(pattern: str) -> str:
@@ -741,6 +748,39 @@ def scoped_exclude(pattern: str, root: str) -> str:
     if root in ("", "."):
         return f"**/{base}" if "/" in base else base
     return f"{_escape_glob(root)}/**/{base}"
+
+
+def venv_dirs(target: str):
+    """`pyvenv.cfg` 가 있는 폴더(Python 가상환경)의 대상 기준 상대 경로 목록.
+
+    가상환경은 이름이 제각각(env·venv·.env-3.12 …)이라 이름이 아니라 표식 파일로 찾는다. 심볼릭 링크는 따라가지 않고,
+    찾은 가상환경과 의존성·산출물 폴더(WALK_SKIP_DIRS) 안으로는 내려가지 않는다. 대상 루트 자체는 제외하지 않는다.
+    """
+    target = os.path.realpath(target)
+    found, seen = [], 0
+    for root, dirs, _files in os.walk(target, followlinks=False):
+        keep = []
+        for d in sorted(dirs):
+            full = os.path.join(root, d)
+            if os.path.islink(full):
+                continue
+            cfg = os.path.join(full, "pyvenv.cfg")
+            if "\t" in d or "\n" in d or "\r" in d:
+                continue   # 출력(TSV)을 깨뜨리는 이름 — 점검 대상으로 남긴다
+            if os.path.isfile(cfg) and not os.path.islink(cfg):
+                found.append(os.path.relpath(full, target).replace(os.sep, "/"))
+            elif d not in WALK_SKIP_DIRS:
+                keep.append(d)
+        dirs[:] = keep
+        seen += len(keep)
+        if seen > MAX_WALK_ENTRIES:
+            break
+    return sorted(found)
+
+
+def venv_exclude(rel: str) -> str:
+    """가상환경 폴더 하나를 대상 루트에 고정한 Semgrep --exclude 패턴 (`/env`, `/a\\[1\\]/v`) — 같은 이름의 다른 폴더는 점검."""
+    return "/" + re.sub(r"([\\*?\[\]])", r"\\\1", rel)
 
 
 def _has_rules(d: str) -> bool:
@@ -805,6 +845,8 @@ def main(argv=None) -> int:
     pl.add_argument("profiles_tsv")
     pl.add_argument("--rules-dir", required=True)
     pl.add_argument("--custom-dir", required=True)
+    v = sub.add_parser("venvs")
+    v.add_argument("target")
     args = ap.parse_args(argv)
 
     try:
@@ -835,6 +877,10 @@ def main(argv=None) -> int:
         else:
             for n, r, ex in found:
                 print(f"{n}\t{r}\t{','.join(ex)}")
+        return 0
+    if args.cmd == "venvs":
+        for rel in venv_dirs(args.target):
+            print(f"{rel}\t{venv_exclude(rel)}")
         return 0
     if args.cmd == "plan":
         detected = []
