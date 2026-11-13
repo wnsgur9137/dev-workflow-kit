@@ -335,6 +335,59 @@ class DetectTest(unittest.TestCase):
         self.assertEqual(profiles.venv_exclude("env"), "/env")
         self.assertEqual(profiles.venv_exclude("apps/a[1]/v*?"), "/apps/a\\[1\\]/v\\*\\?")
 
+    def test_venv_structure_guards_each_fixed(self):
+        """가드를 하나씩 고정한다 — symlink 는 판정 경로 어느 단계에서도 쓰지 않고, 이름은 대소문자까지 맞아야 하며,
+        인터프리터 폴더는 python*·pypy* 만 본다 (PR #30 5차 리뷰 S-1·S-4)"""
+        sp = "lib/python3.12/site-packages/x.py"
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "env/pyvenv.cfg": "x", "env/" + sp: "x",
+                "win/pyvenv.cfg": "x", "win/Lib/site-packages/x.py": "x",
+                "pypy/pyvenv.cfg": "x", "pypy/lib/pypy3.10/site-packages/x.py": "x",   # PyPy 가상환경
+                "foo/pyvenv.cfg": "x", "foo/lib/foo/site-packages/x.py": "x",         # 접두어가 다르면 소스
+                "nover/pyvenv.cfg": "x", "nover/lib/site-packages/x.py": "x",         # 인터프리터 폴더 없음 (대소문자 무관 FS 에서 Lib 분기로도 통과 금지)
+                "lncfg/" + sp: "x",                                                   # 진짜 lib + symlink cfg
+                "lnlib/pyvenv.cfg": "x",                                              # 진짜 cfg + symlink lib
+                "lnver/pyvenv.cfg": "x", "lnver/lib/keep": "x",                       # 인터프리터 폴더가 symlink
+                "lnsp/pyvenv.cfg": "x", "lnsp/lib/python3.12/keep": "x",              # site-packages 가 symlink
+                "lnwin/pyvenv.cfg": "x", "lnwin/Lib/keep": "x",                       # Windows site-packages 가 symlink
+                "lnwinlib/pyvenv.cfg": "x",                                           # Windows Lib 가 symlink
+            })
+
+            def j(*a):
+                return os.path.join(d, *a)
+            os.symlink(j("env", "pyvenv.cfg"), j("lncfg", "pyvenv.cfg"))
+            os.symlink(j("env", "lib"), j("lnlib", "lib"))
+            os.symlink(j("env", "lib", "python3.12"), j("lnver", "lib", "python3.12"))
+            os.symlink(j("env", "lib", "python3.12", "site-packages"), j("lnsp", "lib", "python3.12", "site-packages"))
+            os.symlink(j("win", "Lib", "site-packages"), j("lnwin", "Lib", "site-packages"))
+            os.symlink(j("win", "Lib"), j("lnwinlib", "Lib"))
+            self.assertEqual(profiles.venv_dirs(d), ["env", "pypy", "win"])
+
+    def test_venv_walk_limit_warning_matches_scan_code_contract(self):
+        """상한에 걸린 stderr 한 줄은 scan-code.sh 가 고르는 접두어로 시작해야 summary 경고로 옮겨진다 (PR #30 5차 리뷰 S-3)"""
+        import contextlib
+        import io
+        import re
+        scan_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "scan-code.sh")
+        with open(scan_path, encoding="utf-8") as f:
+            scan = f.read()
+        m = re.search(r"grep -q '(\^[^']+)' \"\$RAW/detect\.log\"", scan)
+        self.assertIsNotNone(m, "scan-code.sh 의 상한 경고 grep 을 찾지 못함")
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {"a/x.py": "x", "b/x.py": "x"})
+            err = io.StringIO()
+            old = profiles.MAX_WALK_ENTRIES
+            profiles.MAX_WALK_ENTRIES = 1
+            try:
+                with contextlib.redirect_stderr(err):
+                    profiles.venv_dirs(d)
+            finally:
+                profiles.MAX_WALK_ENTRIES = old
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertRegex(lines[0], m.group(1))
+
     def test_global_excludes_avoid_source_like_names(self):
         for name in (".next", "__pycache__", "Carthage", ".nuxt"):
             self.assertIn(name, profiles.GLOBAL_EXCLUDES)
