@@ -750,35 +750,64 @@ def scoped_exclude(pattern: str, root: str) -> str:
     return f"{_escape_glob(root)}/**/{base}"
 
 
-# venv_dirs 가 내려가지 않는 폴더 — Semgrep 이 어차피 보지 않는 이름(기본 무시 목록·전역 제외)만 쓴다.
+# venv_dirs 가 내려가지 않는 폴더 — Semgrep 이 어차피 보지 않는 이름(기본 무시 목록·전역 제외)과 VCS 메타데이터(.hg·.svn)만 쓴다.
 # 감지용 WALK_SKIP_DIRS 를 쓰면 venv/·out/·target/ 아래의 가상환경을 놓쳐 Semgrep 이 그대로 점검한다 (PR #30 4차 리뷰 S-1)
 _VENV_WALK_SKIP = frozenset(
     {".git", ".hg", ".svn", "node_modules", "build", "dist", "vendor", ".venv", ".tox", ".env", ".npm", ".yarn",
      "tests", "test"} | set(GLOBAL_EXCLUDES))
 
+# lib/ 아래 인터프리터 폴더 접두어 — CPython(lib/python3.12)과 PyPy(lib/pypy3.10)
+_VENV_INTERPRETER_PREFIXES = ("python", "pypy")
+
+
+def _plain_dir(path: str) -> bool:
+    return os.path.isdir(path) and not os.path.islink(path)
+
 
 def _is_venv(full: str) -> bool:
-    """`pyvenv.cfg` 파일과 site-packages 폴더(`lib/python*/site-packages` 또는 Windows `Lib/site-packages`)가 모두 있는 폴더.
+    """`pyvenv.cfg` 파일과 site-packages 폴더(`lib/python*/site-packages`·`lib/pypy*/site-packages`, Windows
+    `Lib/site-packages`)가 모두 있는 폴더.
 
-    표식 파일 하나만 두고 소스 폴더를 Semgrep 에서 숨기지 못하도록 구조까지 본다 (PR #30 4차 리뷰 S-2). 심볼릭 링크는 쓰지 않는다.
+    표식 파일 하나만으로는 빠지지 않도록 구조까지 본다 (PR #30 4차 리뷰 S-2). 다만 구조를 꾸미는 비용은 작으므로
+    실제 방어는 뺀 폴더를 summary 경고와 raw/venvs.tsv 에 드러내는 것이다. 판정 경로의 어느 단계(pyvenv.cfg·lib·
+    인터프리터 폴더·site-packages)도 심볼릭 링크면 쓰지 않는다. 이름은 실제 목록과 대소문자까지 맞아야 한다 —
+    대소문자를 가리지 않는 파일시스템에서 `lib/site-packages` 가 `Lib` 분기로 통과하지 않게 한다 (PR #30 5차 리뷰 S-1).
     """
     cfg = os.path.join(full, "pyvenv.cfg")
     if not os.path.isfile(cfg) or os.path.islink(cfg):
+        return False   # 대부분의 폴더는 stat 한 번으로 거른다 — listdir 는 후보에서만 (PR #31 1차 리뷰 S-2)
+    try:
+        entries = set(os.listdir(full))
+    except OSError:
         return False
-    for lib in ("lib", "Lib"):
-        base = os.path.join(full, lib)
-        if not os.path.isdir(base) or os.path.islink(base):
-            continue
-        if lib == "Lib" and os.path.isdir(os.path.join(base, "site-packages")):
-            return True
+    if "pyvenv.cfg" not in entries:
+        return False
+    win = os.path.join(full, "Lib")
+    if "Lib" in entries and _plain_dir(win):
         try:
-            names = os.listdir(base)
+            win_names = os.listdir(win)
+        except OSError:
+            win_names = []
+        if "site-packages" in win_names and _plain_dir(os.path.join(win, "site-packages")):
+            return True
+    lib = os.path.join(full, "lib")
+    if "lib" not in entries or not _plain_dir(lib):
+        return False
+    try:
+        names = os.listdir(lib)
+    except OSError:
+        return False
+    for n in names:
+        if not n.startswith(_VENV_INTERPRETER_PREFIXES):
+            continue
+        ver = os.path.join(lib, n)
+        if not _plain_dir(ver):
+            continue
+        try:
+            if "site-packages" in os.listdir(ver) and _plain_dir(os.path.join(ver, "site-packages")):
+                return True
         except OSError:
             continue
-        for n in names:
-            sp = os.path.join(base, n, "site-packages")
-            if n.startswith("python") and os.path.isdir(sp) and not os.path.islink(sp):
-                return True
     return False
 
 

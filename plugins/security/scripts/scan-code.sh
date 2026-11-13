@@ -162,8 +162,8 @@ VENVS_TSV="$RAW/venvs.tsv"
 if ! python3 "$SEC_PROFILES_PY" --dir "$SEC_PROFILE_DIR" venvs "$TARGET" >"$VENVS_TSV" 2>>"$RAW/detect.log"; then
   sec_die "가상환경 폴더 확인 실패: $(tail -n 3 "$RAW/detect.log")"
 fi
-if grep -q '^가상환경 확인:' "$RAW/detect.log" 2>/dev/null; then
-  grep '^가상환경 확인:' "$RAW/detect.log" | head -n 1 >>"$WARNINGS_FILE"
+if VENV_LIMIT_LINE=$(grep -m 1 '^가상환경 확인:' "$RAW/detect.log" 2>/dev/null); then
+  printf '%s\n' "$VENV_LIMIT_LINE" >>"$WARNINGS_FILE"
 fi
 VENV_LIST=""
 VENV_COUNT=0

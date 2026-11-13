@@ -158,6 +158,34 @@ test_unknown_forced_profile_is_rejected() {
   assert_contains "$OUT" "알 수 없는 프로파일"
 }
 
+test_venv_walk_limit_is_warned_in_summary() {
+  setup_fake
+  fake_data
+  export FAKE_RUN_OUTPUT="a.py"
+  mkdir -p "$HOME/proj/sub"
+  # PR #30 5차 리뷰 S-3: profiles.py venvs 가 상한에 걸려 stderr 에 남긴 줄이 summary 경고로 옮겨진다.
+  # 가짜 python3 가 venvs 호출에서만 상한을 0 으로 낮춘다 (메시지는 실제 profiles.py 가 만든다)
+  local real_py
+  real_py=$(command -v python3)
+  # shellcheck disable=SC2016  # 작은따옴표 안의 $1·$@ 는 생성할 스크립트의 본문이다
+  {
+    echo '#!/bin/sh'
+    echo 'case " $* " in'
+    echo '  *"profiles.py "*" venvs "*)'
+    echo '    py=$1; shift'
+    printf '    exec "%s" -c %s "$py" "$@" ;;\n' "$real_py" \
+      "'import os, sys; sys.path.insert(0, os.path.dirname(sys.argv[1])); import profiles; profiles.MAX_WALK_ENTRIES = 0; sys.exit(profiles.main(sys.argv[2:]))'"
+    echo 'esac'
+    printf 'exec "%s" "$@"\n' "$real_py"
+  } >"$SEC_TMP/bin/python3"
+  chmod +x "$SEC_TMP/bin/python3"
+  local summary
+  summary=$("$SCAN" "$HOME/proj" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  assert_contains "$(cat "$(dirname "$summary")/raw/warnings.txt")" "가상환경 확인: 폴더가 너무 많아(0개 초과)"
+  assert_contains "$(cat "$summary")" "가상환경 확인: 폴더가 너무 많아"
+}
+
 # --- 실제 Docker 통합 ----------------------------------------------------------
 
 _real_ready() {
