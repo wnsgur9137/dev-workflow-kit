@@ -773,12 +773,14 @@ def _is_venv(full: str) -> bool:
     인터프리터 폴더·site-packages)도 심볼릭 링크면 쓰지 않는다. 이름은 실제 목록과 대소문자까지 맞아야 한다 —
     대소문자를 가리지 않는 파일시스템에서 `lib/site-packages` 가 `Lib` 분기로 통과하지 않게 한다 (PR #30 5차 리뷰 S-1).
     """
+    cfg = os.path.join(full, "pyvenv.cfg")
+    if not os.path.isfile(cfg) or os.path.islink(cfg):
+        return False   # 대부분의 폴더는 stat 한 번으로 거른다 — listdir 는 후보에서만 (PR #31 1차 리뷰 S-2)
     try:
         entries = set(os.listdir(full))
     except OSError:
         return False
-    cfg = os.path.join(full, "pyvenv.cfg")
-    if "pyvenv.cfg" not in entries or not os.path.isfile(cfg) or os.path.islink(cfg):
+    if "pyvenv.cfg" not in entries:
         return False
     win = os.path.join(full, "Lib")
     if "Lib" in entries and _plain_dir(win):

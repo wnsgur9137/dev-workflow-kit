@@ -352,6 +352,12 @@ class DetectTest(unittest.TestCase):
                 "lnsp/pyvenv.cfg": "x", "lnsp/lib/python3.12/keep": "x",              # site-packages 가 symlink
                 "lnwin/pyvenv.cfg": "x", "lnwin/Lib/keep": "x",                       # Windows site-packages 가 symlink
                 "lnwinlib/pyvenv.cfg": "x",                                           # Windows Lib 가 symlink
+                # 이름의 대소문자 — 대소문자를 가리지 않는 FS(macOS 기본)에서만 뜻이 있다 (PR #31 1차 리뷰 S-1)
+                "upcfg/PYVENV.CFG": "x", "upcfg/" + sp: "x",
+                "winupsp/pyvenv.cfg": "x", "winupsp/Lib/SITE-PACKAGES/x.py": "x",
+                "uplib/pyvenv.cfg": "x", "uplib/Lib/python3.12/site-packages/x.py": "x",
+                "upsp/pyvenv.cfg": "x", "upsp/lib/python3.12/SITE-PACKAGES/x.py": "x",
+                "cfgdir/pyvenv.cfg/readme": "x", "cfgdir/" + sp: "x",                 # pyvenv.cfg 가 폴더
             })
 
             def j(*a):
@@ -372,8 +378,11 @@ class DetectTest(unittest.TestCase):
         scan_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "scan-code.sh")
         with open(scan_path, encoding="utf-8") as f:
             scan = f.read()
-        m = re.search(r"grep -q '(\^[^']+)' \"\$RAW/detect\.log\"", scan)
-        self.assertIsNotNone(m, "scan-code.sh 의 상한 경고 grep 을 찾지 못함")
+        pats = re.findall(r"grep [^\n]*?'(\^[^']*)' \"\$RAW/detect\.log\"", scan)
+        self.assertEqual(len(pats), 1, f"scan-code.sh 의 상한 경고 grep 은 한 곳이어야 한다: {pats}")
+        # grep BRE 와 Python 정규식의 해석이 갈리지 않게 '^리터럴' 꼴만 허용하고 startswith 로 비교한다 (PR #31 1차 리뷰 N-3)
+        self.assertRegex(pats[0], r"^\^[^\\.*\[\]$]+$")
+        prefix = pats[0][1:]
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {"a/x.py": "x", "b/x.py": "x"})
             err = io.StringIO()
@@ -386,7 +395,7 @@ class DetectTest(unittest.TestCase):
                 profiles.MAX_WALK_ENTRIES = old
         lines = err.getvalue().splitlines()
         self.assertEqual(len(lines), 1, lines)
-        self.assertRegex(lines[0], m.group(1))
+        self.assertTrue(lines[0].startswith(prefix), (lines[0], prefix))
 
     def test_global_excludes_avoid_source_like_names(self):
         for name in (".next", "__pycache__", "Carthage", ".nuxt"):
