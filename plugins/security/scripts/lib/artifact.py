@@ -19,12 +19,15 @@ from __future__ import annotations
 import os
 import re
 import stat
+import struct
 import sys
 import zipfile
 
 MAX_BYTES = 500 * 1024 * 1024     # 산출물 크기 상한 (docs/security/03 워크플로/scan-app.md)
 MAX_ENTRIES = 200_000             # ZIP 항목 수 상한
-MAX_CD_BYTES = 64 * 1024 * 1024   # 중앙 디렉터리 크기 상한
+# 중앙 디렉터리 크기 상한 — 20만 항목 × 평균 이름 60자 ≈ 21MB. EOCD 의 항목 수를 속여도 ZipFile 은 이 크기만큼 파싱하므로
+# (64MB 에서 RSS 708MB 실측, 2차 리뷰 NS2) 정상 상한에 가깝게 둔다
+MAX_CD_BYTES = 32 * 1024 * 1024
 MAX_UNCOMPRESSED = 4 * 1024 ** 3  # 항목 크기(압축 해제) 합계 상한 — MobSF 가 볼륨에 풀어 쓰는 양
 TEXT_EXTS = (".js", ".bundle", ".jsbundle", ".json", ".xml", ".plist", ".txt", ".properties", ".yaml", ".yml",
              ".env", ".html", ".htm", ".css", ".cfg", ".conf", ".ini", ".pem", ".strings", ".config", ".mf", ".sf")
@@ -39,6 +42,10 @@ _RN = {
     "android": re.compile(r"^(?:base/)?(?:assets/index\.android\.bundle|lib/[^/]+/libreactnativejni\.so|lib/[^/]+/libreactnative\.so)$"),
     "ios": re.compile(r"^Payload/[^/]+\.app/(?:main\.jsbundle|Frameworks/React(?:-Core)?\.framework/|Frameworks/hermes\.framework/)"),
 }
+_CASE_SENSITIVE_IMPORTANT = re.compile(
+    r"(?i)^(?:base/(?:manifest/)?|base/dex/|base/root/)?(?:androidmanifest\.xml|classes\d*\.dex|resources\.(?:arsc|pb)"
+    r"|meta-inf/|lib/[^/]+/[^/]+\.so$|assets/index\.android\.bundle)"
+    r"|^payload/[^/]+\.app/(?:info\.plist|main\.jsbundle|[^/]+$)")
 _IOS_APP = re.compile(r"^Payload/[^/]+\.app/Info\.plist$")
 _ANDROID_MANIFEST = {"apk": re.compile(r"^AndroidManifest\.xml$"), "aab": re.compile(r"^base/manifest/AndroidManifest\.xml$")}
 
@@ -73,8 +80,8 @@ def inspect(path: str, ext: str) -> int:
         if end_rec is not None:
             try:
                 end = end_rec(f)
-            except (OSError, ValueError, OverflowError):
-                end = None
+            except (OSError, ValueError, OverflowError, zipfile.BadZipFile, struct.error):
+                end = None   # 다중 디스크 ZIP64 locator 등 (2차 리뷰 NN3)
             if not end:
                 return _fail("ZIP 끝 레코드(EOCD)를 찾을 수 없습니다")
             total = end[getattr(zipfile, "_ECD_ENTRIES_TOTAL", 4)]
@@ -112,14 +119,19 @@ def inspect(path: str, ext: str) -> int:
         print("profile\treact-native")
     if ext == "ipa" and any(re.match(r"^Payload/[^/]+\.app/SC_Info/", n) for n in names):
         print("warning\tIPA 에 SC_Info(FairPlay 암호화 정보)가 있습니다 — App Store 에서 받은 암호화된 앱은 바이너리 분석 결과가 비어 있을 수 있습니다. 직접 빌드(Archive → Export)한 IPA 로 점검하세요.")
-    print(f"text_entries\t{sum(1 for n in names if n.lower().endswith(TEXT_EXTS))}")
+    # APK·AAB 의 .xml 은 바이너리 AXML 이라 Gitleaks 가 볼 텍스트가 아니다 (2차 리뷰 NN2). IPA 의 plist 는 XML·바이너리가 섞인다
+    text_exts = tuple(e for e in TEXT_EXTS if e != ".xml") if platform == "android" else TEXT_EXTS
+    print(f"text_entries\t{sum(1 for n in names if n.lower().endswith(text_exts))}")
     # 같은 이름이 두 번 들어 있는 ZIP 은 도구마다 다른 항목을 읽을 수 있다 (해석 차이로 결과 은폐).
-    # 대소문자만 다른 이름·'./' 접두·역슬래시도 같은 이름으로 본다 (대소문자를 무시하는 FS 에 풀면 덮어써진다, 리뷰 N6)
+    # './' 접두·역슬래시는 늘 정규화하고, 대소문자만 다른 이름은 도구 해석에 중요한 항목에서만 같은 이름으로 본다 —
+    # 릴리스 빌드의 리소스 경로 단축(shrinkResources)이 대소문자만 다른 res/ 이름을 만들 수 있어서다 (2차 리뷰 NS6)
     seen, dup = set(), None
     for n in names:
-        k = n.replace("\\", "/").lower()
+        k = n.replace("\\", "/")
         while k.startswith("./"):
             k = k[2:]
+        if _CASE_SENSITIVE_IMPORTANT.match(k):
+            k = "\0" + k.lower()
         if k in seen:
             dup = n
             break
