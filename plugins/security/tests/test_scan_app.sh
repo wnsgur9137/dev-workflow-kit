@@ -182,6 +182,66 @@ test_app_stale_full_report_from_killed_run_is_removed() {
   [ -e "$fresh/mobsf-full.json" ] || fail "최근 원본 리포트(다른 실행)를 지움"
 }
 
+# 2차 리뷰 NS5: 남은 스택 정리는 오래된 툴킷 스택만 지우고, 최근 것·다른 프로젝트·형식이 다른 이름·한쪽이라도 최근인
+# 프로젝트는 건드리지 않는다. 기준 시각은 엔진 시계다
+test_app_cleanup_stale_only_removes_old_toolkit_stacks() {
+  setup_fake
+  _fake_pass_d7
+  export FAKE_SYSTEM_TIME="2026-11-15T12:00:00.123456789+09:00"
+  export FAKE_PS_IDS="c1 c2 c3 c4 c5"
+  export FAKE_VOLUMES="v1 v2"
+  cat >"$SEC_TMP/inspect.txt" <<'EOF'
+dwk-sec-app-0000000000aa 2026-11-14T20:00:00.5Z
+dwk-sec-app-0000000000bb 2026-11-15T11:30:00.123456789+09:00
+other-proj 2020-01-01T00:00:00Z
+dwk-sec-app-xyz 2020-01-01T00:00:00Z
+dwk-sec-app-0000000000cc 2026-11-15T11:50:00+09:00
+EOF
+  cat >"$SEC_TMP/volumes.txt" <<'EOF'
+dwk-sec-app-0000000000cc 2026-11-14T00:00:00Z
+dwk-sec-app-0000000000dd 2026-11-15T07:00:00+09:00
+EOF
+  export FAKE_INSPECT_LINES="$SEC_TMP/inspect.txt" FAKE_VOLUME_LINES="$SEC_TMP/volumes.txt"
+  _fake_scan
+  local downs
+  downs=$(grep ' down -v' "$FAKE_LOG" | grep -o 'dwk-sec-app-[0-9a-z]*' | sort -u | tr '\n' ' ')
+  # aa(7시간 전)·dd(볼륨만, 5시간 전)는 지우고, bb(30분 전)·cc(볼륨은 오래됐지만 컨테이너는 10분 전)는 남긴다.
+  # 그 밖에 이번 실행 자신의 스택(무작위 이름)이 끝날 때 내려간다
+  assert_contains "$downs" "dwk-sec-app-0000000000aa"
+  assert_contains "$downs" "dwk-sec-app-0000000000dd"
+  assert_not_contains "$downs" "dwk-sec-app-0000000000bb"
+  assert_not_contains "$downs" "dwk-sec-app-0000000000cc"
+  assert_not_contains "$(cat "$FAKE_LOG")" "-p other-proj"
+  assert_not_contains "$(cat "$FAKE_LOG")" "-p dwk-sec-app-xyz"
+  assert_contains "$(cat "$APP_RUN/summary.md")" "이전 실행이 남긴 MobSF 스택 2개"
+  # 엔진 시각을 모르면 아무것도 지우지 않는다
+  : >"$FAKE_LOG"
+  FAKE_SYSTEM_TIME="" _fake_scan
+  assert_not_contains "$(cat "$FAKE_LOG")" "0000000000aa"
+}
+
+# W5: 분석 중 TERM 을 받으면 compose run 이 끝나기를 기다리지 않고 바로 스택을 내리고 143 으로 끝난다
+test_app_term_during_analysis_cleans_up_immediately() {
+  setup_fake
+  _fake_pass_d7
+  FAKE_COMPOSE_RUN_SLEEP=30 "$SCAN_APP" "$HOME/apps/app.apk" >"$SEC_TMP/out" 2>"$SEC_TMP/err" &
+  local pid=$! i=0 rc start
+  while ! grep -q 'mobsf-client' "$FAKE_LOG" 2>/dev/null; do
+    i=$((i + 1))
+    [ $i -le 100 ] || { kill "$pid" 2>/dev/null; fail "mobsf-client 실행까지 가지 못함: $(tail -n 3 "$SEC_TMP/err")"; }
+    sleep 0.1
+  done
+  start=$(date +%s)
+  kill -TERM "$pid"
+  wait "$pid"
+  rc=$?
+  assert_eq "$rc" 143 "(TERM 종료코드)"
+  [ $(($(date +%s) - start)) -le 5 ] || fail "TERM 뒤 정리에 5초 넘게 걸림 (compose run 을 기다림)"
+  grep -q ' down -v' "$FAKE_LOG" || fail "TERM 뒤 down -v 가 호출되지 않음"
+  if find "$DWK_SECURITY_DATA_DIR/reports" -name mobsf-full.json | grep -q .; then fail "원본 리포트가 남음"; fi
+  pkill -f "FAKE_COMPOSE_RUN_SLEEP" 2>/dev/null || true
+}
+
 # --- 실제 Docker 통합 ----------------------------------------------------------
 
 _app_ready() {
@@ -370,9 +430,9 @@ test_real_scan_app_android_apk_and_aab() {
   assert_contains "$summary" "## 수동 확인 (스택별 체크리스트)"
   assert_contains "$summary" "Play App Signing"
   assert_contains "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["profiles"])' "$APP_RUN/meta.json")" "android"
-  # 앱이 정한 파일 이름(assets/<인젝션 문구>.jks)은 위치 열에 식별자 문자만 남아 렌더링된다 (리뷰 W1·W2) —
+  # 앱이 정한 파일 이름(assets/<인젝션 문구>.jks)은 위치 열에 퍼센트 인코딩되어 렌더링된다 (리뷰 W1·W2·2차 NW2) —
   # 렌더링 자체를 먼저 확인해야 "코드 블록 밖에 없음" 단언이 의미를 가진다
-  assert_contains "$summary" "IGNORE?ALL?PREVIOUS?INSTRUCTIONS"
+  assert_contains "$summary" "IGNORE%20ALL%20PREVIOUS%20INSTRUCTIONS"
 
   # AAB — 툴킷이 universal APK 로 바꿔 분석한다 (MobSF 자체 변환은 arm64 에서 실패). 서명 결과는 빠진다
   _wrap_docker

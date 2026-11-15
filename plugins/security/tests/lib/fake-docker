@@ -13,11 +13,19 @@
 #   compose (scan-app): FAKE_COMPOSE_UP_RC=<n> up 종료코드 · FAKE_COMPOSE_EXEC_OUTPUT exec 출력(기본 isolated)
 #                       FAKE_COMPOSE_RUN_FILE=<파일> run 의 stdout · FAKE_COMPOSE_RUN_RC=<n> run 종료코드
 #                       run·logs 는 stderr 에 실제 MobSF 처럼 API 키를 찍는다 (마스킹 확인용)
+#                       FAKE_COMPOSE_RUN_SLEEP=<초> run 이 그만큼 머문다 (중단 신호 확인용)
+#   남은 스택 정리: FAKE_PS_IDS=<id ...> docker ps -aq · FAKE_INSPECT_LINES=<파일> docker inspect 출력(프로젝트 시각)
+#                   FAKE_VOLUMES=<이름 ...> docker volume ls -q · FAKE_VOLUME_LINES=<파일> docker volume inspect 출력
+#                   FAKE_SYSTEM_TIME=<RFC3339> docker info .SystemTime (빈 값이면 출력 없음)
 [ -n "${FAKE_LOG:-}" ] && echo "docker $*" >>"$FAKE_LOG"
 case "$1" in
   info)
     [ "${FAKE_INFO_FAIL:-0}" = 1 ] && exit 1
-    case "$*" in *MemTotal*) echo "${FAKE_MEM-8589934592}" ;; *) echo ok ;; esac
+    case "$*" in
+      *MemTotal*) echo "${FAKE_MEM-8589934592}" ;;
+      *SystemTime*) [ -n "${FAKE_SYSTEM_TIME-x}" ] && echo "${FAKE_SYSTEM_TIME-2026-11-15T12:00:00.123456789+09:00}" ;;
+      *) echo ok ;;
+    esac
     ;;
   compose)
     [ -n "${FAKE_COMPOSE-2.29.0}" ] || exit 1
@@ -31,6 +39,7 @@ case "$1" in
       run)
         echo "REST API Key: ${DWK_MOBSF_API_KEY:-}" >&2
         echo "mobsf_client: 가짜 실행" >&2
+        [ -n "${FAKE_COMPOSE_RUN_SLEEP:-}" ] && sleep "$FAKE_COMPOSE_RUN_SLEEP"
         [ -n "${FAKE_COMPOSE_RUN_FILE:-}" ] && cat "$FAKE_COMPOSE_RUN_FILE"
         exit "${FAKE_COMPOSE_RUN_RC:-0}"
         ;;
@@ -67,6 +76,25 @@ case "$1" in
     fi
     echo "가짜 docker 로 run 을 실행하면 안 됩니다" >&2
     exit 99
+    ;;
+  ps)
+    # shellcheck disable=SC2086  # 공백으로 구분한 목록을 한 줄씩 낸다
+    [ -n "${FAKE_PS_IDS:-}" ] && printf '%s\n' $FAKE_PS_IDS
+    ;;
+  inspect)
+    case "$*" in
+      *OOMKilled*) echo false ;;
+      *) [ -n "${FAKE_INSPECT_LINES:-}" ] && cat "$FAKE_INSPECT_LINES" ;;
+    esac
+    ;;
+  volume)
+    case "$2" in
+      ls)
+        # shellcheck disable=SC2086  # 공백으로 구분한 목록을 한 줄씩 낸다
+        [ -n "${FAKE_VOLUMES:-}" ] && printf '%s\n' $FAKE_VOLUMES
+        ;;
+      inspect) [ -n "${FAKE_VOLUME_LINES:-}" ] && cat "$FAKE_VOLUME_LINES" ;;
+    esac
     ;;
   pull) echo "가짜 docker 로 $1 을 실행하면 안 됩니다" >&2; exit 99 ;;
   *) exit 0 ;;
