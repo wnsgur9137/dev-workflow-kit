@@ -1,0 +1,13 @@
+{
+  "description": "V2 모바일 기준선 — tests/fixtures/app/ios 를 빌드한 IPA(ATS 해제·스택 보호 없음·RN 번들 흉내)를 /security:scan-app 으로 점검 (MobSF v4.6.4)",
+  "must_find": [
+    {"tool": "mobsf", "rule_prefix": "mobsf.ats.app-transport-security-allowsarbitraryloads", "severity": "high", "file": "Info.plist"},
+    {"tool": "mobsf", "rule_id": "mobsf.macho.stack-canary", "severity": "medium"},
+    {"tool": "mobsf", "rule_prefix": "mobsf.binary."},
+    {"tool": "gitleaks", "rule_id": "gcp-api-key", "file": "Payload/VulnApp.app/main.jsbundle"}
+  ],
+  "must_not_find": [
+    {"tool": "mobsf", "rule_id": "mobsf.macho.pie"},
+    {"tool": "mobsf", "rule_prefix": "mobsf.manifest."}
+  ]
+}

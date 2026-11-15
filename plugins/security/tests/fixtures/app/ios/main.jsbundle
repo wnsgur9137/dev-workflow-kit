@@ -1,0 +1,1 @@
+var config={apiKey:"@@GOOGLE_KEY@@",region:"us-east-1"};
