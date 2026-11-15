@@ -19,13 +19,16 @@ updated: 2026-11-15
 ## 단계 (`scripts/scan-app.sh`)
 1. **입력 검증** (컨테이너 기동 전)
    - 경로: `sec_validate_target … file` — 홈·자격증명·시스템·툴킷 데이터 폴더 거부, 확장자 `apk`·`aab`·`ipa`(대소문자 무시)
-   - 산출물 (`scripts/lib/artifact.py`, 호스트 Python): 심볼릭 링크 거부(`O_NOFOLLOW`), 크기 500MB 이하, ZIP 시그니처 `PK\x03\x04`, 항목 20만 개 이하, APK `AndroidManifest.xml`·AAB `base/manifest/AndroidManifest.xml`·IPA `Payload/<앱>.app/Info.plist` 존재. **압축을 풀지 않고 중앙 디렉터리의 항목 이름만** 읽는다
-   - 스택 판정: 확장자로 android·ios, 항목 이름으로 Flutter(`libflutter.so`, `Flutter.framework`)·React Native(`index.android.bundle`, `libreactnativejni.so`, `main.jsbundle`, `React.framework`, `hermes.framework`). IPA 의 `SC_Info/`(FairPlay)·같은 이름 항목 중복은 경고
-2. **사전 점검** D1~D6 (`app`, 권장 메모리 8GB, 이미지 `mobsf`·`gitleaks`), **D7**: `--network none` 컨테이너에서 산출물 크기가 호스트와 같은지 확인 (Colima 공유 범위 밖이면 중단)
-3. **Gitleaks** (N0, 병렬): 산출물을 `/in/artifact.zip`으로 마운트해 `dir --max-archive-depth 2` — `.zip` 이름이어야 압축 안까지 본다(v8.30.1 실측, `.apk`·`.ipa` 이름은 0바이트로 끝남). 0바이트 스캔은 실패로 기록한다
-4. **MobSF** (N1): `compose up -d --wait mobsf` → `compose run --rm mobsf-client` (AAB 면 `--convert-aab`) → 리포트를 stdout 으로 받기 → `compose down -v`
-5. **정규화**: `normalize.py --kind app` → `findings.json`, `summary.md`, `meta.json`, 정제본 `raw/mobsf.json` (원본은 삭제)
-6. **Claude 분석**: 결과를 소스 위치와 연결해 수정 제안 (`skills/scan-app/SKILL.md`)
+   - 산출물 (`scripts/lib/artifact.py`, 호스트 `python3 -I`): 경로는 `realpath`로 푼 실제 파일을 검사한다(링크로 지정해도 실제 파일을 점검, 검사 단계 자체는 `O_NOFOLLOW`), 크기 500MB 이하, ZIP 시그니처 `PK\x03\x04`, **ZipFile 을 열기 전에 EOCD 로** 항목 20만 개·중앙 디렉터리 64MB 이하, 압축 해제 총량 4GB 이하(압축 폭탄), APK `AndroidManifest.xml`·AAB `base/manifest/AndroidManifest.xml`·IPA `Payload/<앱>.app/Info.plist` 존재. **압축을 풀지 않고 중앙 디렉터리의 항목 이름만** 읽는다
+   - 스택 판정: 확장자로 android·ios, 항목 이름으로 Flutter(`libflutter.so`, `Flutter.framework`)·React Native(`index.android.bundle`, `libreactnativejni.so`, `main.jsbundle`, `React.framework`, `hermes.framework`). IPA 의 `SC_Info/`(FairPlay)·같은 이름 항목 중복(대소문자·`./`·역슬래시 정규화)은 경고. 텍스트로 보이는 항목 수도 센다(Gitleaks 0바이트 판정용)
+2. **사전 점검** D1~D6 (`app`, 권장 메모리 8GB, 이미지 `mobsf`·`gitleaks`), **D7**: `--network none` 컨테이너에서 산출물 크기가 호스트와 같고 플러그인의 `scripts/lib`가 보이는지 확인 (Colima 공유 범위 밖이면 중단)
+3. **이전 실행 정리**: SIGKILL 등으로 trap 없이 끝난 실행이 남긴 `dwk-sec-app-*` 스택(볼륨 포함)과 리포트 폴더의 `mobsf-full.json` 중 **3시간 넘게 지난 것**을 지운다 (동시 실행은 건드리지 않음)
+4. **Gitleaks** (N0, 병렬, 메모리 2GB 상한): 산출물을 `/in/artifact.zip`으로 마운트해 `dir --max-archive-depth 2` — `.zip` 이름이어야 압축 안까지 본다(v8.30.1 실측, `.apk`·`.ipa` 이름은 0바이트로 끝남). 0바이트 스캔은 실패로 기록한다 — 텍스트로 보이는 항목이 하나도 없으면 건너뜀
+5. **MobSF** (N1, 메모리 6GB·클라이언트 4GB 상한): `compose up -d --wait mobsf` → **격리 확인**(컨테이너에서 `example.com`·`play.google.com` 이름 풀이와 `1.1.1.1` 연결이 되면 업로드하지 않고 실패 — CVE-2024-29018 처럼 internal 네트워크의 DNS 가 새는 엔진 대비) → `compose run --rm mobsf-client` (AAB 면 `--convert-aab`) → 리포트를 stdout 으로 받기 → `compose down -v`. 중단 신호(INT·TERM)는 바로 trap 으로 정리한다
+6. **정규화**: `normalize.py --kind app` → `findings.json`, `summary.md`, `meta.json`, 정제본 `raw/mobsf.json` (원본은 삭제)
+7. **Claude 분석**: 결과를 소스 위치와 연결해 수정 제안 (`skills/scan-app/SKILL.md`, 백그라운드 실행)
+
+> 앱이 정하는 위치 문자열(디컴파일 클래스 경로, ZIP 항목 이름, NSC 도메인, 권한 이름, 바이너리 이름)은 summary 에서 코드 블록 밖(인라인 코드·표)에 놓이므로 `[A-Za-z0-9._/$@+:,*-[]]` 밖의 문자를 `?`로 바꾼다 — 공백이 없어 문장을 만들 수 없다 (PR #32 리뷰 W1). 제목·설명·근거는 지금처럼 코드 블록 안에 둔다.
 
 ## summary 에 더해지는 것
 - **경고**: 디버그 키 서명 빌드, AAB 변환(서명 미점검), Flutter `--dart-define` 평문(F2), React Native 번들(R6, Hermes 바이트코드 한계), FairPlay 암호화 IPA, ZIP 이름 중복, MobSF 결과 절단
