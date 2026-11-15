@@ -9,6 +9,8 @@
 # - MobSF 의 Play·App Store 조회와 Firebase 공개 여부 확인은 설정으로 끌 수 없어(v4.6.4 실측) 네트워크 차단만이 막는다.
 #   끌 수 있는 외부 조회(악성 도메인 확인·VirusTotal)는 설정으로도 끈다.
 # - API 키·Django 비밀값·관리자 비밀번호는 실행마다 새로 만든다 (MobSF 로그에 API 키가 찍히므로 고정 키를 두지 않는다).
+# - 앱은 신뢰하지 않는 입력이다 — 압축 폭탄·거대 앱이 VM 전체(다른 컨테이너 포함)를 멈추지 않게 메모리 상한을 둔다
+#   (압축 해제 총량 4GB 상한은 scripts/lib/artifact.py 가 업로드 전에 본다, PR #32 리뷰 W4).
 
 services:
   mobsf:
@@ -17,6 +19,8 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
+    mem_limit: 6g
+    memswap_limit: 6g
     environment:
       MOBSF_API_KEY: ${DWK_MOBSF_API_KEY:?}
       MOBSF_SECRET_KEY: ${DWK_MOBSF_SECRET:?}
@@ -41,6 +45,9 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 256
+    # tmpfs(AAB 변환 작업 공간 2g)도 이 상한에 포함된다
+    mem_limit: 4g
+    memswap_limit: 4g
     environment:
       HOME: /tmp
       DWK_MOBSF_API_KEY: ${DWK_MOBSF_API_KEY:?}

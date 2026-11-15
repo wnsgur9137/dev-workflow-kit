@@ -94,16 +94,40 @@ def wait_ready(base: str, key: str, timeout: float) -> None:
         time.sleep(2)
 
 
+class _MultipartBody:
+    """multipart 본문을 파일에서 조금씩 읽어 보낸다 — 산출물 전체를 메모리에 올리지 않는다 (PR #32 리뷰 S5)."""
+
+    def __init__(self, head: bytes, f, tail: bytes):
+        self._parts = [head, f, tail]
+
+    def read(self, n=-1):
+        n = 1 << 20 if n is None or n < 0 else n
+        while self._parts:
+            p = self._parts[0]
+            chunk = p.read(n) if hasattr(p, "read") else p
+            if hasattr(p, "read"):
+                if chunk:
+                    return chunk
+            else:
+                self._parts.pop(0)
+                if chunk:
+                    return chunk
+                continue
+            self._parts.pop(0)
+        return b""
+
+
 def upload(base: str, key: str, path: str, timeout: float) -> str:
     name = os.path.basename(path)
     boundary = "dwk" + uuid.uuid4().hex
-    with open(path, "rb") as f:
-        content = f.read()
     head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
             "Content-Type: application/octet-stream\r\n\r\n").encode()
-    body = head + content + f"\r\n--{boundary}--\r\n".encode()
-    status, resp = _request(f"{base}/api/v1/upload", key, body,
-                            {"Content-Type": f"multipart/form-data; boundary={boundary}"}, timeout, SMALL_MAX)
+    tail = f"\r\n--{boundary}--\r\n".encode()
+    with open(path, "rb") as f:
+        length = len(head) + os.fstat(f.fileno()).st_size + len(tail)
+        status, resp = _request(f"{base}/api/v1/upload", key, _MultipartBody(head, f, tail),
+                                {"Content-Type": f"multipart/form-data; boundary={boundary}",
+                                 "Content-Length": str(length)}, timeout, SMALL_MAX)
     if status != 200:
         raise ClientError(4, f"업로드 실패 HTTP {status}: {_short(resp)}")
     try:

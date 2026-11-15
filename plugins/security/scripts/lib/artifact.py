@@ -4,11 +4,14 @@
   artifact.py inspect <파일> <확장자>   → stdout TSV 한 줄씩:
       type\t<apk|aab|ipa>
       profile\t<android|ios|flutter|react-native>     (여러 줄)
+      text_entries\t<개수>                            Gitleaks 가 볼 텍스트로 보이는 항목 수
       warning\t<문구>                                  (여러 줄)
   종료코드: 0 정상 · 1 거부(사유는 stderr)
 
 산출물은 신뢰하지 않는 입력이다. 압축을 풀지 않고 ZIP 중앙 디렉터리의 **항목 이름만** 읽는다
 (내용 해석·추출은 컨테이너 안의 MobSF·Gitleaks 가 한다). 항목 수와 파일 크기에 상한을 둔다.
+항목 수·중앙 디렉터리 크기는 ZipFile 이 중앙 디렉터리 전체를 메모리에 올리기 **전에** EOCD 로 확인한다
+(빈 항목 30만 개짜리 26MB ZIP 이 171MB·4초를 쓰던 문제, PR #32 리뷰 W3). 압축 해제 총량에도 상한을 둔다(W4).
 """
 
 from __future__ import annotations
@@ -21,6 +24,10 @@ import zipfile
 
 MAX_BYTES = 500 * 1024 * 1024     # 산출물 크기 상한 (docs/security/03 워크플로/scan-app.md)
 MAX_ENTRIES = 200_000             # ZIP 항목 수 상한
+MAX_CD_BYTES = 64 * 1024 * 1024   # 중앙 디렉터리 크기 상한
+MAX_UNCOMPRESSED = 4 * 1024 ** 3  # 항목 크기(압축 해제) 합계 상한 — MobSF 가 볼륨에 풀어 쓰는 양
+TEXT_EXTS = (".js", ".bundle", ".jsbundle", ".json", ".xml", ".plist", ".txt", ".properties", ".yaml", ".yml",
+             ".env", ".html", ".htm", ".css", ".cfg", ".conf", ".ini", ".pem", ".strings", ".config", ".mf", ".sf")
 ZIP_MAGIC = (b"PK\x03\x04",)      # 빈 ZIP(PK\x05\x06)·분할 ZIP 은 앱 산출물이 아니다
 
 # 크로스플랫폼 프레임워크 표식 (ZIP 항목 이름)
@@ -60,6 +67,22 @@ def inspect(path: str, ext: str) -> int:
             return _fail("파일이 너무 작아 앱 산출물이 아닙니다")
         if f.read(4) not in ZIP_MAGIC:
             return _fail("ZIP 시그니처(PK\\x03\\x04)가 없습니다 — APK·AAB·IPA 는 ZIP 형식입니다")
+        # EOCD(ZIP64 포함)의 항목 수·중앙 디렉터리 크기를 먼저 본다
+        # 표준 라이브러리 내부 함수(3.8~3.13 동일)라 없어지면 사전 검사만 건너뛴다 (뒤의 항목 수 검사는 남는다)
+        end_rec = getattr(zipfile, "_EndRecData", None)
+        if end_rec is not None:
+            try:
+                end = end_rec(f)
+            except (OSError, ValueError, OverflowError):
+                end = None
+            if not end:
+                return _fail("ZIP 끝 레코드(EOCD)를 찾을 수 없습니다")
+            total = end[getattr(zipfile, "_ECD_ENTRIES_TOTAL", 4)]
+            cd_size = end[getattr(zipfile, "_ECD_SIZE", 5)]
+            if total > MAX_ENTRIES:
+                return _fail(f"ZIP 항목이 너무 많습니다 ({total} > {MAX_ENTRIES})")
+            if cd_size > MAX_CD_BYTES:
+                return _fail(f"ZIP 중앙 디렉터리가 너무 큽니다 ({cd_size // (1024 * 1024)}MB)")
         f.seek(0)
         try:
             with zipfile.ZipFile(f) as z:
@@ -68,6 +91,9 @@ def inspect(path: str, ext: str) -> int:
             return _fail(f"ZIP 구조를 읽을 수 없습니다: {type(e).__name__}")
         if len(infos) > MAX_ENTRIES:
             return _fail(f"ZIP 항목이 너무 많습니다 ({len(infos)} > {MAX_ENTRIES})")
+        unpacked = sum(i.file_size for i in infos)
+        if unpacked > MAX_UNCOMPRESSED:
+            return _fail(f"압축을 풀면 너무 큽니다 ({unpacked // (1024 ** 3)}GB > {MAX_UNCOMPRESSED // (1024 ** 3)}GB) — 압축 폭탄일 수 있습니다")
     names = [i.filename for i in infos]
 
     platform = "ios" if ext == "ipa" else "android"
@@ -86,13 +112,18 @@ def inspect(path: str, ext: str) -> int:
         print("profile\treact-native")
     if ext == "ipa" and any(re.match(r"^Payload/[^/]+\.app/SC_Info/", n) for n in names):
         print("warning\tIPA 에 SC_Info(FairPlay 암호화 정보)가 있습니다 — App Store 에서 받은 암호화된 앱은 바이너리 분석 결과가 비어 있을 수 있습니다. 직접 빌드(Archive → Export)한 IPA 로 점검하세요.")
-    # 같은 이름이 두 번 들어 있는 ZIP 은 도구마다 다른 항목을 읽을 수 있다 (해석 차이로 결과 은폐)
+    print(f"text_entries\t{sum(1 for n in names if n.lower().endswith(TEXT_EXTS))}")
+    # 같은 이름이 두 번 들어 있는 ZIP 은 도구마다 다른 항목을 읽을 수 있다 (해석 차이로 결과 은폐).
+    # 대소문자만 다른 이름·'./' 접두·역슬래시도 같은 이름으로 본다 (대소문자를 무시하는 FS 에 풀면 덮어써진다, 리뷰 N6)
     seen, dup = set(), None
     for n in names:
-        if n in seen:
+        k = n.replace("\\", "/").lower()
+        while k.startswith("./"):
+            k = k[2:]
+        if k in seen:
             dup = n
             break
-        seen.add(n)
+        seen.add(k)
     if dup is not None:
         print("warning\tZIP 안에 같은 이름의 항목이 두 번 이상 있습니다 — 도구마다 다른 항목을 읽을 수 있어 결과를 그대로 믿기 어렵습니다.")
     return 0
