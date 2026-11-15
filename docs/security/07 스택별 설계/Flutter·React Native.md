@@ -91,7 +91,7 @@ exclude_paths: ["**/node_modules/**", "**/ios/Pods/**", "**/android/build/**"]
   - R3 인스턴스 호출(`$O.get(…)` 등)은 수신자 이름이 `map`·`cache`·`params`·`storage`·`router`·`i18n`·`headers` 로 끝나면 제외하는 이름 기반 판정이다(3차 리뷰 S3) — 다른 이름의 Map·캐시는 보고될 수 있고, 그 이름으로 끝나는 HTTP 클라이언트는 놓친다. Flutter F4 의 `$D.get`(`prefs.get`·`map.get`) 오탐은 그대로다.
   - R2·F5 저장 키 정규식은 키워드 뒤 `Key`·`_id`(복수 포함)·버전 꼬리(`_v2`)까지만 허용한다 — `token_old` 같은 다른 꼬리는 잡지 않는다.
   - F3·F1 은 따옴표 짝이 맞지 않는 경우(Jenkinsfile 여러 줄 `'''` 안의 `//`, pubspec `assets: [it's/, .env]`)를 놓친다. F1 은 `transformers:` 아래 더 깊은 `path:` 도 asset 으로 읽는다(실제 transformer 항목에는 `path:` 가 없어 영향 없음).
-- F2(`--dart-define` 값의 바이너리 평문)·R6(번들 산출물의 키)는 P2 MobSF 단계에서 다룬다.
+- F2(`--dart-define` 값의 바이너리 평문)·R6(번들 산출물의 키)는 `/security:scan-app`이 다룬다: 산출물에서 Flutter(`libflutter.so`·`Flutter.framework`)·RN(`index.android.bundle`·`main.jsbundle`·`React.framework`·`hermes.framework`)을 판정해 summary 경고로 안내하고, 텍스트 번들의 키는 Gitleaks(산출물 내부), `libapp.so`·Hermes 바이트코드 같은 바이너리는 MobSF 문자열·시크릿 결과로 확인한다. Gitleaks 는 바이너리를 보지 않는다.
 
 ## 공통 수동 체크리스트
 - [ ] 클라이언트에 넣은 키는 **공개된다고 가정** — 서버 프록시 또는 키 제한(도메인·패키지명·API 범위) 적용

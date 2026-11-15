@@ -72,7 +72,9 @@ exclude_paths: ["**/build/**", "**/.gradle/**", "**/generated/**"]
 
 ## /security:scan-app (APK·AAB)
 - 릴리스 빌드(`assembleRelease`/`bundleRelease`) 기준으로 판단, 디버그 빌드의 `debuggable`은 별도 표시
-- A2·A4는 소스 점검과 MobSF가 중복될 수 있음 → 정규화에서 병합
+- A2·A4는 소스 점검과 MobSF가 중복될 수 있음 → MobSF 결과의 `references`에 `scan-code: android.manifest-*`·`android.nsc-*`를 붙여 묶는다 ([[scan-app#소스 점검과 함께 볼 때]])
+- 디버그 키(`CN=Android Debug`) 서명 빌드는 summary 경고와 `debuggable` 결과의 조치로 구분한다
+- AAB 는 툴킷이 universal APK 로 바꿔 분석한다 (MobSF v4.6.4 자체 변환은 arm64 에서 실패) — 서명 결과는 뺀다
 
 ## 수동 체크리스트
 - [ ] Play App Signing 사용, 업로드 키 보관 위치
@@ -85,4 +87,4 @@ exclude_paths: ["**/build/**", "**/.gradle/**", "**/generated/**"]
 > [!warning] 검증 필요
 > - ~~`semgrep-rules`의 Kotlin 규칙 범위~~ → `kotlin/`은 lang·gradle 위주, Android 는 `java/android/`(manifest-security-features, exported_activity, ECB·MD5 등). WebView·world-readable 은 커스텀으로 보완
 > - OSV-Scanner의 `gradle.lockfile`·`verification-metadata.xml` 지원
-> - MobSF의 AAB 직접 분석 지원 여부
+> - ~~MobSF의 AAB 직접 분석 지원 여부~~ → 지원하지만 arm64 이미지에서는 bundletool 내장 aapt2(x86-64) 때문에 실패 — 툴킷이 미리 변환 ([[MobSF#AAB]])

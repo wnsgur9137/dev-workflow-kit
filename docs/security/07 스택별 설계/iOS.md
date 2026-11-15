@@ -60,7 +60,8 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 ## /security:scan-app (IPA)
 - **직접 빌드한 IPA**(Xcode Archive → Export)는 암호화되지 않아 MobSF 정적분석 가능
 - App Store에서 받은 IPA는 FairPlay 암호화로 분석 불가 → 범위 밖
-- MobSF 결과의 ATS 항목은 I2와 중복될 수 있음 → 정규화에서 같은 위치면 병합
+- MobSF 결과의 ATS 항목은 I2와 중복될 수 있음 → MobSF 결과의 `references`에 `scan-code: ios.ats-*`를 붙여 묶는다 ([[scan-app#소스 점검과 함께 볼 때]])
+- IPA 에 `SC_Info/`(FairPlay)가 있으면 바이너리 결과가 비어 있을 수 있다고 경고한다
 
 ## 수동 체크리스트 (summary 하단)
 - [ ] 릴리스 빌드에서 디버그 메뉴·테스트 서버 URL 제거
@@ -82,4 +83,4 @@ exclude_paths: ["**/Pods/**", "**/DerivedData/**", "**/.build/**", "**/Carthage/
 > [!warning] 검증 필요
 > - ~~`semgrep-rules`의 Swift 규칙 수와 Semgrep의 Swift/Objective-C 파서 지원 수준~~ → `swift/` 규칙은 소수(`swift-user-defaults` 등), Objective-C 는 미지원(generic 정규식으로 보완)
 > - ~~OSV-Scanner의 `Package.resolved`(SwiftPM)·`Podfile.lock`(CocoaPods) 지원 여부~~ → P1 확인: `Package.resolved`만 지원, `Podfile.lock`은 v2.7.0이 추출하지 않음 (`unsupported_lockfiles`로 경고)
-> - MobSF iOS 정적분석 항목 범위 (Info.plist·바이너리 보호 기법)
+> - ~~MobSF iOS 정적분석 항목 범위 (Info.plist·바이너리 보호 기법)~~ → ATS·권한(Info.plist), Mach-O NX·PIE·스택 보호·ARC·코드 서명·암호화, 바이너리 위험 API, 문자열·URL. `secrets`는 비는 경우가 많아 번들·plist 의 키는 Gitleaks(산출물 내부)가 본다 (v4.6.4 실측)

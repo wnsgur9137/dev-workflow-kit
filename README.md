@@ -9,7 +9,7 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 | 플러그인 | 상태 | 커맨드 | 설명 |
 |---|---|---|---|
 | `workflow` | ✅ 사용 가능 | `/workflow:commit` `/workflow:create-pr` `/workflow:pr-review` `/workflow:apply-review` `/workflow:pipeline` | 커밋부터 병합까지 |
-| `security` | 🚧 구현 중 (P1 scan-code) | `/security:scan-code`, `/security:scan-app` `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
+| `security` | 🚧 구현 중 (P2 scan-app) | `/security:scan-code`, `/security:scan-app`, `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
 
 ## 목차
 
@@ -117,7 +117,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 
 ## security 플러그인
 
-> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성)를 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다(`/security:scan-app`·`/security:scan-web`은 아직 없음). 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
+> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성)와 `/security:scan-app`(APK·AAB·IPA 정적 분석)을 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다(`/security:scan-web`은 아직 없음). 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
 
 개인 앱·웹 프로젝트를 **Claude Code 안에서, 외부 전송 없이** 점검합니다. 모든 도구는 네트워크가 차단된 컨테이너에서 실행되고, Claude는 정규화된 요약 리포트만 읽습니다. 설계: [보안 툴킷](docs/security/보안%20툴킷.md)
 
@@ -172,7 +172,21 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 | React Native | 공개 변수(`EXPO_PUBLIC_` 등)·`react-native-config` `.env`의 비밀 이름(키 이름만), `AsyncStorage` 토큰, WebView `originWhitelist`의 `'*'`, 평문 HTTP 요청, `__DEV__` 밖 민감 로그. 하위 `android/`·`ios/`는 네이티브 프로파일 | [Flutter·RN](docs/security/07%20스택별%20설계/Flutter·React%20Native.md) |
 | Web (Next.js·React·Vite 등) | 공개 접두사 변수(`NEXT_PUBLIC_`·`VITE_` 등)에 비밀 이름, API 라우트 인증 누락(휴리스틱), SSRF, `next.config` 보안 헤더·원격 이미지 와일드카드·브라우저 소스맵, 설치 스크립트 있는 의존성 목록 | [Web](docs/security/07%20스택별%20설계/Web.md) |
 
-모든 컨테이너는 `--network none`·읽기 전용 루트·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.
+```
+/security:scan-app ~/develop/my-app/build/app/outputs/flutter-apk/app-release.apk
+/security:scan-app ~/Desktop/Export/MyApp.ipa
+```
+
+| 도구 | 점검 | 비고 |
+|---|---|---|
+| MobSF v4.6.4 | APK·AAB·IPA 정적 분석 — 매니페스트·ATS·network_security_config, 서명, 디컴파일 코드 패턴, 바이너리 보호 기법, 위험 권한, 하드코딩 시크릿 후보 | **인터넷·호스트 포트가 없는 내부 네트워크**에서만 실행, 실행마다 새 스택을 띄웠다 지움. 이미지 약 2.5GB, VM 메모리 8GB 권장 |
+| Gitleaks | 산출물(ZIP) 안의 텍스트 파일(RN 번들·설정 파일)의 키 | `--network none` |
+
+- 직접 빌드한 **릴리스** 산출물을 권장합니다. 디버그 키로 서명된 빌드는 summary 에 표시됩니다. App Store 에서 받은 암호화된 IPA 는 분석할 수 없습니다.
+- AAB 는 툴킷이 universal APK 로 바꿔 분석합니다 (서명은 점검하지 않음). Flutter·React Native 는 산출물에서 판정해 `--dart-define`·JS 번들 안내와 스택별 수동 체크리스트를 붙입니다.
+- MobSF 리포트에 든 시크릿 원문·문자열 덤프는 리포트 폴더에 남기지 않습니다 (키 이름만). MobSF API 키는 실행마다 새로 만듭니다.
+
+모든 컨테이너는 `--network none`(MobSF 는 내부 전용 네트워크)·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.
 
 ### 권한 설정
 
@@ -188,7 +202,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 | 경로 | 내용 | 권한 |
 |---|---|---|
 | `~/.local/share/dev-workflow-kit/security/` | 리포트(`reports/<run-id>/`), OSV DB, 규칙 | 폴더 700 |
-| `~/.config/dev-workflow-kit/security/` | `.env`(MobSF 키), `targets.allowlist` | 폴더 700 / 파일 600 |
+| `~/.config/dev-workflow-kit/security/` | `targets.allowlist` (MobSF 키는 저장하지 않고 실행마다 생성) | 폴더 700 / 파일 600 |
 
 점검 대상으로 홈 디렉터리 자체·그 상위, `~/.ssh` 같은 자격증명 폴더, 시스템 폴더, 위 데이터 폴더는 거부합니다.
 
