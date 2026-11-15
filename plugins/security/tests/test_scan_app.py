@@ -230,7 +230,10 @@ class ArtifactInspectTest(unittest.TestCase):
             artifact.MAX_UNCOMPRESSED = old
         rc, rows, _ = self.run_inspect(p, "apk")
         self.assertEqual(rc, 0)
-        self.assertIn(["text_entries", "2"], rows)   # bundle·json (APK 의 .xml 은 바이너리 AXML 이라 세지 않음)
+        self.assertIn(["text_entries", "2"], rows)   # bundle·json (APK 의 매니페스트·res .xml 은 바이너리 AXML 이라 세지 않음)
+        make_zip(p, ["AndroidManifest.xml", "res/layout/a.xml", "assets/config.xml"])
+        _, rows, _ = self.run_inspect(p, "apk")
+        self.assertIn(["text_entries", "1"], rows, "assets/ 의 .xml 은 평문이라 센다 (3차 NT9)")
 
 
 class MobsfReportTest(unittest.TestCase):
@@ -331,17 +334,33 @@ class MobsfReportTest(unittest.TestCase):
                                        {"RuleID": "k", "File": "/in/artifact.zip!assets/환경.json", "StartLine": 1}], "artifact")
         self.assertEqual(len({x["id"] for x in gl}), 2)
         self.assertEqual(len({x["location"]["file"] for x in gl}), 2)
+        # 앞 300자가 같아 표시값이 같게 잘리는 두 경로도 id 는 다르다 (3차 리뷰 NT7c — 원래 값으로 계산)
+        long_a = "com/x/" + "a" * 400 + "/One.java"
+        long_b = "com/x/" + "a" * 400 + "/Two.java"
+        rep["code_analysis"]["findings"]["android_md5"]["files"] = {long_a: "1", long_b: "1"}
+        f, _ = normalize.parse_mobsf(rep, "android")
+        md5 = [x for x in f if x["rule_id"] == "mobsf.code.android-md5"]
+        self.assertEqual(len({x["location"]["file"] for x in md5}), 1, "표시값은 같게 잘린다")
+        self.assertEqual(len({x["id"] for x in md5}), 2)
+        # 잘릴 때 '%XX' 가운데서 끊기지 않는다 (NT4)
+        enc = mobsf_report.safe_ident("가" * 200, 100)
+        self.assertTrue(enc.endswith("…"))
+        self.assertRegex(enc[:-1], r"^(%[0-9A-F]{2})+$")
         # 이미 인코딩처럼 보이는 이름도 다른 이름과 섞이지 않는다 ('%' 도 인코딩)
         self.assertNotEqual(mobsf_report.safe_ident("a%20b"), mobsf_report.safe_ident("a b"))
 
     def test_type_mismatched_section_is_warned(self):
         """2차 NS4: 타입이 틀린 섹션은 조용히 0건이 되지 않고 경고가 남는다."""
         rep = load_fixture("mobsf-android.json")
-        rep["network_security"] = []
+        rep["network_security"] = ["x"]
         rep["file_analysis"] = {"x": 1}
         _, w = normalize.parse_mobsf(rep, "android")
         self.assertTrue(any("network_security 형식이 예상과 달라" in x for x in w), w)
         self.assertTrue(any("file_analysis 형식이 예상과 달라" in x for x in w), w)
+        # 빈 섹션은 MobSF 가 빈 결과를 내는 방식일 수 있어 경고하지 않는다 (3차 NT8)
+        rep["network_security"], rep["file_analysis"] = [], {}
+        _, w = normalize.parse_mobsf(rep, "android")
+        self.assertFalse(any("형식이 예상과 달라" in x for x in w), w)
 
     def test_one_malformed_field_does_not_drop_other_sections(self):
         """리뷰 W7: cwe=None·files=[]·manifest_analysis=[] 가 섞여도 나머지 섹션 결과는 남는다."""
@@ -393,6 +412,8 @@ class MobsfReportTest(unittest.TestCase):
         rep["firebase_urls"] = [f"https://api.example.com/v1/items?access_token={url_tok}", b64,
                                 "password=hunter2SuperSecret/xyz"]
         rep["code_analysis"]["findings"]["android_md5"]["metadata"]["ref"] = f"https://x.example/{b64}"
+        # 'name' 은 바이너리 섹션 아래에서만 경로로 본다 — 그 밖의 name 에 든 key=value 는 가린다 (3차 NT5)
+        rep["trackers"] = {"trackers": [{"name": "password=hunter2SuperSecret"}]}
         out = mobsf_report.sanitize(rep, lambda t: normalize.clean_text(t, 4000), lambda t: normalize.clean_ident(t, 4000))
         self.assertIn(long_path, out["code_analysis"]["findings"]["android_md5"]["files"])
         dump = json.dumps(out)

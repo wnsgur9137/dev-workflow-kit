@@ -39,7 +39,12 @@ case "$1" in
       run)
         echo "REST API Key: ${DWK_MOBSF_API_KEY:-}" >&2
         echo "mobsf_client: 가짜 실행" >&2
-        [ -n "${FAKE_COMPOSE_RUN_SLEEP:-}" ] && sleep "$FAKE_COMPOSE_RUN_SLEEP"
+        if [ -n "${FAKE_COMPOSE_RUN_SLEEP:-}" ]; then
+          # 테스트가 정확히 이 프로세스만 정리할 수 있게 pid 를 남긴다 (3차 리뷰 NT2)
+          sleep "$FAKE_COMPOSE_RUN_SLEEP" &
+          [ -n "${FAKE_RUN_PIDFILE:-}" ] && echo $! >>"$FAKE_RUN_PIDFILE"
+          wait $!
+        fi
         [ -n "${FAKE_COMPOSE_RUN_FILE:-}" ] && cat "$FAKE_COMPOSE_RUN_FILE"
         exit "${FAKE_COMPOSE_RUN_RC:-0}"
         ;;

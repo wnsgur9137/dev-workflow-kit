@@ -187,19 +187,23 @@ test_app_stale_full_report_from_killed_run_is_removed() {
 test_app_cleanup_stale_only_removes_old_toolkit_stacks() {
   setup_fake
   _fake_pass_d7
-  export FAKE_SYSTEM_TIME="2026-11-15T12:00:00.123456789+09:00"
-  export FAKE_PS_IDS="c1 c2 c3 c4 c5"
+  # 실행 날짜와 멀리 떨어진 고정 날짜 — 기준을 호스트 시계로 되돌리는 변이가 언제 돌려도 잡히게 (3차 리뷰 NT6)
+  export FAKE_SYSTEM_TIME="2030-01-01T12:00:00.123456789+09:00"
+  export FAKE_PS_IDS="c1 c2 c3 c4 c5 c6 c7"
   export FAKE_VOLUMES="v1 v2"
   cat >"$SEC_TMP/inspect.txt" <<'EOF'
-dwk-sec-app-0000000000aa 2026-11-14T20:00:00.5Z
-dwk-sec-app-0000000000bb 2026-11-15T11:30:00.123456789+09:00
+dwk-sec-app-0000000000aa 2029-12-31T20:00:00.5Z
+dwk-sec-app-0000000000bb 2030-01-01T11:30:00.123456789+09:00
 other-proj 2020-01-01T00:00:00Z
 dwk-sec-app-xyz 2020-01-01T00:00:00Z
-dwk-sec-app-0000000000cc 2026-11-15T11:50:00+09:00
+dwk-sec-app-0000000000cc 2030-01-01T11:50:00+09:00
+dwk-sec-app-0000000000ee 2020-01-01T00:00:00Z
+dwk-sec-app-0000000000ee garbage
+dwk-sec-app-0000000000ff 0001-01-01T00:00:00Z
 EOF
   cat >"$SEC_TMP/volumes.txt" <<'EOF'
-dwk-sec-app-0000000000cc 2026-11-14T00:00:00Z
-dwk-sec-app-0000000000dd 2026-11-15T07:00:00+09:00
+dwk-sec-app-0000000000cc 2029-12-31T00:00:00Z
+dwk-sec-app-0000000000dd 2030-01-01T07:00:00+09:00
 EOF
   export FAKE_INSPECT_LINES="$SEC_TMP/inspect.txt" FAKE_VOLUME_LINES="$SEC_TMP/volumes.txt"
   _fake_scan
@@ -211,19 +215,30 @@ EOF
   assert_contains "$downs" "dwk-sec-app-0000000000dd"
   assert_not_contains "$downs" "dwk-sec-app-0000000000bb"
   assert_not_contains "$downs" "dwk-sec-app-0000000000cc"
+  # 시각을 모르는 줄이 섞인 프로젝트(ee)·Go zero time(ff)은 "모름"이라 지우지 않는다 (3차 리뷰 NT1·NT7b)
+  assert_not_contains "$downs" "dwk-sec-app-0000000000ee"
+  assert_not_contains "$downs" "dwk-sec-app-0000000000ff"
+  # 볼륨만 남은 프로젝트는 down 뒤에 볼륨도 지운다 (NT7a)
+  grep -q '^docker volume rm' "$FAKE_LOG" || fail "docker volume rm 이 호출되지 않음"
   assert_not_contains "$(cat "$FAKE_LOG")" "-p other-proj"
   assert_not_contains "$(cat "$FAKE_LOG")" "-p dwk-sec-app-xyz"
   assert_contains "$(cat "$APP_RUN/summary.md")" "이전 실행이 남긴 MobSF 스택 2개"
-  # 엔진 시각을 모르면 아무것도 지우지 않는다
+  # 엔진 시각을 모르면 스택은 지우지 않지만, 호스트 파일 시각으로 판정하는 시크릿 원본 리포트는 지운다 (3차 리뷰 NS-A)
+  local old="$DWK_SECURITY_DATA_DIR/reports/20200101-000000-app/raw"
+  mkdir -p "$old"
+  echo '{}' >"$old/mobsf-full.json"
+  touch -t 202001010000 "$old/mobsf-full.json"
   : >"$FAKE_LOG"
   FAKE_SYSTEM_TIME="" _fake_scan
   assert_not_contains "$(cat "$FAKE_LOG")" "0000000000aa"
+  [ ! -e "$old/mobsf-full.json" ] || fail "엔진 시각이 없을 때 오래된 원본 리포트를 지우지 않음"
 }
 
 # W5: 분석 중 TERM 을 받으면 compose run 이 끝나기를 기다리지 않고 바로 스택을 내리고 143 으로 끝난다
 test_app_term_during_analysis_cleans_up_immediately() {
   setup_fake
   _fake_pass_d7
+  export FAKE_RUN_PIDFILE="$SEC_TMP/fake-run.pids"
   FAKE_COMPOSE_RUN_SLEEP=30 "$SCAN_APP" "$HOME/apps/app.apk" >"$SEC_TMP/out" 2>"$SEC_TMP/err" &
   local pid=$! i=0 rc start
   while ! grep -q 'mobsf-client' "$FAKE_LOG" 2>/dev/null; do
@@ -239,7 +254,10 @@ test_app_term_during_analysis_cleans_up_immediately() {
   [ $(($(date +%s) - start)) -le 5 ] || fail "TERM 뒤 정리에 5초 넘게 걸림 (compose run 을 기다림)"
   grep -q ' down -v' "$FAKE_LOG" || fail "TERM 뒤 down -v 가 호출되지 않음"
   if find "$DWK_SECURITY_DATA_DIR/reports" -name mobsf-full.json | grep -q .; then fail "원본 리포트가 남음"; fi
-  pkill -f "FAKE_COMPOSE_RUN_SLEEP" 2>/dev/null || true
+  # 가짜 compose run 의 sleep 만 정확히 끝낸다 (3차 리뷰 NT2 — pkill -f 는 아무것도 못 맞추고 남의 프로세스를 맞출 수 있었다)
+  local p
+  [ -f "$FAKE_RUN_PIDFILE" ] && while read -r p; do kill "$p" 2>/dev/null; done <"$FAKE_RUN_PIDFILE"
+  return 0
 }
 
 # --- 실제 Docker 통합 ----------------------------------------------------------
