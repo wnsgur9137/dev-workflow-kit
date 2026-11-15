@@ -1,0 +1,59 @@
+# /security:scan-app 의 MobSF 정적 분석 스택 (네트워크 N1 — 내부 전용)
+#   docs/security/02 도구/MobSF.md · docs/security/04 보안/네트워크 격리.md
+#
+# scan-app.sh 만 이 파일을 쓴다. 실행마다 무작위 프로젝트 이름(-p)으로 띄우고 끝나면 down -v 로 컨테이너·네트워크·볼륨을 지운다.
+# 값은 모두 scan-app.sh 가 환경변수로 넘긴다 (없으면 compose 가 오류로 멈춘다 — ${VAR:?}).
+#
+# - 두 서비스 모두 scan-internal(internal: true)에만 연결된다 → 인터넷·호스트로 나갈 경로가 없다.
+# - ports 를 두지 않는다 → 호스트에서도 MobSF 에 접속할 수 없다 (웹 UI 미사용, Q6).
+# - MobSF 의 Play·App Store 조회와 Firebase 공개 여부 확인은 설정으로 끌 수 없어(v4.6.4 실측) 네트워크 차단만이 막는다.
+#   끌 수 있는 외부 조회(악성 도메인 확인·VirusTotal)는 설정으로도 끈다.
+# - API 키·Django 비밀값·관리자 비밀번호는 실행마다 새로 만든다 (MobSF 로그에 API 키가 찍히므로 고정 키를 두지 않는다).
+
+services:
+  mobsf:
+    image: ${DWK_MOBSF_IMAGE:?}
+    networks: [scan-internal]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 1024
+    environment:
+      MOBSF_API_KEY: ${DWK_MOBSF_API_KEY:?}
+      MOBSF_SECRET_KEY: ${DWK_MOBSF_SECRET:?}
+      DJANGO_SUPERUSER_PASSWORD: ${DWK_MOBSF_ADMIN_PW:?}
+      MOBSF_DOMAIN_MALWARE_SCAN: "0"
+      MOBSF_VT_ENABLED: "0"
+      MOBSF_VT_UPLOAD: "0"
+      MOBSF_APPMONSTA_API: ""
+      MOBSF_UPSTREAM_PROXY_ENABLED: "0"
+    # 업로드·디컴파일 결과·DB 는 실행마다 새로 만드는 볼륨에만 남는다 (이미지에 든 jadx 를 볼륨이 처음 한 번 복사한다)
+    volumes:
+      - mobsf-home:/home/mobsf/.MobSF
+
+  # 업로드 → 스캔 → JSON 리포트 → delete_scan. 리포트는 stdout 으로만 내보낸다 (호스트 쓰기 마운트 없음).
+  # 별도 이미지를 들이지 않으려고 MobSF 이미지를 그대로 쓴다 (python3·java·bundletool·aapt2 포함).
+  mobsf-client:
+    image: ${DWK_MOBSF_IMAGE:?}
+    profiles: [client]
+    networks: [scan-internal]
+    user: ${DWK_UID_GID:?}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    environment:
+      HOME: /tmp
+      DWK_MOBSF_API_KEY: ${DWK_MOBSF_API_KEY:?}
+    tmpfs:
+      - /tmp:rw,size=2g
+    entrypoint: ["python3", "-I", "/client/mobsf_client.py"]
+    volumes:
+      - ${DWK_APP_FILE:?}:/in/${DWK_APP_NAME:?}:ro
+      - ${DWK_CLIENT_DIR:?}:/client:ro
+
+volumes:
+  mobsf-home:
+
+networks:
+  scan-internal:
+    internal: true

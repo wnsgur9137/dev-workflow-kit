@@ -18,3 +18,7 @@
 semgrep      semgrep/semgrep             1.182.0  sha256:4a34048c04fef049f71665047f074cffb00cc3d89482f965a5cd151d589237af  linux/amd64,linux/arm64
 gitleaks     ghcr.io/gitleaks/gitleaks   v8.30.1  sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f  linux/amd64,linux/arm64
 osv-scanner  ghcr.io/google/osv-scanner  v2.7.0   sha256:4f3b7e2c64b9d38a5febc5a7e4a3dfef1d1362f726dea7a2ef4762b46469fcd0  linux/amd64,linux/arm64
+
+# --- P2 /security:scan-app (2026-11-15 고정, v4.6.4 는 2026-11-01 공개 — 7일 이상) ---
+# mobsf-client 도 같은 이미지를 쓴다 (docker/compose.yml). 이미지 2.5GB, 권장 VM 메모리 8GB
+mobsf        opensecurity/mobile-security-framework-mobsf  v4.6.4  sha256:cf1465a3cc0c95488b9a6cdb1c7799d4b576d391ee28232c221f6a196bf2f74c  linux/amd64,linux/arm64
