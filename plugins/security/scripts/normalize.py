@@ -480,7 +480,7 @@ def parse_gitleaks(data, mode: str):
         if mode == "artifact":
             # ZIP 항목 이름은 앱(공격자)이 정한다 — summary 의 인라인 코드에 놓이므로 식별자 문자 밖은 퍼센트 인코딩 (PR #32 리뷰 W1).
             # id 는 인코딩 전 이름으로 계산한다 (2차 리뷰 NW2)
-            file = _mobsf.safe_ident(file, 300) or "?"
+            file = _mobsf.safe_ident(clean_ident(file, 2000), 300) or "?"   # 접두사 토큰도 가린다 (3차 NT3)
         line = r.get("StartLine")
         commit = (r.get("Commit") or "")[:12]
         source = (f"git 히스토리 커밋 {commit[:7]}" if mode == "git" and commit

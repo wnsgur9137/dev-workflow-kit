@@ -91,7 +91,14 @@ def safe_ident(text, limit: int = 200) -> str | None:
     for ch in str(text):
         out.append(ch if ch in _SAFE_IDENT_CHARS else "".join(f"%{b:02X}" for b in ch.encode("utf-8")))
     t = "".join(out)
-    return t if len(t) <= limit else t[: limit - 1] + "…"
+    if len(t) <= limit:
+        return t
+    cut = t[: limit - 1]
+    # '%XX' 중간에서 자르지 않는다 (3차 리뷰 NT4)
+    tail = cut[-2:]
+    if "%" in tail:
+        cut = cut[: len(cut) - 2 + tail.index("%")]
+    return cut + "…"
 
 
 def _d(v) -> dict:
@@ -112,8 +119,10 @@ SANITIZE_LIST_MAX = 2000
 
 # 경로가 확실한 자리 — 이 자리의 문자열만 식별자용 마스킹(고엔트로피 패턴 없음)을 쓴다. 값의 모양('/' 가 있고 공백이 없음)으로
 # 고르면 URL 쿼리 토큰·'/' 가 든 base64 시크릿의 마스킹까지 꺼진다 (2차 리뷰 NW1)
-_PATH_VALUE_KEYS = {"file_path", "path", "name"}
+_PATH_VALUE_KEYS = {"file_path", "path"}
 _PATH_KEYED_DICTS = {"files"}   # code_analysis.*.files = {경로: 줄}
+# 'name' 은 범위가 넓은 키라 바이너리 이름을 담는 섹션 아래에서만 경로로 본다 (3차 리뷰 NT5)
+_NAME_IS_PATH_SECTIONS = {"binary_analysis", "macho_analysis", "dylib_analysis", "framework_analysis"}
 
 
 def sanitize(report, mask, mask_ident=None):
@@ -122,16 +131,17 @@ def sanitize(report, mask, mask_ident=None):
     사전 키도 가린다."""
     mask_ident = mask_ident or mask
 
-    def walk(v, depth=0, key=None):
+    def walk(v, depth=0, key=None, section=None):
         if depth > 40:
             return "(깊이 제한)"
         if isinstance(v, dict):
             kmask = mask_ident if key in _PATH_KEYED_DICTS else mask
-            return {kmask(str(k))[:300]: walk(x, depth + 1, str(k)) for k, x in v.items()}
+            return {kmask(str(k))[:300]: walk(x, depth + 1, str(k), section) for k, x in v.items()}
         if isinstance(v, list):
-            return [walk(x, depth + 1, key) for x in v[:SANITIZE_LIST_MAX]]
+            return [walk(x, depth + 1, key, section) for x in v[:SANITIZE_LIST_MAX]]
         if isinstance(v, str):
-            return mask_ident(v) if key in _PATH_VALUE_KEYS else mask(v)
+            is_path = key in _PATH_VALUE_KEYS or (key == "name" and section in _NAME_IS_PATH_SECTIONS)
+            return mask_ident(v) if is_path else mask(v)
         return v
 
     out = {}
@@ -146,7 +156,7 @@ def sanitize(report, mask, mask_ident=None):
             else:
                 out[k] = "(정제됨)"
             continue
-        out[k] = walk(v, 0, k)
+        out[k] = walk(v, 0, k, k)
     return out
 
 
@@ -202,7 +212,7 @@ def parse(report, clean, ident, title_max: int, evidence_max: int, secret_eviden
     # 섹션 타입이 예상과 다르면(MobSF 버전 차이·조작된 리포트) 조용히 0건이 되지 않게 알린다 (2차 리뷰 NS4)
     for sec, types in _SECTION_TYPES.items():
         v = report.get(sec)
-        if v is not None and not isinstance(v, types):
+        if v and not isinstance(v, types):   # 빈 []·{} 는 MobSF 가 빈 섹션을 내는 방식일 수 있어 경고하지 않는다 (NT8)
             warnings.append(f"MobSF {sec} 형식이 예상과 달라(type {type(v).__name__}) 그 섹션의 결과는 빠졌습니다.")
 
     def add(section, key, severity, title, desc="", file=None, line=None, package=None, refs=(), fix="",
@@ -220,7 +230,7 @@ def parse(report, clean, ident, title_max: int, evidence_max: int, secret_eviden
         if rule_key == "manifest.app-is-debuggable" and debug_signed:
             fix = (fix + " " if fix else "") + "디버그 키로 서명된 빌드입니다 — 디버그 빌드의 debuggable 은 정상이므로 릴리스 빌드(assembleRelease·bundleRelease)로 다시 점검하세요."
         # 위치는 툴킷이 정한 고정 문구(trusted_file)가 아니면 앱이 정한 값이다 → 식별자 문자 밖은 퍼센트 인코딩 (W1)
-        loc = ident(file, 300) if (file and trusted_file) else (safe_ident(ident(file, 300), 300) if file else None)
+        loc = ident(file, 300) if (file and trusted_file) else (safe_ident(ident(file, 2000), 300) if file else None)
         findings.append({
             # id 는 인코딩·절단 전의 값으로 계산한다 — 표시값이 같아져도 결과가 합쳐지지 않게 (2차 리뷰 NW2)
             "id_parts": (str(file or ""), str(package or "")),
@@ -231,7 +241,7 @@ def parse(report, clean, ident, title_max: int, evidence_max: int, secret_eviden
             "title": clean(title, title_max, True),
             "file": loc,
             "line": line if isinstance(line, int) else None,
-            "package": safe_ident(ident(package, 120), 200) if package else None,
+            "package": safe_ident(ident(package, 2000), 200) if package else None,
             "evidence": clean(desc, evidence_max, True) if section != "secret" else secret_evidence,
             "fix_hint": clean(fix, evidence_max, True),
             "references": references,

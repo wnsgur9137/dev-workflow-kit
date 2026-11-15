@@ -163,6 +163,8 @@ tail_log() { tail -n 3 "$1" 2>/dev/null | redact_secrets | tr '\n\t' '  ' | cut 
 STALE_MIN=180
 cleanup_stale() {
   local ids vols projects p n=0 now
+  # 시크릿 원본 리포트는 호스트 파일 시각으로 판정하므로 엔진 시각과 상관없이 늘 정리한다 (3차 리뷰 NS-A)
+  find "$SEC_DATA/reports" -mindepth 3 -maxdepth 3 -name mobsf-full.json -mmin +"$STALE_MIN" -exec rm -f {} + 2>/dev/null
   now=$(docker info --format '{{.SystemTime}}' 2>/dev/null)
   [ -n "$now" ] || return 0
   ids=$(docker ps -aq --filter label=com.docker.compose.project 2>/dev/null)
@@ -185,10 +187,14 @@ now = parse(sys.argv[2])
 newest = {}
 for line in sys.stdin:
     p = line.split()
-    if len(p) != 2 or not re.fullmatch(r"dwk-sec-app-[0-9a-f]{12}", p[0]):
+    if not p or not re.fullmatch(r"dwk-sec-app-[0-9a-f]{12}", p[0]):
         continue
     try:
+        if len(p) != 2:
+            raise ValueError("시각 없음")
         ts = parse(p[1])
+        if ts.year < 2000:
+            raise ValueError("zero time")   # Go 의 zero time(0001-01-01)은 "모름"이다 (3차 리뷰 NT1)
     except ValueError:
         newest[p[0]] = None          # 시각을 모르는 프로젝트는 지우지 않는다
         continue
@@ -204,7 +210,6 @@ print(" ".join(k for k, v in newest.items() if v is not None and (now - v).total
     docker volume rm $(docker volume ls -q --filter "label=com.docker.compose.project=$p" 2>/dev/null) >/dev/null 2>&1
   done
   [ $n -gt 0 ] && printf '%s\n' "이전 실행이 남긴 MobSF 스택 ${n}개(${STALE_MIN}분 이상 지난 것)를 지웠습니다." >>"$WARNINGS_FILE"
-  find "$SEC_DATA/reports" -mindepth 3 -maxdepth 3 -name mobsf-full.json -mmin +"$STALE_MIN" -exec rm -f {} + 2>/dev/null
   return 0
 }
 
@@ -295,7 +300,9 @@ except OSError:
     pass
 # 프록시 환경변수가 있으면 MobSF 의 requests(trust_env)가 internal 네트워크에서 닿는 프록시로 나갈 수 있다 (2차 리뷰 Open Question)
 import os
-r += ["proxy-env:" + k for k in os.environ if k.lower() in ("http_proxy", "https_proxy", "all_proxy")]
+# compose.yml 이 이 변수들을 빈 값으로 덮어쓰므로, 값이 있으면 무언가가 다시 넣은 것이다 (3차 리뷰 NS-B)
+r += ["proxy-env:" + k for k, v in os.environ.items()
+      if k.lower() in ("http_proxy", "https_proxy", "all_proxy") and v.strip()]
 print("isolated" if not r else "LEAK " + " ".join(r))
 ' 2>&1 | tail -n 1)
   if [ "$iso" != isolated ]; then

@@ -46,6 +46,7 @@ _CASE_SENSITIVE_IMPORTANT = re.compile(
     r"(?i)^(?:base/(?:manifest/)?|base/dex/|base/root/)?(?:androidmanifest\.xml|classes\d*\.dex|resources\.(?:arsc|pb)"
     r"|meta-inf/|lib/[^/]+/[^/]+\.so$|assets/index\.android\.bundle)"
     r"|^payload/[^/]+\.app/(?:info\.plist|main\.jsbundle|[^/]+$)")
+_ANDROID_BINARY_XML = re.compile(r"^(?:base/)?(?:manifest/)?(?:androidmanifest\.xml$|res/)")
 _IOS_APP = re.compile(r"^Payload/[^/]+\.app/Info\.plist$")
 _ANDROID_MANIFEST = {"apk": re.compile(r"^AndroidManifest\.xml$"), "aab": re.compile(r"^base/manifest/AndroidManifest\.xml$")}
 
@@ -119,9 +120,14 @@ def inspect(path: str, ext: str) -> int:
         print("profile\treact-native")
     if ext == "ipa" and any(re.match(r"^Payload/[^/]+\.app/SC_Info/", n) for n in names):
         print("warning\tIPA 에 SC_Info(FairPlay 암호화 정보)가 있습니다 — App Store 에서 받은 암호화된 앱은 바이너리 분석 결과가 비어 있을 수 있습니다. 직접 빌드(Archive → Export)한 IPA 로 점검하세요.")
-    # APK·AAB 의 .xml 은 바이너리 AXML 이라 Gitleaks 가 볼 텍스트가 아니다 (2차 리뷰 NN2). IPA 의 plist 는 XML·바이너리가 섞인다
-    text_exts = tuple(e for e in TEXT_EXTS if e != ".xml") if platform == "android" else TEXT_EXTS
-    print(f"text_entries\t{sum(1 for n in names if n.lower().endswith(text_exts))}")
+    # APK·AAB 의 매니페스트·res/ 의 .xml 은 바이너리 AXML 이라 Gitleaks 가 볼 텍스트가 아니다 (2차 NN2). assets/ 의 .xml 은
+    # 평문이므로 센다 (3차 NT9). IPA 의 plist 는 XML·바이너리가 섞인다
+    def is_text(n: str) -> bool:
+        low = n.lower()
+        if not low.endswith(TEXT_EXTS):
+            return False
+        return not (platform == "android" and low.endswith(".xml") and _ANDROID_BINARY_XML.match(low))
+    print(f"text_entries\t{sum(1 for n in names if is_text(n))}")
     # 같은 이름이 두 번 들어 있는 ZIP 은 도구마다 다른 항목을 읽을 수 있다 (해석 차이로 결과 은폐).
     # './' 접두·역슬래시는 늘 정규화하고, 대소문자만 다른 이름은 도구 해석에 중요한 항목에서만 같은 이름으로 본다 —
     # 릴리스 빌드의 리소스 경로 단축(shrinkResources)이 대소문자만 다른 res/ 이름을 만들 수 있어서다 (2차 리뷰 NS6)
