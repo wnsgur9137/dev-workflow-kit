@@ -157,10 +157,14 @@ tail_log() { tail -n 3 "$1" 2>/dev/null | redact_secrets | tr '\n\t' '  ' | cut 
 
 # 이전 실행이 SIGKILL 등으로 trap 없이 끝나 남긴 스택(앱 원본·디컴파일 결과가 든 볼륨)과 시크릿 원본 리포트를 지운다
 # (리뷰 W5). 동시에 도는 다른 실행을 건드리지 않게 가장 최근 활동이 STALE_MIN 분보다 오래된 것만 지운다 — 한 실행의
-# 최대 시간(기동 300초 + 준비 180초 + 스캔 3600초 + 리포트 600초)보다 길다.
+# 최대 시간(기동 300초 + AAB 변환 900초 + 준비 180초 + 업로드 600초 + 스캔 3600초 + 리포트 600초 ≈ 104분)보다 길다.
+# 생성 시각은 엔진(VM) 시계로 찍히므로 비교 기준도 엔진 시계(docker info .SystemTime)를 쓴다 — 잠자기 뒤 VM 시계가
+# 밀려도 방금 시작한 다른 실행을 오래된 것으로 보지 않게 (2차 리뷰 NS3). 엔진 시각을 모르면 정리하지 않는다.
 STALE_MIN=180
 cleanup_stale() {
-  local ids vols projects p n=0
+  local ids vols projects p n=0 now
+  now=$(docker info --format '{{.SystemTime}}' 2>/dev/null)
+  [ -n "$now" ] || return 0
   ids=$(docker ps -aq --filter label=com.docker.compose.project 2>/dev/null)
   vols=$(docker volume ls -q --filter label=com.docker.compose.project 2>/dev/null)
   # shellcheck disable=SC2086  # id·볼륨 이름 목록 — 공백 없는 이름이다
@@ -169,23 +173,35 @@ cleanup_stale() {
     [ -n "$vols" ] && docker volume inspect -f '{{index .Labels "com.docker.compose.project"}} {{.CreatedAt}}' $vols 2>/dev/null
   } | python3 -I -c '
 import datetime as dt, re, sys
+def parse(t):
+    # RFC3339Nano(소수점 1~9자리)·Z·+09:00 — 3.9 의 fromisoformat 은 소수점 6자리만 받는다
+    t = re.sub(r"\.(\d{1,9})", lambda m: "." + (m.group(1) + "000000")[:6], t.strip()).replace("Z", "+00:00")
+    ts = dt.datetime.fromisoformat(t)
+    if ts.tzinfo is None:
+        raise ValueError("시간대 없음")
+    return ts
 limit = int(sys.argv[1]) * 60
-now = dt.datetime.now(dt.timezone.utc)
+now = parse(sys.argv[2])
 newest = {}
 for line in sys.stdin:
     p = line.split()
     if len(p) != 2 or not re.fullmatch(r"dwk-sec-app-[0-9a-f]{12}", p[0]):
         continue
-    t = re.sub(r"\.(\d{6})\d*", r".\1", p[1]).replace("Z", "+00:00")
     try:
-        ts = dt.datetime.fromisoformat(t)
+        ts = parse(p[1])
     except ValueError:
+        newest[p[0]] = None          # 시각을 모르는 프로젝트는 지우지 않는다
         continue
-    newest[p[0]] = max(newest.get(p[0], ts), ts)
-print(" ".join(k for k, v in newest.items() if (now - v).total_seconds() > limit))
-' "$STALE_MIN" 2>/dev/null)
+    if p[0] in newest and newest[p[0]] is None:
+        continue
+    newest[p[0]] = max(newest.get(p[0]) or ts, ts)
+print(" ".join(k for k, v in newest.items() if v is not None and (now - v).total_seconds() > limit))
+' "$STALE_MIN" "$now" 2>/dev/null)
   for p in $projects; do
     docker compose -p "$p" -f "$COMPOSE_FILE_PATH" --profile client down -v --remove-orphans --timeout 5 >/dev/null 2>&1 && n=$((n + 1))
+    # 컨테이너 없이 볼륨만 남은 프로젝트도 지운다 (2차 리뷰 Open Question)
+    # shellcheck disable=SC2046  # 볼륨 이름 목록 — 공백 없는 이름이다
+    docker volume rm $(docker volume ls -q --filter "label=com.docker.compose.project=$p" 2>/dev/null) >/dev/null 2>&1
   done
   [ $n -gt 0 ] && printf '%s\n' "이전 실행이 남긴 MobSF 스택 ${n}개(${STALE_MIN}분 이상 지난 것)를 지웠습니다." >>"$WARNINGS_FILE"
   find "$SEC_DATA/reports" -mindepth 3 -maxdepth 3 -name mobsf-full.json -mmin +"$STALE_MIN" -exec rm -f {} + 2>/dev/null
@@ -204,6 +220,8 @@ cleanup() {
     kill "$pid_gitleaks" 2>/dev/null
     [ -s "$GITLEAKS_CID" ] && docker rm -f "$(cat "$GITLEAKS_CID")" >/dev/null 2>&1
   fi
+  # cidfile 이 써지기 전에 중단되면 Gitleaks 컨테이너는 스스로 끝날 때까지 남는다(--rm, 네트워크 없음). 백그라운드
+  # compose run CLI 는 down 으로 컨테이너가 사라지면 함께 끝난다 (2차 리뷰 NN5)
   rm -f "$GITLEAKS_CID"
   [ $STACK_UP -eq 1 ] && stack_down
   if [ $STACK_UP -eq 1 ]; then
@@ -213,7 +231,8 @@ cleanup() {
   rm -f "$RAW/mobsf-full.json"
 }
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+trap 'exit 130' INT
+trap 'exit 143' TERM
 cleanup_stale
 
 # --- Gitleaks: 산출물(ZIP) 안의 텍스트 파일 (N0) --------------------------------------------------------
@@ -274,10 +293,13 @@ try:
     socket.create_connection(("1.1.1.1", 443), timeout=3); r.append("ip")
 except OSError:
     pass
+# 프록시 환경변수가 있으면 MobSF 의 requests(trust_env)가 internal 네트워크에서 닿는 프록시로 나갈 수 있다 (2차 리뷰 Open Question)
+import os
+r += ["proxy-env:" + k for k in os.environ if k.lower() in ("http_proxy", "https_proxy", "all_proxy")]
 print("isolated" if not r else "LEAK " + " ".join(r))
 ' 2>&1 | tail -n 1)
   if [ "$iso" != isolated ]; then
-    record mobsf failed - "격리 확인 실패 — MobSF 컨테이너에서 외부 이름 풀이·연결이 됩니다(${iso:-확인 불가}). 분석하지 않았습니다. Docker 엔진을 최신으로 올리세요 (CVE-2024-29018)"
+    record mobsf failed - "격리 확인 실패 — MobSF 컨테이너에서 외부 이름 풀이·연결·프록시 설정이 확인됩니다(${iso:-확인 불가}). 앱을 올리지 않았습니다. Docker 엔진 버전(예: CVE-2024-29018)·~/.docker/config.json 의 proxies·런타임 네트워크 설정을 확인하세요"
     stack_down
     return
   fi
