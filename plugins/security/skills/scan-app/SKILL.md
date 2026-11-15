@@ -22,7 +22,8 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/scan-app.sh:*), Read(~/.local/
 - 인자가 비어 있으면 실행하지 말고 점검할 APK·AAB·IPA 경로를 물어본다. 폴더를 주면 그 안의 산출물(`build/app/outputs/…`, Xcode Export 폴더 등)을 찾아 어느 파일을 점검할지 확인한다 — 여러 개면 릴리스 빌드를 권한다.
 - 스크립트는 옵션을 받지 않는다. 도구를 직접 `docker run`·`docker compose` 하지 않는다.
 - 스크립트가 **사전 점검(D1~D7)**, **산출물 검사 실패**(ZIP 아님·500MB 초과 등), **`update.sh` 안내**로 끝나면 그 메시지를 그대로 전하고 멈춘다. `update.sh` 는 외부와 통신하므로 **사용자가 터미널에서 직접** 실행해야 한다 — 대신 실행하지 않는다. MobSF 이미지는 약 2.5GB 이고 Docker VM 메모리 8GB 를 권장한다(D5 경고).
-- 분석은 수십 초~수 분 걸린다. 성공하면 stdout 마지막 줄이 `summary.md` 경로다.
+- 분석은 수십 초~수십 분 걸린다(MobSF 기동만 약 30초, 큰 앱은 디컴파일이 길다). Bash 도구의 기본 시간 제한(2분)에 걸려 중간에 끊기지 않도록 **`run_in_background: true`로 실행하고 완료 알림을 기다린다** — 기다리는 동안 출력 파일을 짧은 간격으로 확인하지 않는다. 백그라운드를 쓸 수 없으면 `timeout: 600000`을 준다. 성공하면 stdout 마지막 줄이 `summary.md` 경로다.
+- 스크립트가 중간에 강제로 끝나도 남은 MobSF 스택·원본 리포트는 다음 실행이 지운다(3시간 지난 것). 사용자에게 `docker compose down`을 직접 하라고 하지 않는다 — 스크립트가 경고로 안내한 경우만 그대로 전한다.
 - `DWK_SECURITY_DATA_DIR`로 데이터 폴더를 바꾼 사용자는 리포트를 열 때마다 권한 확인이 뜬다 — `settings.json`의 `permissions.allow`에 `Read(/절대/경로/reports/**)` 규칙을 추가하라고 안내한다.
 
 ## 2. 결과 읽기
