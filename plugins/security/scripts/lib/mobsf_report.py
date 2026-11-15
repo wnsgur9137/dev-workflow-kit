@@ -74,33 +74,69 @@ def platform_of(report) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 앱이 정하는 식별자 (PR #32 리뷰 W1)
+# ---------------------------------------------------------------------------
+# 디컴파일 클래스 경로·ZIP 항목 이름·NSC 도메인·권한 이름·바이너리 이름은 앱(공격자)이 마음대로 정한다.
+# summary 에서는 이 값들이 코드 블록 밖(인라인 코드·표)에 놓이므로, 경로·식별자 문자만 남기고 나머지는 '?' 로 바꾼다.
+_UNSAFE_IDENT_CHAR = re.compile(r"[^A-Za-z0-9._/$@+:,*\-\[\]]")
+_QMARK_RUN = re.compile(r"\?{2,}")
+
+
+def safe_ident(text, limit: int = 160) -> str | None:
+    if text is None:
+        return None
+    t = _QMARK_RUN.sub("?", _UNSAFE_IDENT_CHAR.sub("?", str(text)))
+    if not t.strip("?"):
+        return None
+    return t if len(t) <= limit else t[: limit - 1] + "…"
+
+
+def _d(v) -> dict:
+    return v if isinstance(v, dict) else {}
+
+
+def _l(v) -> list:
+    return v if isinstance(v, list) else []
+
+
+# ---------------------------------------------------------------------------
 # 정제 (raw 보관본)
 # ---------------------------------------------------------------------------
 _DROP_KEYS = {"strings", "secrets", "logs", "files", "base_url", "dwd_dir", "icon_path", "info_plist",
               "playstore_details", "appstore_details", "sbom"}
+SANITIZE_LIST_MAX = 2000
 
 
-def sanitize(report, mask):
-    """raw/mobsf.json 으로 남길 사본. mask(str)->str 는 normalize.clean_text 계열(시크릿 재마스킹)."""
+def sanitize(report, mask, mask_ident=None):
+    """raw/mobsf.json 으로 남길 사본. mask(str)->str 는 normalize.clean_text 계열(시크릿 재마스킹),
+    mask_ident 는 경로·식별자용(고엔트로피 패턴을 쓰지 않아 긴 경로가 [MASKED-TOKEN] 이 되지 않는다, 리뷰 S4).
+    사전 키도 같은 방식으로 가린다."""
+    mask_ident = mask_ident or mask
+
+    def m(v: str) -> str:
+        # 공백 없이 '/' 가 든 값은 경로로 본다
+        return mask_ident(v) if ("/" in v and not any(c.isspace() for c in v)) else mask(v)
+
     def walk(v, depth=0):
         if depth > 40:
             return "(깊이 제한)"
         if isinstance(v, dict):
-            return {str(k)[:200]: walk(x, depth + 1) for k, x in v.items()}
+            return {m(str(k))[:200]: walk(x, depth + 1) for k, x in v.items()}
         if isinstance(v, list):
-            return [walk(x, depth + 1) for x in v[:2000]]
+            return [walk(x, depth + 1) for x in v[:SANITIZE_LIST_MAX]]
         if isinstance(v, str):
-            return mask(v)
+            return m(v)
         return v
 
     out = {}
     for k, v in (report or {}).items():
+        k = m(str(k))[:200]
         if k in _DROP_KEYS:
             if isinstance(v, list):
                 out[k] = {"(정제됨)": "원문은 보관하지 않습니다", "count": len(v)}
             elif isinstance(v, dict):
                 out[k] = {"(정제됨)": "원문은 보관하지 않습니다",
-                          "count": {str(a)[:60]: (len(b) if isinstance(b, (list, dict)) else 1) for a, b in v.items()}}
+                          "count": {m(str(a))[:60]: (len(b) if isinstance(b, (list, dict)) else 1) for a, b in v.items()}}
             else:
                 out[k] = "(정제됨)"
             continue
@@ -116,135 +152,184 @@ def _first_line(lines) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _secret_key_name(s: str) -> str | None:
-    """'"google_api_key" : "AIza…"' → google_api_key. 키 이름 문자만 남긴다 (값은 버린다)."""
-    m = re.match(r'\s*"?([A-Za-z0-9_.\-]{1,80})"?\s*:', str(s or ""))
-    return m.group(1) if m else None
+_KEY_NAME = re.compile(r'\s*"?([A-Za-z][A-Za-z0-9_.\-]{0,59})"?\s*:')
+_DIGIT_RUN = re.compile(r"\d{4}")
+
+
+def _secret_key_name(s) -> str | None:
+    """'"google_api_key" : "AIza…"' → google_api_key. 값은 버린다.
+    키 자리에 값이 온 형식('"MyRealPassw0rdValue" : ""')이 이름으로 남지 않게, 이름처럼 보일 때만 돌려준다 (리뷰 S1):
+    영문자로 시작, 숫자 비율 25% 이하·4자리 연속 숫자 없음, 구분자(_ . -) 없는 이름은 16자 이하의 소문자 시작."""
+    mt = _KEY_NAME.match(str(s or ""))
+    if not mt:
+        return None
+    k = mt.group(1)
+    digits = sum(c.isdigit() for c in k)
+    if digits * 4 > len(k) or _DIGIT_RUN.search(k):
+        return None
+    if not re.search(r"[_.\-]", k) and (len(k) > 16 or not k[0].islower()):
+        return None
+    return k
 
 
 def is_debug_signed(report) -> bool:
-    info = str(((report or {}).get("certificate_analysis") or {}).get("certificate_info") or "")
+    info = str(_d(_d(report).get("certificate_analysis")).get("certificate_info") or "")
     return "CN=Android Debug" in info
+
+
+def _ref(v) -> str:
+    """'CWE-312: Cleartext …' → 'CWE-312' (None·숫자도 받는다, 리뷰 W7)."""
+    return str(v or "").split(":")[0].strip()
 
 
 def parse(report, clean, ident, title_max: int, evidence_max: int, secret_evidence: str, profile: str,
           converted_aab: bool = False):
     """→ (findings 원형 목록, 경고 목록). 각 원형은 normalize 가 id·정렬을 붙인다.
     clean(text, limit, single_line) · ident(text, limit) 는 normalize 의 정제 함수.
-    converted_aab: 툴킷이 AAB 를 서명 없는 universal APK 로 바꿔 올렸다 — 서명 결과는 사용자 빌드의 것이 아니므로 뺀다."""
+    converted_aab: 툴킷이 AAB 를 서명 없는 universal APK 로 바꿔 올렸다 — 서명 결과는 사용자 빌드의 것이 아니므로 뺀다.
+    섹션 하나의 구조가 예상과 달라도 그 섹션만 빠지고 경고로 남는다 (리뷰 W7)."""
     findings, warnings = [], []
     if not isinstance(report, dict):
         raise ValueError("MobSF 리포트 최상위가 객체가 아닙니다")
     plat = platform_of(report)
     debug_signed = is_debug_signed(report)
 
-    def add(section, key, severity, title, desc="", file=None, line=None, package=None, refs=(), fix=""):
+    def add(section, key, severity, title, desc="", file=None, line=None, package=None, refs=(), fix="",
+            trusted_file=False):
         sev = _sev(severity)
         if sev is None:
             return
         rule_key = f"{section}.{key}"
         if rule_key in DOWNGRADE_TO_INFO:
             sev = "info"
-        references = [clean(r, 60, True) for r in refs if r][:5]
+        references = [x for x in (safe_ident(clean(r, 60, True), 60) for r in refs if r) if x][:5]
         src = SOURCE_RULES.get(rule_key) or next((v for p, v in _SOURCE_RULE_PREFIXES if rule_key.startswith(p)), None)
         if src and src.startswith(plat + "."):
-            references.append(clean(f"scan-code: {src}", 60, True))
+            references.append(f"scan-code: {src}")
         if rule_key == "manifest.app-is-debuggable" and debug_signed:
             fix = (fix + " " if fix else "") + "디버그 키로 서명된 빌드입니다 — 디버그 빌드의 debuggable 은 정상이므로 릴리스 빌드(assembleRelease·bundleRelease)로 다시 점검하세요."
+        # 위치는 툴킷이 정한 고정 문구(trusted_file)가 아니면 앱이 정한 값이다 → 식별자 문자만 (W1)
+        loc = ident(file, 300) if (file and trusted_file) else (safe_ident(ident(file, 300), 200) if file else None)
         findings.append({
             "rule_id": ident(f"mobsf.{rule_key}", 120),
             "severity": sev,
             "category": "secret" if section == "secret" else "mobile",
             "profile": profile,
             "title": clean(title, title_max, True),
-            "file": ident(file, 300) if file else None,
+            "file": loc,
             "line": line if isinstance(line, int) else None,
-            "package": ident(package, 120) if package else None,
+            "package": safe_ident(ident(package, 120), 120) if package else None,
             "evidence": clean(desc, evidence_max, True) if section != "secret" else secret_evidence,
             "fix_hint": clean(fix, evidence_max, True),
             "references": references,
         })
 
     def capped(items, name):
-        items = list(items or [])
+        items = _l(items)
         if len(items) > MAX_PER_SECTION:
-            warnings.append(f"MobSF {name} 결과 {len(items)}건 중 {MAX_PER_SECTION}건만 리포트에 넣었습니다 (raw/mobsf.json 참고).")
+            warnings.append(f"MobSF {name} 결과 {len(items)}건 중 {MAX_PER_SECTION}건만 리포트에 넣었습니다 "
+                            f"(raw/mobsf.json 에도 목록마다 {SANITIZE_LIST_MAX}건까지만 남습니다).")
         return items[:MAX_PER_SECTION]
 
-    # Android 매니페스트
-    for f in capped(((report.get("manifest_analysis") or {}).get("manifest_findings")), "manifest"):
-        if isinstance(f, dict):
-            add("manifest", _slug(f.get("rule") or f.get("title")), f.get("severity"), f.get("title") or f.get("rule"),
-                f.get("description"), file="AndroidManifest.xml")
-    # Android network_security_config
-    for f in capped(((report.get("network_security") or {}).get("network_findings")), "network_security"):
-        if isinstance(f, dict):
-            scope = ", ".join(str(s) for s in (f.get("scope") or [])[:5])
-            add("network", _network_key(f.get("description")), f.get("severity"), f.get("description"),
-                f"scope: {scope}", file="res/xml (networkSecurityConfig)", package=scope or None)
-    # 서명 인증서
-    if converted_aab:
-        warnings.append("AAB 의 서명은 점검하지 않았습니다 — 툴킷이 만든 universal APK 는 서명되지 않으므로 MobSF 서명 결과를 뺐습니다. "
-                        "업로드 키 서명은 Play Console·apksigner 로 확인하세요.")
-    for f in ([] if converted_aab else
-              capped(((report.get("certificate_analysis") or {}).get("certificate_findings")), "certificate")):
-        if isinstance(f, (list, tuple)) and len(f) >= 3:
-            add("cert", _slug(f[2]), f[0], f[2], f[1])
-    # 코드 분석 (디컴파일 소스 경로·줄)
-    for key, v in list(((report.get("code_analysis") or {}).get("findings") or {}).items())[:MAX_PER_SECTION]:
-        if not isinstance(v, dict):
-            continue
-        md = v.get("metadata") or {}
-        refs = [md.get("cwe", "").split(":")[0], md.get("masvs"), md.get("owasp-mobile", "").split(":")[0]]
-        files = list((v.get("files") or {}).items())
-        if not files:
-            add("code", _slug(key), md.get("severity"), md.get("description") or key, refs=refs)
-        for path, lines in files[:MAX_FILES_PER_RULE]:
-            add("code", _slug(key), md.get("severity"), md.get("description") or key,
-                file=path, line=_first_line(lines), refs=refs)
-        if len(files) > MAX_FILES_PER_RULE:
-            warnings.append(f"MobSF 코드 분석 {_slug(key)} 은 파일 {len(files)}개 중 {MAX_FILES_PER_RULE}개만 넣었습니다.")
-    # 바이너리 (Android .so 목록 / iOS findings 사전)
-    ba = report.get("binary_analysis")
-    if isinstance(ba, dict):
-        for title, v in list((ba.get("findings") or {}).items())[:MAX_PER_SECTION]:
-            if isinstance(v, dict):
-                add("binary", _slug(title), v.get("severity"), title, v.get("detailed_desc"),
-                    refs=[str(v.get("cwe", "")).split(":")[0], v.get("masvs")])
-    elif isinstance(ba, list):
-        for item in capped(ba, "binary_analysis"):
-            _protections(add, "so", item)
-    # iOS 실행 파일·동적 라이브러리·프레임워크의 보호 기법
-    if isinstance(report.get("macho_analysis"), dict):
-        _protections(add, "macho", report["macho_analysis"])
-    for sec in ("dylib_analysis", "framework_analysis"):
-        for item in capped(report.get(sec), sec):
-            _protections(add, "dylib", item)
-    # iOS ATS
-    for f in capped(((report.get("ats_analysis") or {}).get("ats_findings")), "ats"):
-        if isinstance(f, dict):
-            add("ats", _slug(f.get("issue")), f.get("severity"), f.get("issue"), f.get("description"), file="Info.plist")
-    # 파일 분석 (인증서·키 파일 포함 등). iOS 의 'Plist Files' 같은 목록성 항목은 뺀다
-    for f in capped(report.get("file_analysis"), "file_analysis"):
-        if not isinstance(f, dict):
-            continue
-        name = f.get("finding") or f.get("issue") or ""
-        if not re.search(r"(?i)cert|key|keystore|database|sqlite|credential", name):
-            continue
-        for path in (f.get("files") or [])[:MAX_FILES_PER_RULE]:
-            p = path.get("file_path") if isinstance(path, dict) else path
-            add("file", _slug(name), "warning", name, file=p)
-    # 위험 권한 (목록성 정보 — info)
-    for name, v in list((report.get("permissions") or {}).items())[:MAX_PER_SECTION]:
-        if isinstance(v, dict) and str(v.get("status")).lower() == "dangerous":
-            add("permission", _slug(name), "info", f"위험 권한 사용: {name}", v.get("info"), package=name)
-    # 하드코딩 시크릿 후보 — 키 이름만 남기고 값은 버린다
-    secrets = report.get("secrets") or []
-    for s in capped(secrets, "secrets"):
-        key = _secret_key_name(s)
-        add("secret", "hardcoded", "high", "앱에 하드코딩된 시크릿 후보" + (f" ({key})" if key else ""),
-            file="(앱 리소스·코드 문자열 — MobSF 는 파일 위치를 주지 않음)", package=key, refs=["CWE-798"],
-            fix="클라이언트에 넣은 키는 공개된다고 가정하세요 — 키를 폐기(rotate)하고 서버 프록시나 키 제한(패키지명·번들 ID·API 범위)으로 옮기세요.")
+    def manifest():
+        for f in capped(_d(report.get("manifest_analysis")).get("manifest_findings"), "manifest"):
+            if isinstance(f, dict):
+                add("manifest", _slug(f.get("rule") or f.get("title")), f.get("severity"), f.get("title") or f.get("rule"),
+                    f.get("description"), file="AndroidManifest.xml", trusted_file=True)
+
+    def network():
+        for f in capped(_d(report.get("network_security")).get("network_findings"), "network_security"):
+            if isinstance(f, dict):
+                scope = ", ".join(str(x) for x in _l(f.get("scope"))[:5])
+                add("network", _network_key(f.get("description")), f.get("severity"), f.get("description"),
+                    f"scope: {scope}", file="res/xml (networkSecurityConfig)", trusted_file=True,
+                    package=scope.replace(", ", ",") or None)
+
+    def certificate():
+        if converted_aab:
+            warnings.append("AAB 의 서명은 점검하지 않았습니다 — 툴킷이 만든 universal APK 는 서명되지 않으므로 MobSF 서명 결과를 뺐습니다. "
+                            "업로드 키 서명은 Play Console·apksigner 로 확인하세요.")
+            return
+        for f in capped(_d(report.get("certificate_analysis")).get("certificate_findings"), "certificate"):
+            if isinstance(f, (list, tuple)) and len(f) >= 3:
+                add("cert", _slug(f[2]), f[0], f[2], f[1])
+
+    def code():
+        for key, v in list(_d(_d(report.get("code_analysis")).get("findings")).items())[:MAX_PER_SECTION]:
+            if not isinstance(v, dict):
+                continue
+            md = _d(v.get("metadata"))
+            refs = [_ref(md.get("cwe")), md.get("masvs"), _ref(md.get("owasp-mobile"))]
+            files = list(_d(v.get("files")).items())
+            if not files:
+                add("code", _slug(key), md.get("severity"), md.get("description") or key, refs=refs)
+            for path, lines in files[:MAX_FILES_PER_RULE]:
+                add("code", _slug(key), md.get("severity"), md.get("description") or key,
+                    file=path, line=_first_line(lines), refs=refs)
+            if len(files) > MAX_FILES_PER_RULE:
+                warnings.append(f"MobSF 코드 분석 {_slug(key)} 은 파일 {len(files)}개 중 {MAX_FILES_PER_RULE}개만 넣었습니다.")
+
+    def binary():
+        ba = report.get("binary_analysis")
+        if isinstance(ba, dict):
+            for title, v in list(_d(ba.get("findings")).items())[:MAX_PER_SECTION]:
+                if isinstance(v, dict):
+                    add("binary", _slug(title), v.get("severity"), title, v.get("detailed_desc"),
+                        refs=[_ref(v.get("cwe")), v.get("masvs")])
+        else:
+            for item in capped(ba, "binary_analysis"):
+                _protections(add, "so", item)
+
+    def macho():
+        if isinstance(report.get("macho_analysis"), dict):
+            _protections(add, "macho", report["macho_analysis"])
+        for sec in ("dylib_analysis", "framework_analysis"):
+            for item in capped(report.get(sec), sec):
+                _protections(add, "dylib", item)
+
+    def ats():
+        for f in capped(_d(report.get("ats_analysis")).get("ats_findings"), "ats"):
+            if isinstance(f, dict):
+                add("ats", _slug(f.get("issue")), f.get("severity"), f.get("issue"), f.get("description"),
+                    file="Info.plist", trusted_file=True)
+
+    def file_analysis():
+        # 인증서·키 파일 포함 등. iOS 의 'Plist Files' 같은 목록성 항목은 뺀다
+        for f in capped(report.get("file_analysis"), "file_analysis"):
+            if not isinstance(f, dict):
+                continue
+            name = str(f.get("finding") or f.get("issue") or "")
+            if not re.search(r"(?i)cert|key|keystore|database|sqlite|credential", name):
+                continue
+            for path in _l(f.get("files"))[:MAX_FILES_PER_RULE]:
+                p = path.get("file_path") if isinstance(path, dict) else path
+                if isinstance(p, str):
+                    add("file", _slug(name), "warning", name, file=p)
+
+    def permissions():
+        # 위험 권한 (목록성 정보 — info). 이름은 앱이 정하므로 제목·위치 모두 식별자 필터를 거친다
+        for name, v in list(_d(report.get("permissions")).items())[:MAX_PER_SECTION]:
+            if isinstance(v, dict) and str(v.get("status")).lower() == "dangerous":
+                add("permission", _slug(name), "info", f"위험 권한 사용: {safe_ident(name, 120) or '?'}", v.get("info"),
+                    package=name)
+
+    def secrets():
+        # 하드코딩 시크릿 후보 — 키 이름만 남기고 값은 버린다
+        for s in capped(report.get("secrets"), "secrets"):
+            key = _secret_key_name(s)
+            add("secret", "hardcoded", "high", "앱에 하드코딩된 시크릿 후보" + (f" ({key})" if key else ""),
+                file="(앱 리소스·코드 문자열 — MobSF 는 파일 위치를 주지 않음)", trusted_file=True, package=key,
+                refs=["CWE-798"],
+                fix="클라이언트에 넣은 키는 공개된다고 가정하세요 — 키를 폐기(rotate)하고 서버 프록시나 키 제한(패키지명·번들 ID·API 범위)으로 옮기세요.")
+
+    for name, section in (("manifest", manifest), ("network_security", network), ("certificate", certificate),
+                          ("code_analysis", code), ("binary_analysis", binary), ("macho·dylib", macho),
+                          ("ats", ats), ("file_analysis", file_analysis), ("permissions", permissions),
+                          ("secrets", secrets)):
+        try:
+            section()
+        except Exception as ex:  # noqa: BLE001 — 리포트는 신뢰하지 않는 입력이다. 나머지 섹션은 계속한다
+            warnings.append(f"MobSF {name} 섹션을 해석하지 못해 그 결과는 빠졌습니다: {type(ex).__name__}")
     return findings, warnings
 
 
@@ -271,5 +356,5 @@ def _protections(add, section, item):
     name = str(item.get("name") or "")
     for k, v in item.items():
         if isinstance(v, dict) and "severity" in v and _sev(v.get("severity")) in ("high", "medium"):
-            add(section, _slug(k), v.get("severity"), f"{k}: {v.get('description') or ''}"[:200],
+            add(section, _slug(k), v.get("severity"), f"{_slug(k)}: {v.get('description') or ''}"[:200],
                 v.get("description"), file=name or None)

@@ -476,6 +476,9 @@ def parse_gitleaks(data, mode: str):
     for r in data or []:
         rule = r.get("RuleID", "gitleaks")
         file = strip_container_prefix(r.get("File", ""))
+        if mode == "artifact":
+            # ZIP 항목 이름은 앱(공격자)이 정한다 — summary 의 인라인 코드에 놓이므로 식별자 문자만 (PR #32 리뷰 W1)
+            file = _mobsf.safe_ident(file, 200) or "?"
         line = r.get("StartLine")
         commit = (r.get("Commit") or "")[:12]
         source = (f"git 히스토리 커밋 {commit[:7]}" if mode == "git" and commit
@@ -950,7 +953,8 @@ def main(argv=None) -> int:
             mobsf_report = data
             # raw 보관본은 시크릿·문자열 덤프를 뺀 정제본만 남긴다
             _write(os.path.join(raw, "mobsf.json"),
-                   json.dumps(_mobsf.sanitize(data, lambda t: clean_text(t, 4000)), ensure_ascii=False, indent=1) + "\n")
+                   json.dumps(_mobsf.sanitize(data, lambda t: clean_text(t, 4000), lambda t: clean_ident(t, 4000)),
+                              ensure_ascii=False, indent=1) + "\n")
             try:
                 f, w = parse_mobsf(data, platform_profile, args.target.lower().endswith(".aab"))
                 findings.extend(f)
