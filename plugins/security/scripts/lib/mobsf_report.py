@@ -77,17 +77,20 @@ def platform_of(report) -> str:
 # 앱이 정하는 식별자 (PR #32 리뷰 W1)
 # ---------------------------------------------------------------------------
 # 디컴파일 클래스 경로·ZIP 항목 이름·NSC 도메인·권한 이름·바이너리 이름은 앱(공격자)이 마음대로 정한다.
-# summary 에서는 이 값들이 코드 블록 밖(인라인 코드·표)에 놓이므로, 경로·식별자 문자만 남기고 나머지는 '?' 로 바꾼다.
-_UNSAFE_IDENT_CHAR = re.compile(r"[^A-Za-z0-9._/$@+:,*\-\[\]]")
-_QMARK_RUN = re.compile(r"\?{2,}")
+# summary 에서는 이 값들이 코드 블록 밖(인라인 코드·표)에 놓이므로, 경로·식별자 문자 밖은 UTF-8 퍼센트 인코딩한다.
+# - 공백이 %20 이 되어 마크다운 구조(줄바꿈·백틱·표)를 만들 수 없고 문장으로 읽기도 어려워진다 (단어는 남는다, 2차 리뷰 NS1)
+# - 되돌릴 수 있는 표기라 서로 다른 이름이 같은 문자열로 모이지 않는다 — '?' 치환은 한글 파일 이름 두 개를 'assets/?.json'
+#   하나로 만들어 id 중복 제거에서 결과가 사라졌다 (2차 리뷰 NW2). '%' 자체도 인코딩한다.
+_SAFE_IDENT_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/$@+:,*-[]")
 
 
-def safe_ident(text, limit: int = 160) -> str | None:
-    if text is None:
+def safe_ident(text, limit: int = 200) -> str | None:
+    if text is None or text == "":
         return None
-    t = _QMARK_RUN.sub("?", _UNSAFE_IDENT_CHAR.sub("?", str(text)))
-    if not t.strip("?"):
-        return None
+    out = []
+    for ch in str(text):
+        out.append(ch if ch in _SAFE_IDENT_CHARS else "".join(f"%{b:02X}" for b in ch.encode("utf-8")))
+    t = "".join(out)
     return t if len(t) <= limit else t[: limit - 1] + "…"
 
 
@@ -107,40 +110,43 @@ _DROP_KEYS = {"strings", "secrets", "logs", "files", "base_url", "dwd_dir", "ico
 SANITIZE_LIST_MAX = 2000
 
 
+# 경로가 확실한 자리 — 이 자리의 문자열만 식별자용 마스킹(고엔트로피 패턴 없음)을 쓴다. 값의 모양('/' 가 있고 공백이 없음)으로
+# 고르면 URL 쿼리 토큰·'/' 가 든 base64 시크릿의 마스킹까지 꺼진다 (2차 리뷰 NW1)
+_PATH_VALUE_KEYS = {"file_path", "path", "name"}
+_PATH_KEYED_DICTS = {"files"}   # code_analysis.*.files = {경로: 줄}
+
+
 def sanitize(report, mask, mask_ident=None):
     """raw/mobsf.json 으로 남길 사본. mask(str)->str 는 normalize.clean_text 계열(시크릿 재마스킹),
-    mask_ident 는 경로·식별자용(고엔트로피 패턴을 쓰지 않아 긴 경로가 [MASKED-TOKEN] 이 되지 않는다, 리뷰 S4).
-    사전 키도 같은 방식으로 가린다."""
+    mask_ident 는 경로·식별자용(긴 경로가 [MASKED-TOKEN] 이 되지 않는다, 1차 리뷰 S4) — 경로가 확실한 자리에만 쓴다.
+    사전 키도 가린다."""
     mask_ident = mask_ident or mask
 
-    def m(v: str) -> str:
-        # 공백 없이 '/' 가 든 값은 경로로 본다
-        return mask_ident(v) if ("/" in v and not any(c.isspace() for c in v)) else mask(v)
-
-    def walk(v, depth=0):
+    def walk(v, depth=0, key=None):
         if depth > 40:
             return "(깊이 제한)"
         if isinstance(v, dict):
-            return {m(str(k))[:200]: walk(x, depth + 1) for k, x in v.items()}
+            kmask = mask_ident if key in _PATH_KEYED_DICTS else mask
+            return {kmask(str(k))[:300]: walk(x, depth + 1, str(k)) for k, x in v.items()}
         if isinstance(v, list):
-            return [walk(x, depth + 1) for x in v[:SANITIZE_LIST_MAX]]
+            return [walk(x, depth + 1, key) for x in v[:SANITIZE_LIST_MAX]]
         if isinstance(v, str):
-            return m(v)
+            return mask_ident(v) if key in _PATH_VALUE_KEYS else mask(v)
         return v
 
     out = {}
     for k, v in (report or {}).items():
-        k = m(str(k))[:200]
+        k = mask(str(k))[:200]
         if k in _DROP_KEYS:
             if isinstance(v, list):
                 out[k] = {"(정제됨)": "원문은 보관하지 않습니다", "count": len(v)}
             elif isinstance(v, dict):
                 out[k] = {"(정제됨)": "원문은 보관하지 않습니다",
-                          "count": {m(str(a))[:60]: (len(b) if isinstance(b, (list, dict)) else 1) for a, b in v.items()}}
+                          "count": {mask(str(a))[:60]: (len(b) if isinstance(b, (list, dict)) else 1) for a, b in v.items()}}
             else:
                 out[k] = "(정제됨)"
             continue
-        out[k] = walk(v)
+        out[k] = walk(v, 0, k)
     return out
 
 
@@ -193,6 +199,11 @@ def parse(report, clean, ident, title_max: int, evidence_max: int, secret_eviden
         raise ValueError("MobSF 리포트 최상위가 객체가 아닙니다")
     plat = platform_of(report)
     debug_signed = is_debug_signed(report)
+    # 섹션 타입이 예상과 다르면(MobSF 버전 차이·조작된 리포트) 조용히 0건이 되지 않게 알린다 (2차 리뷰 NS4)
+    for sec, types in _SECTION_TYPES.items():
+        v = report.get(sec)
+        if v is not None and not isinstance(v, types):
+            warnings.append(f"MobSF {sec} 형식이 예상과 달라(type {type(v).__name__}) 그 섹션의 결과는 빠졌습니다.")
 
     def add(section, key, severity, title, desc="", file=None, line=None, package=None, refs=(), fix="",
             trusted_file=False):
@@ -208,9 +219,11 @@ def parse(report, clean, ident, title_max: int, evidence_max: int, secret_eviden
             references.append(f"scan-code: {src}")
         if rule_key == "manifest.app-is-debuggable" and debug_signed:
             fix = (fix + " " if fix else "") + "디버그 키로 서명된 빌드입니다 — 디버그 빌드의 debuggable 은 정상이므로 릴리스 빌드(assembleRelease·bundleRelease)로 다시 점검하세요."
-        # 위치는 툴킷이 정한 고정 문구(trusted_file)가 아니면 앱이 정한 값이다 → 식별자 문자만 (W1)
-        loc = ident(file, 300) if (file and trusted_file) else (safe_ident(ident(file, 300), 200) if file else None)
+        # 위치는 툴킷이 정한 고정 문구(trusted_file)가 아니면 앱이 정한 값이다 → 식별자 문자 밖은 퍼센트 인코딩 (W1)
+        loc = ident(file, 300) if (file and trusted_file) else (safe_ident(ident(file, 300), 300) if file else None)
         findings.append({
+            # id 는 인코딩·절단 전의 값으로 계산한다 — 표시값이 같아져도 결과가 합쳐지지 않게 (2차 리뷰 NW2)
+            "id_parts": (str(file or ""), str(package or "")),
             "rule_id": ident(f"mobsf.{rule_key}", 120),
             "severity": sev,
             "category": "secret" if section == "secret" else "mobile",
@@ -218,7 +231,7 @@ def parse(report, clean, ident, title_max: int, evidence_max: int, secret_eviden
             "title": clean(title, title_max, True),
             "file": loc,
             "line": line if isinstance(line, int) else None,
-            "package": safe_ident(ident(package, 120), 120) if package else None,
+            "package": safe_ident(ident(package, 120), 200) if package else None,
             "evidence": clean(desc, evidence_max, True) if section != "secret" else secret_evidence,
             "fix_hint": clean(fix, evidence_max, True),
             "references": references,
@@ -310,7 +323,7 @@ def parse(report, clean, ident, title_max: int, evidence_max: int, secret_eviden
         # 위험 권한 (목록성 정보 — info). 이름은 앱이 정하므로 제목·위치 모두 식별자 필터를 거친다
         for name, v in list(_d(report.get("permissions")).items())[:MAX_PER_SECTION]:
             if isinstance(v, dict) and str(v.get("status")).lower() == "dangerous":
-                add("permission", _slug(name), "info", f"위험 권한 사용: {safe_ident(name, 120) or '?'}", v.get("info"),
+                add("permission", _slug(name), "info", f"위험 권한 사용: {safe_ident(name, 160) or '?'}", v.get("info"),
                     package=name)
 
     def secrets():
@@ -331,6 +344,13 @@ def parse(report, clean, ident, title_max: int, evidence_max: int, secret_eviden
         except Exception as ex:  # noqa: BLE001 — 리포트는 신뢰하지 않는 입력이다. 나머지 섹션은 계속한다
             warnings.append(f"MobSF {name} 섹션을 해석하지 못해 그 결과는 빠졌습니다: {type(ex).__name__}")
     return findings, warnings
+
+
+_SECTION_TYPES = {
+    "manifest_analysis": dict, "network_security": dict, "certificate_analysis": dict, "code_analysis": dict,
+    "binary_analysis": (dict, list), "macho_analysis": dict, "dylib_analysis": list, "framework_analysis": list,
+    "ats_analysis": dict, "file_analysis": list, "permissions": dict, "secrets": list,
+}
 
 
 def _network_key(desc) -> str:

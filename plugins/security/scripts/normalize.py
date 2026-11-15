@@ -476,9 +476,11 @@ def parse_gitleaks(data, mode: str):
     for r in data or []:
         rule = r.get("RuleID", "gitleaks")
         file = strip_container_prefix(r.get("File", ""))
+        id_file = file
         if mode == "artifact":
-            # ZIP 항목 이름은 앱(공격자)이 정한다 — summary 의 인라인 코드에 놓이므로 식별자 문자만 (PR #32 리뷰 W1)
-            file = _mobsf.safe_ident(file, 200) or "?"
+            # ZIP 항목 이름은 앱(공격자)이 정한다 — summary 의 인라인 코드에 놓이므로 식별자 문자 밖은 퍼센트 인코딩 (PR #32 리뷰 W1).
+            # id 는 인코딩 전 이름으로 계산한다 (2차 리뷰 NW2)
+            file = _mobsf.safe_ident(file, 300) or "?"
         line = r.get("StartLine")
         commit = (r.get("Commit") or "")[:12]
         source = (f"git 히스토리 커밋 {commit[:7]}" if mode == "git" and commit
@@ -486,7 +488,7 @@ def parse_gitleaks(data, mode: str):
         # --redact 를 강제하지만, 혹시 남은 원문이 있어도 다시 가린다
         evidence = clean_text(f"[{source}] {r.get('Match', '')}", EVIDENCE_MAX, True)
         out.append({
-            "id": finding_id("gitleaks", rule, file, line, mode, commit),
+            "id": finding_id("gitleaks", rule, id_file, line, mode, commit),
             "tool": "gitleaks",
             "rule_id": clean_text(rule, 120, True),
             "severity": "critical" if _GITLEAKS_CRITICAL.search(rule) else "high",
@@ -605,7 +607,7 @@ def parse_mobsf(data, platform_profile, converted_aab=False):
     out = []
     for r in raw:
         out.append({
-            "id": finding_id("mobsf", r["rule_id"], r["file"], r["line"], r["package"]),
+            "id": finding_id("mobsf", r["rule_id"], r["id_parts"][0], r["line"], r["id_parts"][1]),
             "tool": "mobsf",
             "rule_id": r["rule_id"],
             "severity": r["severity"],
