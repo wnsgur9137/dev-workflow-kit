@@ -36,7 +36,7 @@ flowchart LR
 - `mobsf`: digest 고정 이미지, **`ports` 미지정** → 호스트에서도 접근 불가. `cap_drop: ALL`·`no-new-privileges`·`pids_limit`·메모리 6GB 상한(압축 폭탄이 VM 전체를 멈추지 않게, 넘으면 `OOMKilled`를 summary 에 알림). 볼륨 크기는 제한하지 못하므로 압축 해제 총량 4GB 상한을 업로드 전에 건다. 업로드·디컴파일 결과·DB 는 실행마다 새로 만드는 볼륨(`mobsf-home`)에만 남는다. 루트 파일시스템은 읽기 전용으로 두지 못한다 — 기동 때 `makemigrations`가 코드 폴더에 파일을 만든다.
 - `mobsf-client`: **MobSF 이미지를 그대로 쓴다** (설계 초안의 "curl/python 최소 이미지" 대신 — 이미지를 하나 더 들이지 않고, AAB 변환에 필요한 java·bundletool·aapt2 가 이미 있다). 읽기 전용 루트·`cap_drop: ALL`·호스트 사용자로 실행, 산출물과 클라이언트 스크립트(`scripts/lib/mobsf_client.py`)만 읽기 전용으로 마운트한다. 리포트는 **stdout 으로만** 내보내고 호스트가 umask 077 로 쓴다 — 호스트로 쓰는 마운트가 없다.
 - 네트워크 `scan-internal`은 `internal: true` → 인터넷 차단. 실측(2026-11-15): 컨테이너에서 `1.1.1.1:80`·`8.8.8.8:53` 연결과 `example.com` DNS 조회가 즉시 실패하고, 같은 네트워크의 `mobsf` 이름만 풀린다. `PortBindings`는 `{}`.
-- **업로드 전 격리 확인**: Moby 26.0.0·25.0.5·23.0.11 미만은 internal 네트워크 컨테이너의 외부 DNS 질의를 dockerd 가 호스트에서 대신 보낸다(CVE-2024-29018) — 끌 수 없는 스토어·Firebase 조회가 DNS 로 새는 경로다. 그래서 실행마다 MobSF 컨테이너에서 `example.com`·`play.google.com` 이름 풀이와 `1.1.1.1:443` 연결을 시도하고, 하나라도 되면 **앱을 올리지 않고** 실패로 끝낸다.
+- **업로드 전 격리 확인**: Moby 26.0.0·25.0.5·23.0.11 미만은 internal 네트워크 컨테이너의 외부 DNS 질의를 dockerd 가 호스트에서 대신 보낸다(CVE-2024-29018) — 끌 수 없는 스토어·Firebase 조회가 DNS 로 새는 경로다. 그래서 실행마다 MobSF 컨테이너에서 `example.com`·`play.google.com` 이름 풀이와 `1.1.1.1:443` 연결을 시도하고, 프록시 환경변수(`~/.docker/config.json` 의 `proxies`가 넣는 `HTTP(S)_PROXY` 등 — MobSF 의 `requests`가 따름)도 본다. 하나라도 걸리면 **앱을 올리지 않고** 실패로 끝낸다. 정확히 `isolated`가 출력될 때만 통과한다(확인 자체가 실패해도 올리지 않음).
 
 ## REST API 흐름 (`mobsf_client.py`, 표준 라이브러리만)
 1. 준비 대기: `report_json`에 없는 hash 를 보내 500 미만 응답(보통 404)이 오면 준비됨 (`compose up --wait`의 헬스체크는 웹 로그인 페이지만 본다). 401 이면 키 오류로 중단
@@ -84,11 +84,11 @@ MobSF v4.6.4 는 AAB 를 bundletool 로 universal APK 로 바꾸는데, bundleto
 - iOS 리포트의 `app_type`은 언어 이름(`Objective C`·`Swift`)이다 — 플랫폼은 섹션(`manifest_analysis`/`ats_analysis`)으로 판정한다.
 - 디버그 키(`CN=Android Debug`) 서명이면 summary 경고와 `debuggable` 결과의 조치에 "릴리스 빌드로 다시 점검"을 붙인다.
 - 섹션당 300건, 코드 규칙당 20개 파일까지 넣고 넘으면 경고한다. 섹션 하나의 구조가 예상과 달라도(MobSF 버전 차이·조작된 앱) 그 섹션만 빠지고 경고로 남는다.
-- 위치(file·package)는 앱이 정하는 값이라 식별자 문자만 남긴다 → [[scan-app#단계 (`scripts/scan-app.sh`)]]. `secrets`의 키 이름은 이름처럼 보일 때만 남긴다(숫자 비율·연속 숫자·구분자 없는 긴 이름은 값으로 보고 버림).
+- 위치(file·package)는 앱이 정하는 값이라 식별자 문자 밖은 퍼센트 인코딩한다(id 는 인코딩 전 값으로) → [[scan-app#단계 (`scripts/scan-app.sh`)]]. 섹션 타입이 예상과 다르면 그 섹션은 빠지고 경고가 남는다. `secrets`의 키 이름은 이름처럼 보일 때만 남긴다(숫자 비율·연속 숫자·구분자 없는 긴 이름은 값으로 보고 버림).
 - 소스 점검 대응: `debuggable`·`allowBackup`·`usesCleartextTraffic`·nsc 평문·사용자 CA·ATS 결과의 `references`에 `scan-code: <규칙>`을 붙인다 → [[scan-app#소스 점검과 함께 볼 때]]
 
 ## raw 보관본
-MobSF 리포트에는 앱에서 뽑은 **시크릿 원문**(`secrets`)과 문자열 덤프(`strings`)가 그대로 들어 있다(실측). 원본(`raw/mobsf-full.json`)은 정규화 직후 지우고(오류·중단 시 trap, SIGKILL 이면 다음 실행이 3시간 뒤 정리), `raw/mobsf.json`에는 `strings`·`secrets`·`logs`·`files`·스토어 정보·`info_plist` 등을 **개수만** 남긴 정제본을 둔다. 나머지 문자열·사전 키도 시크릿 패턴 재마스킹을 거친다(경로 모양 값은 긴 경로가 가려지지 않게 식별자용 마스킹). 목록은 2000개까지만 남는다. → [[시크릿 처리]]
+MobSF 리포트에는 앱에서 뽑은 **시크릿 원문**(`secrets`)과 문자열 덤프(`strings`)가 그대로 들어 있다(실측). 원본(`raw/mobsf-full.json`)은 정규화 직후 지우고(오류·중단 시 trap, SIGKILL 이면 다음 실행이 3시간 뒤 정리), `raw/mobsf.json`에는 `strings`·`secrets`·`logs`·`files`·스토어 정보·`info_plist` 등을 **개수만** 남긴 정제본을 둔다. 나머지 문자열·사전 키도 시크릿 패턴 재마스킹(키=값·고엔트로피 포함)을 거친다. 경로가 확실한 자리(`files` 사전의 키, `file_path`·`path`·`name` 값)만 긴 경로가 가려지지 않게 식별자용 마스킹을 쓴다 — 값의 모양으로 고르면 URL 쿼리 토큰·`/`가 든 base64 시크릿이 드러난다(2차 리뷰 NW1). 목록은 2000개까지만 남는다. → [[시크릿 처리]]
 
 ## 보안 설정
 - 기본 계정 `mobsf/mobsf` 사용 안 함 — 관리자 비밀번호를 실행마다 무작위로 바꾸고, 호스트 포트가 없어 UI 자체를 쓰지 않는다 (Q6 결정)
