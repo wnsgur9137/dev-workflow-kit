@@ -93,12 +93,14 @@ def safe_ident(text, limit: int = 200) -> str | None:
     t = "".join(out)
     if len(t) <= limit:
         return t
-    cut = t[: limit - 1]
-    # '%XX' 중간에서 자르지 않는다 (3차 리뷰 NT4)
-    tail = cut[-2:]
-    if "%" in tail:
-        cut = cut[: len(cut) - 2 + tail.index("%")]
-    return cut + "…"
+    # 문자 단위로 자른다 — '%XX' 중간이나 UTF-8 한 글자의 바이트 중간에서 끊으면 디코딩이 깨진다 (3차 NT4·4차 S1)
+    acc, n = [], 0
+    for piece in out:
+        if n + len(piece) > limit - 1:
+            break
+        acc.append(piece)
+        n += len(piece)
+    return "".join(acc) + "…"
 
 
 def _d(v) -> dict:

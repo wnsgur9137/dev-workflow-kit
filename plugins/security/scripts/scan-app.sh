@@ -159,7 +159,8 @@ tail_log() { tail -n 3 "$1" 2>/dev/null | redact_secrets | tr '\n\t' '  ' | cut 
 # (리뷰 W5). 동시에 도는 다른 실행을 건드리지 않게 가장 최근 활동이 STALE_MIN 분보다 오래된 것만 지운다 — 한 실행의
 # 최대 시간(기동 300초 + AAB 변환 900초 + 준비 180초 + 업로드 600초 + 스캔 3600초 + 리포트 600초 ≈ 104분)보다 길다.
 # 생성 시각은 엔진(VM) 시계로 찍히므로 비교 기준도 엔진 시계(docker info .SystemTime)를 쓴다 — 잠자기 뒤 VM 시계가
-# 밀려도 방금 시작한 다른 실행을 오래된 것으로 보지 않게 (2차 리뷰 NS3). 엔진 시각을 모르면 정리하지 않는다.
+# 밀려도 방금 시작한 다른 실행을 오래된 것으로 보지 않게 (2차 리뷰 NS3). 엔진 시각을 모르면 스택은 정리하지 않는다(원본
+# 리포트는 호스트 파일 시각으로 늘 정리한다).
 STALE_MIN=180
 cleanup_stale() {
   local ids vols projects p n=0 now
@@ -302,7 +303,7 @@ except OSError:
 import os
 # compose.yml 이 이 변수들을 빈 값으로 덮어쓰므로, 값이 있으면 무언가가 다시 넣은 것이다 (3차 리뷰 NS-B)
 r += ["proxy-env:" + k for k, v in os.environ.items()
-      if k.lower() in ("http_proxy", "https_proxy", "all_proxy") and v.strip()]
+      if k.lower() in ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy") and v.strip()]
 print("isolated" if not r else "LEAK " + " ".join(r))
 ' 2>&1 | tail -n 1)
   if [ "$iso" != isolated ]; then

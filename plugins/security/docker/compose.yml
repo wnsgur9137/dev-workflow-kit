@@ -34,9 +34,11 @@ services:
       # requests 가 프록시로 나가려는 경로를 남기지 않는다. scan-app.sh 의 격리 확인은 값이 남아 있으면 중단한다
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
+      FTP_PROXY: ""
       ALL_PROXY: ""
       http_proxy: ""
       https_proxy: ""
+      ftp_proxy: ""
       all_proxy: ""
     # 업로드·디컴파일 결과·DB 는 실행마다 새로 만드는 볼륨에만 남는다 (이미지에 든 jadx 를 볼륨이 처음 한 번 복사한다)
     volumes:
@@ -61,9 +63,11 @@ services:
       DWK_MOBSF_API_KEY: ${DWK_MOBSF_API_KEY:?}
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
+      FTP_PROXY: ""
       ALL_PROXY: ""
       http_proxy: ""
       https_proxy: ""
+      ftp_proxy: ""
       all_proxy: ""
     tmpfs:
       - /tmp:rw,size=2g
