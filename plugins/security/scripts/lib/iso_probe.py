@@ -1,7 +1,12 @@
 """scan-web 격리 확인 — ZAP 컨테이너 안에서 스캔 직전에 실행한다 (V1 N2, docs/security/04 보안/네트워크 격리.md).
 
-scan-web.sh 가 이 파일 내용을 `python3 -I -c "<내용>" <대상 host> <대상 port>` 로 넘긴다 (ZAP 컨테이너에는 마운트가 없다).
-표준 라이브러리만 쓰고, 마지막 줄에 `isolated` 또는 `LEAK <항목…>` 을 쓴다. 하나라도 걸리면 scan-web.sh 는 대상에 요청하지 않는다.
+scan-web.sh 가 이 파일 내용을 `python3 -I -c "<내용>" <대상 host> <대상 port> <시작 URL>` 로 넘긴다 (ZAP 컨테이너에는 마운트가 없다).
+표준 라이브러리만 쓰고, 마지막 줄에 결과 하나를 쓴다:
+  LEAK <항목…>          격리가 깨졌다 — 대상에 요청하지 않는다
+  UNREACHABLE <사유>    격리는 정상인데 프록시를 거쳐 시작 URL 에 닿지 않는다 — 스캔하지 않는다
+                        (서버가 안 떠 있거나 포트가 틀리면 ZAP 이 프록시의 500 오류 페이지를 대상으로 점검해 거짓 결과를 낸다,
+                         PR #34 2차 리뷰 W-B)
+  isolated              격리 정상 · 대상 도달
 
   dns:<이름>        인터넷 이름이 풀린다 (internal 네트워크의 DNS 가 밖으로 샌다, 예: CVE-2024-29018)
   ip                인터넷 IP 로 직접 연결된다
@@ -44,7 +49,7 @@ def probe(target_host, target_port, resolve=socket.getaddrinfo, connect=socket.c
     if proxy_open is None:
         proxy_open = urllib.request.build_opener(urllib.request.ProxyHandler({"http": PROXY})).open
     try:
-        proxy_open(PROBE_URL, timeout=6)
+        resp = proxy_open(PROBE_URL, timeout=6)
         leaks.append("proxy-allows-outside")
     except urllib.error.HTTPError as e:
         e.close()
@@ -52,10 +57,38 @@ def probe(target_host, target_port, resolve=socket.getaddrinfo, connect=socket.c
             leaks.append("proxy-status:%d" % e.code)
     except OSError:
         leaks.append("proxy-unreachable")
+    else:
+        resp.close()
     return leaks
+
+
+def reach(url, proxy_open=None):
+    """프록시를 거쳐 시작 URL 에 GET 한 번. 대상이 보낸 응답이면(상태 코드 무관) None, 닿지 않으면 사유.
+    tinyproxy 는 대상에 접속하지 못하면 'Server: tinyproxy' 인 5xx 를 돌려준다 (1.11.3 실측: 500 Unable to connect)."""
+    if proxy_open is None:
+        # 도달 여부만 본다 — 스테이징의 자체 서명 인증서로 거짓 실패하지 않게 검증하지 않는다 (ZAP 도 인증서 오류를 무시하고 점검한다)
+        import ssl
+        proxy_open = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": PROXY, "https": PROXY}),
+            urllib.request.HTTPSHandler(context=ssl._create_unverified_context())).open
+    try:
+        proxy_open(url, timeout=15).close()
+        return None
+    except urllib.error.HTTPError as e:
+        server = (e.headers.get("Server") if e.headers else "") or ""
+        e.close()
+        if e.code >= 500 and server.strip().lower().startswith("tinyproxy"):
+            return "proxy-%d" % e.code
+        return None
+    except OSError as e:
+        return type(e).__name__
 
 
 if __name__ == "__main__":
     socket.setdefaulttimeout(4)
     found = probe(sys.argv[1], sys.argv[2])
-    print("isolated" if not found else "LEAK " + " ".join(found))
+    if found:
+        print("LEAK " + " ".join(found))
+    else:
+        why = reach(sys.argv[3]) if len(sys.argv) > 3 else None
+        print("isolated" if why is None else "UNREACHABLE " + why)

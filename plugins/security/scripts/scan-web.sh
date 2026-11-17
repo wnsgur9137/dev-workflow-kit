@@ -127,6 +127,9 @@ case "${DWK_SEC_TEST_SCAN_TIMEOUT:-}" in
   '' | *[!0-9]*) ;;
   *) [ "$DWK_SEC_TEST_SCAN_TIMEOUT" -lt "$SCAN_TIMEOUT" ] && SCAN_TIMEOUT=$DWK_SEC_TEST_SCAN_TIMEOUT ;;
 esac
+if [ "$SCAN_TIMEOUT" -lt 1800 ]; then
+  printf '%s\n' "테스트 전용 시간 상한(${SCAN_TIMEOUT}초, DWK_SEC_TEST_SCAN_TIMEOUT)이 적용됐습니다 — 의도한 것이 아니면 셸에서 이 변수를 지우세요" >>"$WARNINGS_FILE"
+fi
 DWK_ZAP_IMAGE=$IMG_ZAP
 DWK_PROXY_IMAGE=$IMG_PROXY
 DWK_TARGET_URL=$TARGET_URL
@@ -216,14 +219,23 @@ run_zap() {
   #   허용목록 밖 확인용 이름은 .invalid 라 프록시가 필터에서 막고 이름 풀이도 하지 않는다 (차단 목록에서는 뺀다)
   # 검사 내용은 scripts/lib/iso_probe.py (ZAP 컨테이너에 마운트가 없으므로 내용을 -c 로 넘긴다). 대상 host:port 직접 연결도 본다
   iso=$(compose --profile scan run --rm --no-deps -T --entrypoint python3 zap -I -c "$(cat "$SEC_PLUGIN/scripts/lib/iso_probe.py")" \
-    "$ORIGIN_HOST" "$ORIGIN_PORT" 2>&1 | tail -n 1)
+    "$ORIGIN_HOST" "$ORIGIN_PORT" "$TARGET_URL" 2>&1 | tail -n 1)
+  case "$iso" in
+    "UNREACHABLE "*)
+      # 격리는 정상 — 대상에 닿지 않을 뿐이다. 그대로 스캔하면 ZAP 이 프록시의 500 오류 페이지를 점검해 거짓 결과를 낸다 (2차 리뷰 W-B)
+      record zap failed - "대상에 접속하지 못했습니다(${iso#UNREACHABLE }) — 점검하지 않았습니다. 서버가 떠 있는지, 허용목록의 포트·주소($ORIGIN)가 맞는지 확인하세요 (호스트의 개발 서버는 host.docker.internal 로 지정)"
+      save_proxy_log
+      stack_down
+      return
+      ;;
+  esac
   if [ "$iso" != isolated ]; then
     record zap failed - "격리 확인 실패 — ZAP 컨테이너에서 프록시를 거치지 않는 통신·프록시 변수·필터 미적용이 확인됩니다(${iso:-확인 불가}). 대상에 요청하지 않았습니다. Docker 엔진 버전(예: CVE-2024-29018)·~/.docker/config.json 의 proxies·런타임 네트워크 설정을 확인하세요"
     save_proxy_log
     stack_down
     return
   fi
-  sec_log "ZAP baseline 실행 중 (passive 규칙만 · 스파이더 ${DWK_SPIDER_MIN}분 · 최대 $((SCAN_TIMEOUT / 60))분)..."
+  sec_log "ZAP baseline 실행 중 (passive 규칙만 · 스파이더 ${DWK_SPIDER_MIN}분 · 최대 ${SCAN_TIMEOUT}초)..."
   # 백그라운드 + wait: 포그라운드면 TERM 이 와도 bash 가 compose run 이 끝날 때까지 trap 을 미룬다.
   # 시간 상한은 watchdog 이 스택을 내려서 건다 (macOS 에 timeout 명령이 없다)
   compose --profile scan run --rm --no-deps -T zap >"$RAW/zap.json" 2>"$RAW/zap.log" </dev/null &
@@ -232,12 +244,12 @@ run_zap() {
   # 스캔이 먼저 끝나 TERM 을 받으면 sleep 도 함께 끝낸다 (서브셸만 죽이면 sleep 이 고아로 남는다)
   (
     exec >/dev/null 2>&1
-    s=""
-    # trap 을 sleep 보다 먼저 건다 — 스캔이 바로 끝나 TERM 이 먼저 오면 sleep 을 띄우지 않고 끝난다 (PR #34 리뷰 S6)
-    trap '[ -n "$s" ] && kill "$s" 2>/dev/null; exit 0' TERM
+    # trap 을 sleep 보다 먼저 걸고, 변수 대신 작업 목록으로 끝낸다 — sleep 직후 s=$! 전에 TERM 이 와도 고아를 남기지 않는다
+    # (1차 리뷰 S6·2차 리뷰 S-C)
+    # shellcheck disable=SC2046  # 작업 pid 목록 — 공백 없는 값이다
+    trap 'kill $(jobs -p) 2>/dev/null; exit 0' TERM
     sleep "$SCAN_TIMEOUT" &
-    s=$!
-    wait "$s" || exit 0
+    wait $! || exit 0
     : >"$RAW/zap.timeout"
     # compose run 이 띄운 일회성 컨테이너도 서비스 라벨은 zap 이다 — 프록시는 남겨 차단 로그를 받는다
     # shellcheck disable=SC2046  # 컨테이너 id 목록 — 공백 없는 값이다
@@ -252,6 +264,14 @@ run_zap() {
   wait "$pid_watchdog" 2>/dev/null
   pid_watchdog=""
   save_proxy_log
+  # 진행 로그에는 크롤링한 URL(질의값 포함)이 찍힌다 — 실패 메모가 이 꼬리에서 만들어지므로 먼저 가린다 (2차 리뷰 W-A·S-B)
+  python3 -I "$SEC_PLUGIN/scripts/lib/web_target.py" redact-file "$RAW/zap.log" 2>/dev/null || : >"$RAW/zap.log"
+  # 스캔 도중 대상 접속이 끊긴 요청 — 결과가 일부 페이지만 반영됐을 수 있다
+  local lost
+  lost=$(grep -c "Could not establish a connection to $ORIGIN_HOST:$ORIGIN_PORT\$" "$RAW/proxy.log" 2>/dev/null)
+  case "$lost" in '' | 0 | *[!0-9]*) ;; *)
+    printf '%s\n' "점검 중 대상($ORIGIN)에 접속하지 못한 요청이 ${lost}건 있습니다 — 그 페이지는 프록시 오류 페이지로 점검됐을 수 있습니다. 서버가 중간에 멈추지 않았는지 확인하세요" >>"$WARNINGS_FILE" ;;
+  esac
   # zap-baseline.py 종료코드: 0 통과 · 1 FAIL 규칙 · 2 WARN(-I 면 0) · 3 그 밖의 오류
   if [ -f "$RAW/zap.timeout" ]; then
     record zap failed "$rc" "시간 상한(${SCAN_TIMEOUT}초)을 넘어 중단했습니다 — 결과가 일부만 있을 수 있어 리포트에 넣지 않았습니다"
