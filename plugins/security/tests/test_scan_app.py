@@ -487,7 +487,8 @@ class NormalizeAppTest(unittest.TestCase):
         """5차 Open Question·6차 W1: 앱이 잘못된 UTF-8 이름을 넣어 리포트에 짝 없는 서로게이트(\\udcXX)가 생겨도
         해석·쓰기가 예외로 끝나 MobSF·Gitleaks 결과 전체가 빠지지 않는다 (끝까지 도는 경로로 확인)."""
         rep = load_fixture("mobsf-android.json")
-        rep["code_analysis"]["findings"]["android_md5"]["files"] = {"a/b\udcffc.java": "1"}
+        # 서로 다른 서로게이트·`?` 이름이 같은 id 로 합쳐져 결과가 버려지지 않는다 (7차 S1 — replace/ignore 로 바꾸면 실패)
+        rep["code_analysis"]["findings"]["android_md5"]["files"] = {"a/b\udcffc.java": "1", "a/b\udcfec.java": "1", "a/b?c.java": "1"}
         rep["binary_analysis"] = [{"name": "lib/\udcffx.so", "nx": {"severity": "high", "description": "no nx"}}]
         self.write("mobsf-full.json", json.dumps(rep))    # MobSF 의 JsonResponse 처럼 \udcff 이스케이프로 온다
         self.write("gitleaks-artifact.json", json.dumps([{"RuleID": "generic-api-key", "StartLine": 1,
@@ -502,7 +503,7 @@ class NormalizeAppTest(unittest.TestCase):
             self.assertEqual(json.load(f)["errors"], [])
         with open(os.path.join(self.run, "findings.json"), encoding="utf-8") as f:
             files = {x["location"]["file"] for x in json.load(f)["findings"]}
-        for want in ("a/b%ED%B3%BFc.java", "lib/%ED%B3%BFx.so", "assets/%ED%B3%BFz.json"):
+        for want in ("a/b%ED%B3%BFc.java", "a/b%ED%B3%BEc.java", "a/b%3Fc.java", "lib/%ED%B3%BFx.so", "assets/%ED%B3%BFz.json"):
             self.assertIn(want, files)
         # 정제본도 유효한 JSON 이고 서로게이트를 되돌릴 수 있는 표기로 남긴다
         with open(os.path.join(self.run, "raw", "mobsf.json"), encoding="utf-8") as f:
