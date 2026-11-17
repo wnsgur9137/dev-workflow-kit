@@ -632,7 +632,6 @@ def parse_mobsf(data, platform_profile, converted_aab=False):
 # ZAP riskcode → severity (docs/security/02 도구/OWASP ZAP.md). confidence 0 은 ZAP 이 오탐으로 표시한 것이라 뺀다
 _ZAP_RISK = {"3": "high", "2": "medium", "1": "low", "0": "info"}
 ZAP_INSTANCES_MAX = 5
-_URL_IN_TEXT = re.compile(r"https?://[^\s\"'<>]{1,2000}")
 
 
 def _strip_html(text) -> str:
@@ -664,7 +663,7 @@ def parse_zap(data):
                     bits.append(f"param={i['param']}")
                 if i.get("evidence"):
                     # 근거는 응답 조각이다 — 그 안의 URL 도 질의 문자열·조각을 가린다 (PR #34 리뷰 S1)
-                    bits.append("evidence=" + _URL_IN_TEXT.sub(lambda m: _web._redact_url(m.group(0)), str(i["evidence"])))
+                    bits.append("evidence=" + _web.redact_text(i["evidence"]))
                 ev.append(" · ".join(bits))
             try:
                 count = int(a.get("count") or len(insts))
@@ -741,7 +740,8 @@ def load_checklists(detected, defs):
 # ---------------------------------------------------------------------------
 # 상태·경고
 # ---------------------------------------------------------------------------
-def read_status(path):
+def read_status(path, redact_urls=False):
+    """redact_urls: 메모 안의 URL 값을 가린다 — scan-web 의 실패 메모는 ZAP 진행 로그 꼬리라 대상 URL 이 들어 있다 (PR #34 2차 리뷰 W-A)."""
     rows = []
     if not os.path.exists(path):
         return rows
@@ -751,6 +751,8 @@ def read_status(path):
             if len(parts) < 3:
                 continue
             note = parts[3] if len(parts) > 3 else ""
+            if redact_urls:
+                note = _web.redact_text(note)
             rows.append({"tool": parts[0], "status": parts[1], "exit_code": parts[2],
                          "note": clean_text(note, 300, True)})
     return rows
@@ -913,7 +915,7 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors, checkli
     if blocked is not None:
         L.append("## 프록시가 막은 요청")
         L.append("egress-proxy 가 허용목록(이번 대상의 출처) 밖이라 막은 요청입니다. 대상 페이지가 외부 리소스를 부르거나, "
-                 "점검 도구가 예상 밖의 곳으로 나가려 한 흔적입니다. 질의 문자열 값은 가렸습니다.")
+                 "점검 도구가 예상 밖의 곳으로 나가려 한 흔적입니다. 질의 문자열·경로 매개변수 값과 조각은 가렸습니다.")
         if not blocked.get("total"):
             L.append("")
             L.append("없음")
@@ -1001,7 +1003,7 @@ def main(argv=None) -> int:
         with open(args.meta_json, encoding="utf-8") as f:
             extra_meta = json.load(f)
 
-    status_rows = read_status(os.path.join(raw, "status.tsv"))
+    status_rows = read_status(os.path.join(raw, "status.tsv"), redact_urls=args.kind == "web")
     seen_tools = {r["tool"] for r in status_rows}
     for t in EXPECTED_TOOLS.get(args.kind, ()):
         if t not in seen_tools:

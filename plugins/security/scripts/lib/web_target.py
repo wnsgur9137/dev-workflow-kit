@@ -178,6 +178,18 @@ def proxy_filters(scheme: str, host: str, port: int):
     return [f"^http://{h}{p}(/|$)"]
 
 
+# 텍스트 안의 URL — 절대(대소문자 무관)·스킴 상대·질의나 조각이 붙은 상대 경로. 괄호는 URL 끝으로 본다 (2차 리뷰 S-A)
+_URL_IN_TEXT = re.compile(r"(?i)(?:https?:)?//[^\s\"'<>()]{1,2000}|(?<![\w/.:])/[^\s\"'<>()?#]{0,500}[?#][^\s\"'<>()]{1,2000}")
+_SET_COOKIE = re.compile(r"(?i)\b(set-cookie:\s*[^=;\s]{1,200})=[^;\s]*")
+
+
+def redact_text(text: str) -> str:
+    """로그·근거 같은 자유 텍스트 안의 URL 값과 Set-Cookie 값을 가린다 (JSON 이스케이프 '\\/' 도 풀어서 본다)."""
+    t = str(text).replace("\\/", "/")
+    t = _URL_IN_TEXT.sub(lambda m: _redact_url(m.group(0)), t)
+    return _SET_COOKIE.sub(r"\1=[MASKED]", t)
+
+
 # ---------------------------------------------------------------------------
 # 프록시 차단 로그
 # ---------------------------------------------------------------------------
@@ -193,9 +205,11 @@ def _mask_params(text: str, sep: str) -> str:
 
 def _redact_url(u: str) -> str:
     """URL 에서 토큰일 수 있는 부분을 가린다 — 사용자 정보, 질의 문자열 값, 조각(#…) 전체, 경로 매개변수(;jsessionid=…) 값.
-    출처와 경로·매개변수 이름만 남긴다 (PR #34 리뷰 S2: 조각 뒤 '?' 를 질의로 오인하지 않게 조각을 먼저 자른다)."""
+    출처와 경로·매개변수 이름만 남긴다 (PR #34 리뷰 S2: 조각 뒤 '?' 를 질의로 오인하지 않게 조각을 먼저 자른다).
+    스킴 상대(//host/…)·상대 경로(/cb?code=…)도 받는다."""
     u = re.sub(r"[\x00-\x1f\x7f]", "", u)[:500]
-    u = re.sub(r"(?<=://)[^/@\s]*@", "[MASKED]@", u)
+    # 사용자 정보는 출처 부분(첫 '/' 전)의 마지막 '@' 까지 가린다 — 인코딩 안 된 '@' 가 든 비밀번호도 (2차 리뷰 NITPICK)
+    u = re.sub(r"(?:(?<=://)|(?<=^//))[^/\s]*@", "[MASKED]@", u)
     u, h, _frag = u.partition("#")
     base, q, query = u.partition("?")
     head, sl, path = base.partition("://")
@@ -248,6 +262,13 @@ def main(argv) -> int:
             print(f"warning\t호스트 이름({host})에 prod 가 들어 있습니다 — 운영 대상이 아닌지 확인하세요. 운영이면 허용목록에서 빼거나 '# prod' 로 표시하세요")
         for f in proxy_filters(scheme, host, port):
             print(f"filter\t{f}")
+        return 0
+    if len(argv) == 2 and argv[0] == "redact-file":
+        # 진행 로그(raw/zap.log)를 제자리에서 가린다 — 실패 메모가 이 꼬리에서 만들어진다 (2차 리뷰 W-A·S-B)
+        with open(argv[1], encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        with open(argv[1], "w", encoding="utf-8") as f:
+            f.write("\n".join(redact_text(line) for line in text.split("\n")))
         return 0
     if len(argv) == 2 and argv[0] == "denied":
         with open(argv[1], encoding="utf-8", errors="replace") as f:
