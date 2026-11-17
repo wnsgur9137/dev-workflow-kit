@@ -92,7 +92,8 @@ test_web_isolation_leak_stops_before_scanning_target() {
   assert_contains "$(awk -F '\t' '$1 == "zap"' "$WEB_RUN/raw/status.tsv")" "격리 확인 실패"
   assert_contains "$(cat "$WEB_RUN/raw/status.tsv")" "proxy-allows-outside"
   # 격리 확인은 대상 host:port 직접 연결도 본다 — 출처의 호스트·포트를 인자로 넘긴다 (리뷰 W4)
-  grep -q '^isolated\|host\.docker\.internal 3000$' "$FAKE_LOG" || fail "격리 확인에 대상 host·port 가 넘어가지 않음"
+  grep -q 'host\.docker\.internal 3000 http://host\.docker\.internal:3000/$' "$FAKE_LOG" ||
+    fail "격리 확인에 대상 host·port·시작 URL 이 넘어가지 않음"
   # 대상에 요청하는 ZAP run(진입점 덮어쓰기 없는 run)은 호출되지 않는다
   if grep '^docker compose .* run ' "$FAKE_LOG" | grep -vq -- '--entrypoint python3'; then fail "격리 실패 뒤 스캔이 실행됨"; fi
   grep -q '^docker compose -p dwk-sec-web-[0-9a-f]\{12\} .* down -v' "$FAKE_LOG" || fail "down -v 가 호출되지 않음"
@@ -139,6 +140,43 @@ EOF
   # 리포트는 데이터 폴더 아래에만, 권한 600
   case "$WEB_RUN" in "$DWK_SECURITY_DATA_DIR/reports/"*) ;; *) fail "리포트 위치: $WEB_RUN" ;; esac
   assert_eq "$(file_mode "$WEB_RUN/summary.md")" 600
+}
+
+# 2차 리뷰 W-B: 대상에 닿지 않으면 스캔하지 않는다 (ZAP 이 프록시 오류 페이지를 점검해 거짓 결과를 내지 않게)
+test_web_unreachable_target_is_failed_without_scanning() {
+  setup_web_fake
+  FAKE_COMPOSE_ISO_OUTPUT="UNREACHABLE proxy-500" _web_scan
+  assert_contains "$(awk -F '\t' '$1 == "zap"' "$WEB_RUN/raw/status.tsv")" "대상에 접속하지 못했습니다(proxy-500)"
+  if grep '^docker compose .* run ' "$FAKE_LOG" | grep -vq -- '--entrypoint python3'; then fail "접속 불가인데 스캔이 실행됨"; fi
+  grep -q ' down -v' "$FAKE_LOG" || fail "down -v 가 호출되지 않음"
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "| zap | failed |"
+}
+
+# 2차 리뷰 W-B: 스캔 도중 대상 접속이 끊긴 요청은 경고로 드러난다
+test_web_lost_target_connections_warn() {
+  setup_web_fake
+  printf '{"site": []}' >"$SEC_TMP/zap.json"
+  printf 'NOTICE x: Initializing tinyproxy ...\nERROR x: opensock: Could not establish a connection to host.docker.internal:3000\nERROR x: opensock: Could not establish a connection to host.docker.internal:3000\n' >"$SEC_TMP/proxy.log"
+  FAKE_COMPOSE_RUN_FILE="$SEC_TMP/zap.json" FAKE_COMPOSE_LOGS_FILE="$SEC_TMP/proxy.log" _web_scan
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "접속하지 못한 요청이 2건"
+}
+
+# 2차 리뷰 W-A·S-B: ZAP 진행 로그(실패 메모의 출처)의 URL 값도 가린다
+test_web_failure_note_and_zap_log_are_redacted() {
+  setup_web_fake
+  printf 'Using the Automation Framework\nJob spider error accessing URL http://host.docker.internal:3000/cb?code=QQLOG42 status code returned : 500 expected 200\n' >"$SEC_TMP/zap.err"
+  printf 'Initializing tinyproxy ...\n' >"$SEC_TMP/proxy.log"
+  FAKE_COMPOSE_RUN_RC=3 FAKE_COMPOSE_RUN_STDERR_FILE="$SEC_TMP/zap.err" FAKE_COMPOSE_LOGS_FILE="$SEC_TMP/proxy.log" _web_scan
+  assert_contains "$(awk -F '\t' '$1 == "zap"' "$WEB_RUN/raw/status.tsv")" "cb?code=[MASKED]"
+  if grep -rq QQLOG42 "$WEB_RUN"; then fail "진행 로그의 질의값이 남음: $(grep -rl QQLOG42 "$WEB_RUN" | head -n 3)"; fi
+}
+
+# 2차 리뷰 S-D: 프록시 로그 수집 명령이 실패하면(시작 줄이 있어도) 차단 목록을 만들지 않는다
+test_web_proxy_log_command_failure_is_not_reported_as_none() {
+  setup_web_fake
+  printf 'NOTICE x: Initializing tinyproxy ...\n' >"$SEC_TMP/proxy.log"
+  FAKE_COMPOSE_LOGS_RC=1 FAKE_COMPOSE_LOGS_FILE="$SEC_TMP/proxy.log" _web_scan
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "프록시 차단 기록을 읽지 못했습니다"
 }
 
 # 리뷰 W1: 점검 URL 의 질의 문자열·조각 값은 로그·리포트에 남지 않는다 (ZAP 에는 원문이 간다)
@@ -195,8 +233,8 @@ test_web_scan_timeout_is_recorded_as_failure() {
   assert_contains "$(awk -F '\t' '$1 == "zap"' "$WEB_RUN/raw/status.tsv")" "시간 상한(2초)"
   grep -q '^docker kill\|^docker ps -q --filter label=com.docker.compose.project=dwk-sec-web-' "$FAKE_LOG" ||
     fail "시간 초과 뒤 ZAP 컨테이너를 끄지 않음"
-  # 테스트 전용 값은 상한을 늘리지 못한다
-  assert_not_contains "$(cat "$SEC_TMP/scan.err")" "최대 999"
+  # 테스트 전용 상한이 적용됐다는 사실이 리포트에 남는다 (2차 리뷰 S-E)
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "테스트 전용 시간 상한(2초"
   local p
   [ -f "$FAKE_RUN_PIDFILE" ] && while read -r p; do kill "$p" 2>/dev/null; done <"$FAKE_RUN_PIDFILE"
   [ $(($(date +%s) - start)) -le 20 ] || fail "시간 초과 경로가 너무 오래 걸림"
@@ -205,7 +243,8 @@ test_web_scan_timeout_is_recorded_as_failure() {
 test_web_test_timeout_cannot_raise_limit() {
   setup_web_fake
   DWK_SEC_TEST_SCAN_TIMEOUT=999999 _web_scan
-  assert_contains "$(cat "$SEC_TMP/scan.err")" "최대 30분"
+  assert_contains "$(cat "$SEC_TMP/scan.err")" "최대 1800초"
+  assert_not_contains "$(cat "$WEB_RUN/summary.md")" "테스트 전용 시간 상한"
 }
 
 test_web_prod_like_host_warns() {
@@ -386,4 +425,20 @@ test_real_scan_web_baseline() {
   # 이번 실행의 스택이 남지 않는다 (동시에 도는 다른 실행과 구분하려고 실행 전후의 툴킷 web 프로젝트 목록을 비교)
   assert_eq "$(_web_projects)" "$WEB_BEFORE" "(실행 뒤 남은 dwk-sec-web 스택)"
   case "$run" in "$SEC_TMP/data/reports/"*) ;; *) fail "리포트 위치: $run" ;; esac
+}
+
+# 2차 리뷰 W-B: 아무도 듣지 않는 포트는 "대상에 접속하지 못했습니다"로 실패하고, 프록시 오류 페이지를 결과로 내지 않는다
+test_real_scan_web_unreachable_target_fails() {
+  _web_ready || return 77
+  export DWK_SECURITY_DATA_DIR="$SEC_TMP/data" DWK_SECURITY_CONF_DIR="$SEC_TMP/conf"
+  mkdir -p "$DWK_SECURITY_CONF_DIR"
+  local port summary run
+  port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+  printf 'http://host.docker.internal:%s\n' "$port" >"$DWK_SECURITY_CONF_DIR/targets.allowlist"
+  chmod 600 "$DWK_SECURITY_CONF_DIR/targets.allowlist"
+  summary=$("$SCAN_WEB" "http://host.docker.internal:$port/" 2>"$SEC_TMP/scan.err" | tail -n 1)
+  [ -f "$summary" ] || fail "summary 없음: $(tail -n 5 "$SEC_TMP/scan.err")"
+  run=$(dirname "$summary")
+  assert_contains "$(awk -F '\t' '$1 == "zap"' "$run/raw/status.tsv")" "대상에 접속하지 못했습니다"
+  assert_eq "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["findings"]))' "$run/findings.json")" 0
 }

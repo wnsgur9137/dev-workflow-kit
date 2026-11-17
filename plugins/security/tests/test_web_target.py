@@ -100,7 +100,9 @@ class TargetTest(unittest.TestCase):
                     # 16진·정수 IPv4 변형 표기는 loopback 안내를 우회한다 (리뷰 S3)
                     "http://0x7f000001/", "http://0x7f.1/", "http://0x7F.0x0.0x0.0x1/", "http://2130706433/",
                     # 호스트는 첫 ':', 포트는 마지막 ':' 로 따로 해석되면 어긋난다 (리뷰 S3)
-                    "http://host.docker.internal:3000:80/", "http://a.example::80/"):
+                    "http://host.docker.internal:3000:80/", "http://a.example::80/",
+                    # '0x' 단독 라벨은 inet_aton 이 0.0.0.0 으로 본다 (2차 리뷰 S-D)
+                    "http://0x/", "http://0x.0x/"):
             with self.assertRaises(w.TargetError, msg=repr(url)):
                 w.parse_target(url)
 
@@ -158,9 +160,37 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(w._redact_url("http://a/p;jsessionid=SECRET1;x#tok=abc?x=1"), "http://a/p;jsessionid=[MASKED];x#[MASKED]")
         self.assertEqual(w._redact_url("http://a/reset#access_token=SECRET2"), "http://a/reset#[MASKED]")
         self.assertEqual(w._redact_url("http://u:p@a/x?y=1&z&code=Q9"), "http://[MASKED]@a/x?y=[MASKED]&z&code=[MASKED]")
+        # 인코딩 안 된 '@' 가 든 비밀번호도 출처 부분의 마지막 '@' 까지 가린다 (2차 리뷰 NITPICK)
+        self.assertEqual(w._redact_url("http://a@b@c/x"), "http://[MASKED]@c/x")
+        self.assertEqual(w._redact_url("//u:p@h/cb?code=R2"), "//[MASKED]@h/cb?code=[MASKED]")
         self.assertEqual(w._redact_url("api.example:443"), "api.example:443")
         self.assertEqual(w._redact_url("http://a:3000/b/c"), "http://a:3000/b/c")
         self.assertEqual(w.display_url("http://h:3000/x?sig=ZZ#f"), "http://h:3000/x?sig=[MASKED]#[MASKED]")
+
+    def test_redact_text_covers_urls_in_free_text(self):
+        """근거·로그 안의 URL (2차 리뷰 S-A·W-A): 대문자 scheme, 스킴 상대, 질의가 붙은 상대 경로, JSON 이스케이프, Set-Cookie 값."""
+        cases = {
+            "Location: HTTPS://h/cb?code=UPPER1": "Location: HTTPS://h/cb?code=[MASKED]",
+            "Location: //u:p@h/cb?code=REL2": "Location: //[MASKED]@h/cb?code=[MASKED]",
+            "Location: /cb?code=REL3": "Location: /cb?code=[MASKED]",
+            '"http:\\/\\/h\\/cb?code=Q13"': '"http://h/cb?code=[MASKED]"',
+            "Set-Cookie: sid=COOKIE8; Path=/": "Set-Cookie: sid=[MASKED]; Path=/",
+            "url(http://h/cb?code=Q5)": "url(http://h/cb?code=[MASKED])",
+            "Job spider error accessing URL http://h:1/cb?code=QS status code returned : 500":
+                "Job spider error accessing URL http://h:1/cb?code=[MASKED] status code returned : 500",
+            "ratio 1/2 and /docs/page.html stay": "ratio 1/2 and /docs/page.html stay",
+        }
+        for src, want in cases.items():
+            self.assertEqual(w.redact_text(src), want, src)
+
+    def test_redact_text_is_linear(self):
+        import time
+        def t(n):
+            s = time.perf_counter()
+            w.redact_text("/a" * n + " //" + "b" * n)
+            return time.perf_counter() - s
+        t(1000)
+        self.assertLess(t(40000), max(t(20000), 0.01) * 6)
 
     def test_prod_like_host(self):
         for h in ("api.prod.example.com", "production.example.com", "app-prod.example", "prod-api.example"):
@@ -199,13 +229,48 @@ class IsoProbeTest(unittest.TestCase):
                                         else self.fail()), ["target-direct"])
         self.assertEqual(self.run_probe(environ={"https_proxy": "http://corp:3128", "NO_PROXY": "x", "HTTP_PROXY": " "}),
                          ["proxy-env:https_proxy"])
-        self.assertEqual(self.run_probe(proxy_open=lambda u, timeout=0: object()), ["proxy-allows-outside"])
+        self.assertEqual(self.run_probe(proxy_open=lambda u, timeout=0: self.Conn()), ["proxy-allows-outside"])
 
         def proxy_502(url, timeout=0):
             import urllib.error
             raise urllib.error.HTTPError(url, 502, "Bad", None, None)
         self.assertEqual(self.run_probe(proxy_open=proxy_502), ["proxy-status:502"])
+
+        def proxy_404(url, timeout=0):     # 403 이 아닌 4xx 도 필터 미적용이다 (2차 리뷰 S-D)
+            import urllib.error
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+        self.assertEqual(self.run_probe(proxy_open=proxy_404), ["proxy-status:404"])
         self.assertEqual(self.run_probe(proxy_open=self.fail), ["proxy-unreachable"])
+
+
+class ReachTest(unittest.TestCase):
+    """격리 확인 뒤 대상 도달 확인 (2차 리뷰 W-B) — tinyproxy 의 접속 실패 응답만 '닿지 않음'으로 본다."""
+
+    @staticmethod
+    def http_error(code, server):
+        import email.message
+        import urllib.error
+        h = email.message.Message()
+        if server:
+            h["Server"] = server
+
+        def op(url, timeout=0):
+            raise urllib.error.HTTPError(url, code, "x", h, None)
+        return op
+
+    def test_proxy_connect_failure_is_unreachable(self):
+        self.assertEqual(iso_probe.reach("http://h:1/", self.http_error(500, "tinyproxy")), "proxy-500")
+        self.assertEqual(iso_probe.reach("http://h:1/", self.http_error(502, "tinyproxy/1.11.3")), "proxy-502")
+
+    def test_target_responses_count_as_reached(self):
+        for code, server in ((500, "nginx"), (404, None), (401, "tinyproxy"), (503, "")):
+            self.assertIsNone(iso_probe.reach("http://h:1/", self.http_error(code, server)), (code, server))
+        self.assertIsNone(iso_probe.reach("http://h:1/", lambda u, timeout=0: IsoProbeTest.Conn()))
+
+    def test_network_error_is_unreachable(self):
+        def op(url, timeout=0):
+            raise ConnectionRefusedError("refused")
+        self.assertEqual(iso_probe.reach("http://h:1/", op), "ConnectionRefusedError")
 
 
 class DeniedTest(unittest.TestCase):

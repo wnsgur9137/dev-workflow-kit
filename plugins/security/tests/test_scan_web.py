@@ -31,7 +31,9 @@ def zap_report():
                  # 값은 일반 시크릿 마스킹(token·secret 등 키워드)에 걸리지 않는 이름·값으로 둔다 — _redact_url 만 가리게 (리뷰 W3)
                  "instances": [inst("http://host.docker.internal:3000/a;jsessionid=QQPATHVAL?code=QQCODE1#QQFRAG"),
                                inst("http://host.docker.internal:3000/login?next=/a&sig=QQSIG22",
-                                    "Location: http://host.docker.internal:3000/cb?code=QQEVID3")]},
+                                    "Location: http://host.docker.internal:3000/cb?code=QQEVID3"),
+                               inst("http://host.docker.internal:3000/r", "Location: /cb?code=QQREL4"),
+                               inst("http://host.docker.internal:3000/c", "Set-Cookie: sid=QQCOOKIE5")]},
                 {"pluginid": "90022", "alertRef": "90022", "alert": "Application Error Disclosure " + INJECT,
                  "riskcode": "1", "confidence": "2", "cweid": "550", "count": "1", "solution": "", "reference": "",
                  "instances": [inst("http://host.docker.internal:3000/err", "password=hunter2hunter2")]},
@@ -54,12 +56,12 @@ class ParseZapTest(unittest.TestCase):
         self.assertEqual((csp["severity"], csp["category"], csp["profile"], csp["tool"]), ("medium", "web", "web", "zap"))
         self.assertEqual(csp["location"], {"file": None, "line": None, "package": None,
                                            "url": "http://host.docker.internal:3000/a;jsessionid=[MASKED]?code=[MASKED]#[MASKED]"})
-        self.assertIn("(외 5곳)", csp["evidence"])
+        self.assertIn("(외 3곳)", csp["evidence"])
         self.assertEqual(csp["references"][0], "CWE-693")
         self.assertIn("https://www.w3.org/TR/CSP/", csp["references"])
         self.assertEqual(csp["fix_hint"], "Ensure that your web server sets the Content-Security-Policy header.")
         # 질의 문자열·경로 매개변수·조각 값은 가린다 (토큰일 수 있다) — 위치·근거 URL·근거 안의 URL 모두
-        for v in ("QQPATHVAL", "QQCODE1", "QQFRAG", "QQSIG22", "QQEVID3"):
+        for v in ("QQPATHVAL", "QQCODE1", "QQFRAG", "QQSIG22", "QQEVID3", "QQREL4", "QQCOOKIE5"):
             self.assertNotIn(v, json.dumps(got), v)
         self.assertIn("sig=[MASKED]", csp["evidence"])
         self.assertIn("cb?code=[MASKED]", csp["evidence"])
@@ -163,6 +165,14 @@ class NormalizeWebTest(unittest.TestCase):
         self.assertTrue(any("zap.json 파싱 실패" in e for e in meta["errors"]), meta["errors"])
         self.assertIn("| (파싱) | error |", summary)
         self.assertTrue(any("프록시 차단 기록을 읽지 못했습니다" in w for w in meta["warnings"]))
+
+    def test_failure_note_urls_are_redacted(self):
+        """2차 리뷰 W-A: 실패 메모는 ZAP 진행 로그 꼬리라 대상 URL 이 들어 있다 — summary·meta 에 값이 남지 않는다."""
+        self.write("status.tsv", "zap\tfailed\t3\tJob spider error accessing URL http://h:1/cb?code=QQNOTE9 status 500\n")
+        summary, meta, _ = self.main()
+        self.assertNotIn("QQNOTE9", summary)
+        self.assertNotIn("QQNOTE9", json.dumps(meta))
+        self.assertIn("cb?code=[MASKED]", summary)
 
     def test_structure_error_keeps_summary(self):
         self.write("zap.json", json.dumps({"site": "x"}))
