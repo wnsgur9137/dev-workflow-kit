@@ -14,6 +14,8 @@
 #                       FAKE_COMPOSE_RUN_FILE=<파일> run 의 stdout · FAKE_COMPOSE_RUN_RC=<n> run 종료코드
 #                       run·logs 는 stderr 에 실제 MobSF 처럼 API 키를 찍는다 (마스킹 확인용)
 #                       FAKE_COMPOSE_RUN_SLEEP=<초> run 이 그만큼 머문다 (중단 신호 확인용)
+#   compose (scan-web): run --entrypoint python3 (격리 확인)은 FAKE_COMPOSE_ISO_OUTPUT(기본 isolated)를 낸다
+#                       FAKE_COMPOSE_LOGS_FILE=<파일> logs 출력 (프록시 로그)
 #   남은 스택 정리: FAKE_PS_IDS=<id ...> docker ps -aq · FAKE_INSPECT_LINES=<파일> docker inspect 출력(프로젝트 시각)
 #                   FAKE_VOLUMES=<이름 ...> docker volume ls -q (label=…project=<p> 로 거르면 vol-<p>) · FAKE_VOLUME_LINES=<파일> docker volume inspect 출력
 #                   FAKE_SYSTEM_TIME=<RFC3339> docker info .SystemTime (빈 값이면 출력 없음)
@@ -37,6 +39,11 @@ case "$1" in
       up) exit "${FAKE_COMPOSE_UP_RC:-0}" ;;
       exec) echo "${FAKE_COMPOSE_EXEC_OUTPUT-isolated}" ;;
       run)
+        case "$*" in *"--entrypoint python3"*)
+          echo "${FAKE_COMPOSE_ISO_OUTPUT-isolated}"
+          exit 0
+          ;;
+        esac
         echo "REST API Key: ${DWK_MOBSF_API_KEY:-}" >&2
         echo "mobsf_client: 가짜 실행" >&2
         if [ -n "${FAKE_COMPOSE_RUN_SLEEP:-}" ]; then
@@ -48,7 +55,10 @@ case "$1" in
         [ -n "${FAKE_COMPOSE_RUN_FILE:-}" ] && cat "$FAKE_COMPOSE_RUN_FILE"
         exit "${FAKE_COMPOSE_RUN_RC:-0}"
         ;;
-      logs) echo "REST API Key: ${DWK_MOBSF_API_KEY:-} secret=${DWK_MOBSF_SECRET:-}" ;;
+      logs)
+        if [ -n "${FAKE_COMPOSE_LOGS_FILE:-}" ]; then cat "$FAKE_COMPOSE_LOGS_FILE"; else
+          echo "REST API Key: ${DWK_MOBSF_API_KEY:-} secret=${DWK_MOBSF_SECRET:-}"; fi
+        ;;
       down | ps) exit 0 ;;
       *) echo "${FAKE_COMPOSE-2.29.0}" ;;
     esac
