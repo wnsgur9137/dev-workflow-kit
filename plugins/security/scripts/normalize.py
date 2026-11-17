@@ -254,7 +254,9 @@ def strip_container_prefix(path: str) -> str:
 
 
 def finding_id(*parts) -> str:
-    return hashlib.sha256("\x1f".join(str(p) for p in parts).encode("utf-8")).hexdigest()
+    # 짝 없는 서로게이트(잘못된 UTF-8 이름)가 있어도 해석이 예외로 끝나 도구 결과 전체가 빠지지 않게 (PR #32 6차 리뷰 W1).
+    # 일반 문자열의 해시 값은 바뀌지 않는다
+    return hashlib.sha256("\x1f".join(str(p) for p in parts).encode("utf-8", "surrogatepass")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
