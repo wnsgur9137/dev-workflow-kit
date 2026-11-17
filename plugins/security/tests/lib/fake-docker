@@ -19,6 +19,7 @@
 #   남은 스택 정리: FAKE_PS_IDS=<id ...> docker ps -aq · FAKE_INSPECT_LINES=<파일> docker inspect 출력(프로젝트 시각)
 #                   FAKE_VOLUMES=<이름 ...> docker volume ls -q (label=…project=<p> 로 거르면 vol-<p>) · FAKE_VOLUME_LINES=<파일> docker volume inspect 출력
 #                   FAKE_SYSTEM_TIME=<RFC3339> docker info .SystemTime (빈 값이면 출력 없음)
+#                   FAKE_NETWORKS=<id ...> docker network ls -q · FAKE_NETWORK_LINES=<파일> docker network inspect 출력
 [ -n "${FAKE_LOG:-}" ] && echo "docker $*" >>"$FAKE_LOG"
 case "$1" in
   info)
@@ -117,6 +118,14 @@ case "$1" in
         ;;
       inspect) [ -n "${FAKE_VOLUME_LINES:-}" ] && cat "$FAKE_VOLUME_LINES" ;;
     esac
+    ;;
+  network)
+    # shellcheck disable=SC2086  # 공백으로 구분한 목록을 한 줄씩 낸다
+    case "$2" in
+      ls) [ -n "${FAKE_NETWORKS:-}" ] && printf '%s\n' $FAKE_NETWORKS ;;
+      inspect) [ -n "${FAKE_NETWORK_LINES:-}" ] && cat "$FAKE_NETWORK_LINES" ;;
+    esac
+    exit 0
     ;;
   pull) echo "가짜 docker 로 $1 을 실행하면 안 됩니다" >&2; exit 99 ;;
   *) exit 0 ;;

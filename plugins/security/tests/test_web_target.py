@@ -9,6 +9,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts", "lib"))
 
+import iso_probe  # noqa: E402
 import stale_projects  # noqa: E402
 import web_target as w  # noqa: E402
 
@@ -38,6 +39,14 @@ class AllowlistTest(unittest.TestCase):
         self.write("http://host.docker.internal:3000\n", 0o644)   # 읽기만 열린 것은 괜찮다
         self.assertEqual(len(w.parse_allowlist(self.path)), 1)
 
+    def test_file_owned_by_another_user_is_refused(self):
+        from unittest import mock
+        self.write("http://host.docker.internal:3000\n")
+        with mock.patch.object(w.os, "getuid", return_value=os.getuid() + 1):
+            with self.assertRaises(w.TargetError) as cm:
+                w.parse_allowlist(self.path)
+        self.assertIn("소유자", str(cm.exception))
+
     def test_entries_comments_default_ports_and_prod_marker(self):
         self.write("# 주석 줄\n\n"
                    "  http://Host.Docker.Internal:3000/   # 개발 서버\n"
@@ -62,7 +71,7 @@ class AllowlistTest(unittest.TestCase):
         bad = ["http://*.example.com", "http://example.com/path", "ftp://example.com", "http://user@example.com",
                "example.com", "http://example.com:0", "http://example.com:70000", "http://[::1]:3000",
                "http://localhost:3000", "http://127.0.0.1:3000", "http://ex ample.com", "http://0.0.0.0:80",
-               "http://999.1.1.1"]
+               "http://999.1.1.1", "http://0x7f000001", "http://0x7f.1:3000", "http://2130706433", "http://017700000001"]
         for line in bad:
             self.write("http://ok.example:3000\n" + line + "\n")
             with self.assertRaises(w.TargetError, msg=line) as cm:
@@ -87,7 +96,11 @@ class TargetTest(unittest.TestCase):
                     "http://a.example/ x", "http://a.example/\x00", "http://a.example\\@b.example/", "http://ä.example/",
                     "http://localhost:3000/", "http://LOCALHOST/", "http://app.localhost/", "http://127.0.0.2/",
                     "http://[::1]:3000/", "http://0.0.0.0/", "http://a.example:99999/", "http://a.example:abc/",
-                    "http://a.example/" + "x" * 2100, "//a.example/", "http:///path"):
+                    "http://a.example/" + "x" * 2100, "//a.example/", "http:///path",
+                    # 16진·정수 IPv4 변형 표기는 loopback 안내를 우회한다 (리뷰 S3)
+                    "http://0x7f000001/", "http://0x7f.1/", "http://0x7F.0x0.0x0.0x1/", "http://2130706433/",
+                    # 호스트는 첫 ':', 포트는 마지막 ':' 로 따로 해석되면 어긋난다 (리뷰 S3)
+                    "http://host.docker.internal:3000:80/", "http://a.example::80/"):
             with self.assertRaises(w.TargetError, msg=repr(url)):
                 w.parse_target(url)
 
@@ -110,9 +123,12 @@ class ProxyFilterTest(unittest.TestCase):
     def test_http_filter_allows_only_the_origin(self):
         f = w.proxy_filters("http", "host.docker.internal", 3000)
         for ok in ("http://host.docker.internal:3000/", "http://host.docker.internal:3000/a?b=c",
-                   "http://HOST.docker.internal:3000", "http://host.docker.internal:3000?x"):
+                   "http://HOST.docker.internal:3000", "http://host.docker.internal:3000/?@evil.example:3000/"):
             self.assertTrue(self.allowed(f, ok), ok)
         for no in ("http://host.docker.internal:30001/", "http://host.docker.internal:300/", "http://host.docker.internal/",
+                   # tinyproxy 는 첫 '/' 앞을 호스트 부분으로 보고 '@' 앞을 버린다 — '?@' 는 다른 곳으로 접속한다 (리뷰 C1)
+                   "http://host.docker.internal:3000?@evil.example:3000/", "http://host.docker.internal:3000?x",
+                   "http://host.docker.internal:3000#@evil.example/", "http://host.docker.internal:3000;@evil.example/",
                    "http://host.docker.internal.evil.example:3000/", "http://hostXdocker.internal:3000/",
                    "http://host.docker.internal:3000@evil.example/", "https://host.docker.internal:3000/",
                    "host.docker.internal:3000", "http://evil.example/http://host.docker.internal:3000/"):
@@ -135,6 +151,61 @@ class ProxyFilterTest(unittest.TestCase):
         # POSIX ERE 에서 '\-' 처럼 정의되지 않은 이스케이프를 쓰지 않는다 — '\.' 만 남는다
         for f in w.proxy_filters("http", "my-app.dev-1.example", 8080) + w.proxy_filters("https", "a-b.example", 8443):
             self.assertEqual(re.findall(r"\\(.)", f), ["."] * len(re.findall(r"\\(.)", f)), f)
+
+
+class RedactTest(unittest.TestCase):
+    def test_fragment_path_params_query_and_userinfo(self):
+        self.assertEqual(w._redact_url("http://a/p;jsessionid=SECRET1;x#tok=abc?x=1"), "http://a/p;jsessionid=[MASKED];x#[MASKED]")
+        self.assertEqual(w._redact_url("http://a/reset#access_token=SECRET2"), "http://a/reset#[MASKED]")
+        self.assertEqual(w._redact_url("http://u:p@a/x?y=1&z&code=Q9"), "http://[MASKED]@a/x?y=[MASKED]&z&code=[MASKED]")
+        self.assertEqual(w._redact_url("api.example:443"), "api.example:443")
+        self.assertEqual(w._redact_url("http://a:3000/b/c"), "http://a:3000/b/c")
+        self.assertEqual(w.display_url("http://h:3000/x?sig=ZZ#f"), "http://h:3000/x?sig=[MASKED]#[MASKED]")
+
+    def test_prod_like_host(self):
+        for h in ("api.prod.example.com", "production.example.com", "app-prod.example", "prod-api.example"):
+            self.assertTrue(w.prod_like_host(h), h)
+        for h in ("product.example.com", "prodigy.example", "host.docker.internal", "staging.example"):
+            self.assertFalse(w.prod_like_host(h), h)
+
+
+class IsoProbeTest(unittest.TestCase):
+    """scan-web.sh 의 격리 확인 — 각 검사가 누출을 실제로 잡는지 (리뷰 W3: 실제 환경은 늘 격리돼 있어 통합 테스트로는 못 본다)."""
+
+    @staticmethod
+    def fail(*a, **k):
+        raise OSError("blocked")
+
+    class Conn:
+        def close(self):
+            pass
+
+    def proxy_403(self, url, timeout=0):
+        import urllib.error
+        raise urllib.error.HTTPError(url, 403, "Filtered", None, None)
+
+    def run_probe(self, resolve=None, connect=None, proxy_open=None, environ=None):
+        return iso_probe.probe("host.docker.internal", "3000", resolve=resolve or self.fail, connect=connect or self.fail,
+                               proxy_open=proxy_open or self.proxy_403, environ=environ or {})
+
+    def test_isolated_when_everything_is_blocked(self):
+        self.assertEqual(self.run_probe(), [])
+
+    def test_each_leak_is_reported(self):
+        self.assertEqual(self.run_probe(resolve=lambda h, p: [("x",)]), ["dns:example.com", "dns:www.zaproxy.org"])
+        self.assertEqual(self.run_probe(connect=lambda a, timeout=0: self.Conn() if a == ("1.1.1.1", 443) else self.fail()),
+                         ["ip"])
+        self.assertEqual(self.run_probe(connect=lambda a, timeout=0: self.Conn() if a == ("host.docker.internal", 3000)
+                                        else self.fail()), ["target-direct"])
+        self.assertEqual(self.run_probe(environ={"https_proxy": "http://corp:3128", "NO_PROXY": "x", "HTTP_PROXY": " "}),
+                         ["proxy-env:https_proxy"])
+        self.assertEqual(self.run_probe(proxy_open=lambda u, timeout=0: object()), ["proxy-allows-outside"])
+
+        def proxy_502(url, timeout=0):
+            import urllib.error
+            raise urllib.error.HTTPError(url, 502, "Bad", None, None)
+        self.assertEqual(self.run_probe(proxy_open=proxy_502), ["proxy-status:502"])
+        self.assertEqual(self.run_probe(proxy_open=self.fail), ["proxy-unreachable"])
 
 
 class DeniedTest(unittest.TestCase):
@@ -180,9 +251,17 @@ class CliTest(unittest.TestCase):
             self.assertEqual(w.main(["check", p, "https://s.example/"]), 1)
             self.assertEqual(w.main(["check", p, "http://host.docker.internal:3001/"]), 1)
         self.assertEqual(out.getvalue().splitlines(), [
-            "url\thttp://host.docker.internal:3000/x", "origin\thttp://host.docker.internal:3000",
-            "filter\t^http://host\\.docker\\.internal:3000([/?]|$)"])
+            "url\thttp://host.docker.internal:3000/x", "display\thttp://host.docker.internal:3000/x",
+            "origin\thttp://host.docker.internal:3000",
+            "filter\t^http://host\\.docker\\.internal:3000(/|$)"])
         self.assertIn("운영(prod)", err.getvalue())
+        # 호스트 이름 라벨이 prod 면 경고 줄을 낸다 (리뷰 S7)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write("http://api.prod.example:8080\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(w.main(["check", p, "http://api.prod.example:8080/"]), 0)
+        self.assertIn("warning\t호스트 이름(api.prod.example)에 prod", out.getvalue())
         self.assertIn("허용목록에 없는 대상", err.getvalue())
 
 

@@ -53,8 +53,9 @@ test_web_allowlist_refusals_happen_before_docker() {
   # localhost 는 컨테이너 자신 — 호스트 주소 안내
   assert_status 1 "$SCAN_WEB" http://localhost:3000/
   assert_contains "$OUT" "host.docker.internal"
-  # 사용자 정보로 호스트 비교를 속이지 못한다
-  assert_status 1 "$SCAN_WEB" 'http://host.docker.internal:3000@example.com/'
+  # 사용자 정보로 호스트 비교를 속이지 못한다 — 허용된 호스트가 '@' 뒤에 와도 거부 (리뷰 NITPICK)
+  assert_status 1 "$SCAN_WEB" 'http://evil.example@host.docker.internal:3000/'
+  assert_contains "$OUT" "사용자 정보"
   # 허용목록을 다른 사용자가 쓸 수 있으면 거부
   chmod 666 "$DWK_SECURITY_CONF_DIR/targets.allowlist"
   assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
@@ -90,6 +91,8 @@ test_web_isolation_leak_stops_before_scanning_target() {
   FAKE_COMPOSE_ISO_OUTPUT="LEAK dns:example.com proxy-allows-outside" _web_scan
   assert_contains "$(awk -F '\t' '$1 == "zap"' "$WEB_RUN/raw/status.tsv")" "격리 확인 실패"
   assert_contains "$(cat "$WEB_RUN/raw/status.tsv")" "proxy-allows-outside"
+  # 격리 확인은 대상 host:port 직접 연결도 본다 — 출처의 호스트·포트를 인자로 넘긴다 (리뷰 W4)
+  grep -q '^isolated\|host\.docker\.internal 3000$' "$FAKE_LOG" || fail "격리 확인에 대상 host·port 가 넘어가지 않음"
   # 대상에 요청하는 ZAP run(진입점 덮어쓰기 없는 run)은 호출되지 않는다
   if grep '^docker compose .* run ' "$FAKE_LOG" | grep -vq -- '--entrypoint python3'; then fail "격리 실패 뒤 스캔이 실행됨"; fi
   grep -q '^docker compose -p dwk-sec-web-[0-9a-f]\{12\} .* down -v' "$FAKE_LOG" || fail "down -v 가 호출되지 않음"
@@ -116,6 +119,7 @@ test_web_success_path_builds_report_with_blocked_requests() {
    "instances": [{"uri": "http://host.docker.internal:3000/", "method": "GET", "param": "", "evidence": ""}]}]}]}
 EOF
   cat >"$SEC_TMP/proxy.log" <<'EOF'
+NOTICE    Nov 17 05:33:16.110 [1]: Initializing tinyproxy ...
 NOTICE    Nov 17 05:33:18.812 [1]: Proxying refused on filtered url "http://dwk-isolation-probe.invalid/"
 NOTICE    Nov 17 05:33:19.000 [1]: Proxying refused on filtered url "http://cdn.example/a.js?token=abc123"
 EOF
@@ -137,6 +141,80 @@ EOF
   assert_eq "$(file_mode "$WEB_RUN/summary.md")" 600
 }
 
+# 리뷰 W1: 점검 URL 의 질의 문자열·조각 값은 로그·리포트에 남지 않는다 (ZAP 에는 원문이 간다)
+test_web_target_query_is_redacted_in_logs_and_report() {
+  setup_web_fake
+  printf '%s\n' "$(printf 'Initializing tinyproxy ...')" >"$SEC_TMP/proxy.log"
+  FAKE_COMPOSE_LOGS_FILE="$SEC_TMP/proxy.log" _web_scan 'http://host.docker.internal:3000/cb?code=QQTOKEN77#QQFRAG88'
+  if grep -rq 'QQTOKEN77\|QQFRAG88' "$WEB_RUN" "$SEC_TMP/scan.err"; then
+    fail "점검 URL 의 값이 남음: $(grep -rl 'QQTOKEN77\|QQFRAG88' "$WEB_RUN" "$SEC_TMP/scan.err" | head -n 3)"
+  fi
+  # 조각은 점검 URL 을 만들 때 버린다 (ZAP 에도 넘기지 않는다)
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "\`http://host.docker.internal:3000/cb?code=[MASKED]\`"
+}
+
+# 리뷰 W2: 프록시 로그를 받지 못하면 "막은 요청 없음" 이 아니라 경고로 드러난다
+test_web_unreadable_proxy_log_is_not_reported_as_none() {
+  setup_web_fake
+  : >"$SEC_TMP/empty.log"
+  FAKE_COMPOSE_LOGS_FILE="$SEC_TMP/empty.log" _web_scan
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "프록시 차단 기록을 읽지 못했습니다"
+  assert_not_contains "$(cat "$WEB_RUN/summary.md")" "## 프록시가 막은 요청"
+  [ ! -e "$WEB_RUN/raw/proxy-denied.json" ] || fail "빈 로그로 차단 목록이 만들어짐"
+}
+
+# 리뷰 W3: 중단 신호에도 스택을 내린다 (trap)
+test_web_term_during_scan_removes_stack() {
+  setup_web_fake
+  export FAKE_COMPOSE_RUN_SLEEP=30 FAKE_RUN_PIDFILE="$SEC_TMP/run.pids"
+  local pid rc start
+  "$SCAN_WEB" http://host.docker.internal:3000/ >/dev/null 2>"$SEC_TMP/scan.err" &
+  pid=$!
+  for _ in $(seq 1 50); do grep -q ' run --rm --no-deps -T zap' "$FAKE_LOG" 2>/dev/null && break; sleep 0.2; done
+  start=$(date +%s)
+  kill -TERM "$pid"
+  wait "$pid"
+  rc=$?
+  assert_eq "$rc" 143 "(TERM 종료코드)"
+  [ $(($(date +%s) - start)) -le 5 ] || fail "TERM 뒤 정리에 5초 넘게 걸림"
+  grep -q ' down -v' "$FAKE_LOG" || fail "TERM 뒤 down -v 가 호출되지 않음"
+  local p
+  [ -f "$FAKE_RUN_PIDFILE" ] && while read -r p; do kill "$p" 2>/dev/null; done <"$FAKE_RUN_PIDFILE"
+  return 0
+}
+
+# 리뷰 W3: 시간 상한을 넘으면 ZAP 을 끄고 실패로 기록한다 (결과를 리포트에 넣지 않는다)
+test_web_scan_timeout_is_recorded_as_failure() {
+  setup_web_fake
+  export FAKE_COMPOSE_RUN_SLEEP=8 FAKE_RUN_PIDFILE="$SEC_TMP/run.pids"
+  printf '{"site": []}' >"$SEC_TMP/zap.json"
+  local start
+  start=$(date +%s)
+  # 가짜 docker kill 은 아무것도 하지 않으므로 run 은 8초 뒤 스스로 끝난다 — 그 사이 watchdog(2초)이 시간 초과를 표시한다
+  DWK_SEC_TEST_SCAN_TIMEOUT=2 FAKE_COMPOSE_RUN_FILE="$SEC_TMP/zap.json" _web_scan
+  assert_contains "$(awk -F '\t' '$1 == "zap"' "$WEB_RUN/raw/status.tsv")" "시간 상한(2초)"
+  grep -q '^docker kill\|^docker ps -q --filter label=com.docker.compose.project=dwk-sec-web-' "$FAKE_LOG" ||
+    fail "시간 초과 뒤 ZAP 컨테이너를 끄지 않음"
+  # 테스트 전용 값은 상한을 늘리지 못한다
+  assert_not_contains "$(cat "$SEC_TMP/scan.err")" "최대 999"
+  local p
+  [ -f "$FAKE_RUN_PIDFILE" ] && while read -r p; do kill "$p" 2>/dev/null; done <"$FAKE_RUN_PIDFILE"
+  [ $(($(date +%s) - start)) -le 20 ] || fail "시간 초과 경로가 너무 오래 걸림"
+}
+
+test_web_test_timeout_cannot_raise_limit() {
+  setup_web_fake
+  DWK_SEC_TEST_SCAN_TIMEOUT=999999 _web_scan
+  assert_contains "$(cat "$SEC_TMP/scan.err")" "최대 30분"
+}
+
+test_web_prod_like_host_warns() {
+  setup_web_fake
+  printf 'http://api.prod.example.invalid:8080\n' >>"$DWK_SECURITY_CONF_DIR/targets.allowlist"
+  _web_scan 'http://api.prod.example.invalid:8080/'
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "prod 가 들어 있습니다"
+}
+
 test_web_proxy_config_and_filter_are_derived_from_target() {
   setup_web_fake
   # 가짜 docker 가 compose 에 넘어온 환경변수를 기록하게 한다
@@ -151,7 +229,7 @@ EOF
   _web_scan 'http://HOST.docker.internal:3000/app?x=1'
   local env
   env=$(cat "$SEC_TMP/env.log")
-  assert_contains "$env" 'FILTER<<^http://host\.docker\.internal:3000([/?]|$)>>'
+  assert_contains "$env" 'FILTER<<^http://host\.docker\.internal:3000(/|$)>>'
   assert_contains "$env" 'URL<<http://host.docker.internal:3000/app?x=1>>'
   assert_contains "$env" "FilterDefaultDeny Yes"
   assert_contains "$env" "ConnectPort 1"
@@ -171,14 +249,18 @@ dwk-sec-app-0000000000cc 2029-01-01T00:00:00Z
 dwk-sec-web-0000000000dd
 dwk-sec-web-0000000000dd 2020-01-01T00:00:00Z
 EOF
-  FAKE_SYSTEM_TIME="2030-01-01T12:00:00+09:00" FAKE_PS_IDS="c1 c2 c3" FAKE_INSPECT_LINES="$SEC_TMP/inspect.txt" _web_scan
+  # 컨테이너 없이 네트워크만 남은 프로젝트도 지운다 (리뷰 S5)
+  printf 'dwk-sec-web-0000000000ee 2029-12-30T00:00:00Z\n' >"$SEC_TMP/networks.txt"
+  FAKE_NETWORKS="n1" FAKE_NETWORK_LINES="$SEC_TMP/networks.txt" \
+    FAKE_SYSTEM_TIME="2030-01-01T12:00:00+09:00" FAKE_PS_IDS="c1 c2 c3" FAKE_INSPECT_LINES="$SEC_TMP/inspect.txt" _web_scan
   local downs
   downs=$(grep ' down ' "$FAKE_LOG")
   assert_contains "$downs" "dwk-sec-web-0000000000aa"
   assert_not_contains "$downs" "dwk-sec-web-0000000000bb"     # 30분 전 — 다른 실행일 수 있다
   assert_not_contains "$downs" "dwk-sec-app-0000000000cc"     # scan-app 스택은 건드리지 않는다
   assert_not_contains "$downs" "dwk-sec-web-0000000000dd"     # 시각을 모르는 줄이 섞이면 지우지 않는다
-  assert_contains "$(cat "$WEB_RUN/summary.md")" "이전 실행이 남긴 ZAP 스택 1개"
+  assert_contains "$downs" "dwk-sec-web-0000000000ee"
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "이전 실행이 남긴 ZAP 스택 2개"
 }
 
 # --- 실제 Docker 통합 ----------------------------------------------------------
@@ -239,6 +321,16 @@ print("allowed", get("http://host.docker.internal:%s/about" % port))
 print("otherport", get("http://host.docker.internal:%d/" % (int(port) + 1)))
 print("outside", get("http://example.com/"))
 print("hyphen", get("http://dwk-allowed-host.invalid:8080/"))
+# 리뷰 C1: tinyproxy 는 첫 '/' 앞의 '@' 앞을 버리고 접속한다 — 필터가 '?@' 를 허용하면 다른 곳으로 간다.
+# urllib 은 요청줄을 정규화하므로 원시 소켓으로 보낸다
+def raw(line):
+    s = socket.create_connection(("egress-proxy", 8888), timeout=8)
+    s.sendall(("GET %s HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n" % line).encode())
+    data = s.recv(200).decode("latin-1")
+    s.close()
+    return data.split(" ")[1] if data.startswith("HTTP/") else "err"
+print("qat", raw("http://host.docker.internal:%s?@example.com:80/" % port))
+print("hashat", raw("http://host.docker.internal:%s#@example.com:80/" % port))
 for h, pt in (("host.docker.internal", int(port)), ("1.1.1.1", 443)):
     try:
         socket.create_connection((h, pt), timeout=4); print("direct", h, "open")
@@ -252,6 +344,8 @@ for h, pt in (("host.docker.internal", int(port)), ("1.1.1.1", 443)):
   assert_contains "$out" "otherport 403"
   assert_contains "$out" "outside 403"
   assert_not_contains "$out" "hyphen 403"
+  assert_contains "$out" "qat 403"
+  assert_contains "$out" "hashat 403"
   assert_contains "$out" "direct host.docker.internal blocked"
   assert_contains "$out" "direct 1.1.1.1 blocked"
   assert_contains "$logs" 'Proxying refused on filtered url "http://example.com/"'

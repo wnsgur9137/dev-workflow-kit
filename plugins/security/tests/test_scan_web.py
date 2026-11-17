@@ -28,8 +28,10 @@ def zap_report():
                  "riskcode": "2", "confidence": "3", "cweid": "693", "count": "7",
                  "solution": "<p>Ensure that your web server sets the Content-Security-Policy header.</p>",
                  "reference": "<p>https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP</p><p>https://www.w3.org/TR/CSP/</p>",
-                 "instances": [inst("http://host.docker.internal:3000/"),
-                               inst("http://host.docker.internal:3000/login?next=/a&token=abc123secret")]},
+                 # 값은 일반 시크릿 마스킹(token·secret 등 키워드)에 걸리지 않는 이름·값으로 둔다 — _redact_url 만 가리게 (리뷰 W3)
+                 "instances": [inst("http://host.docker.internal:3000/a;jsessionid=QQPATHVAL?code=QQCODE1#QQFRAG"),
+                               inst("http://host.docker.internal:3000/login?next=/a&sig=QQSIG22",
+                                    "Location: http://host.docker.internal:3000/cb?code=QQEVID3")]},
                 {"pluginid": "90022", "alertRef": "90022", "alert": "Application Error Disclosure " + INJECT,
                  "riskcode": "1", "confidence": "2", "cweid": "550", "count": "1", "solution": "", "reference": "",
                  "instances": [inst("http://host.docker.internal:3000/err", "password=hunter2hunter2")]},
@@ -50,15 +52,17 @@ class ParseZapTest(unittest.TestCase):
         self.assertEqual(set(by), {"zap.10038-1", "zap.90022", "zap.10036-2"})   # confidence 0(오탐 표시)은 뺀다
         csp = by["zap.10038-1"]
         self.assertEqual((csp["severity"], csp["category"], csp["profile"], csp["tool"]), ("medium", "web", "web", "zap"))
-        self.assertEqual(csp["location"], {"file": None, "line": None, "url": "http://host.docker.internal:3000/",
-                                           "package": None})
+        self.assertEqual(csp["location"], {"file": None, "line": None, "package": None,
+                                           "url": "http://host.docker.internal:3000/a;jsessionid=[MASKED]?code=[MASKED]#[MASKED]"})
         self.assertIn("(외 5곳)", csp["evidence"])
         self.assertEqual(csp["references"][0], "CWE-693")
         self.assertIn("https://www.w3.org/TR/CSP/", csp["references"])
         self.assertEqual(csp["fix_hint"], "Ensure that your web server sets the Content-Security-Policy header.")
-        # 질의 문자열 값은 가린다 (토큰일 수 있다)
-        self.assertNotIn("abc123secret", json.dumps(got))
-        self.assertIn("token=[MASKED]", csp["evidence"])
+        # 질의 문자열·경로 매개변수·조각 값은 가린다 (토큰일 수 있다) — 위치·근거 URL·근거 안의 URL 모두
+        for v in ("QQPATHVAL", "QQCODE1", "QQFRAG", "QQSIG22", "QQEVID3"):
+            self.assertNotIn(v, json.dumps(got), v)
+        self.assertIn("sig=[MASKED]", csp["evidence"])
+        self.assertIn("cb?code=[MASKED]", csp["evidence"])
         # 응답 근거 안의 시크릿도 다시 가린다
         self.assertNotIn("hunter2hunter2", json.dumps(got))
         self.assertEqual(by["zap.90022"]["severity"], "low")
@@ -108,7 +112,8 @@ class NormalizeWebTest(unittest.TestCase):
         self.write("zap.json", json.dumps(zap_report()))
         self.write("status.tsv", "zap\tok\t0\t\n")
         self.write("proxy-denied.json", json.dumps({"total": 3, "unique": 2,
-                                                    "urls": ["http://cdn.example/a.js?k=[MASKED]", "api.example:443"]}))
+                                                    "urls": ["http://cdn.example/a.js?k=[MASKED]", "api.example:443",
+                                                             "http://x.example/" + INJECT.replace(" ", "-")]}))
         summary, meta, findings = self.main()
         self.assertEqual(meta["errors"], [])
         self.assertEqual(findings["stats"]["medium"], 1)
@@ -118,11 +123,18 @@ class NormalizeWebTest(unittest.TestCase):
         self.assertIn("## 수동 확인 (체크리스트)", summary)
         self.assertIn("소스맵 공개 여부", summary)
         self.assertIn("(URL 점검 — 해당 없음)", summary)
-        # 대상 응답에서 온 문구는 코드 블록 안에만 있다
+        # 대상 응답·링크에서 온 문구(알림 이름·차단 URL)는 코드 블록 안에만 있다 — 펜스 구간을 따라가며 안/밖을 판정 (리뷰 W3)
+        inside, seen = False, 0
         for line in summary.splitlines():
-            if INJECT in line:
-                self.assertFalse(line.startswith(("#", "|", "- ")), line)
-        self.assertIn("````text", summary)
+            if line.startswith("````"):
+                inside = not inside
+                continue
+            for needle in (INJECT, INJECT.replace(" ", "-")):
+                if needle in line:
+                    self.assertTrue(inside, line)
+                    seen += 1
+        self.assertGreaterEqual(seen, 2)
+        self.assertFalse(inside, "닫히지 않은 코드 블록")
 
     def test_no_blocked_requests_shows_none(self):
         self.write("zap.json", json.dumps({"site": []}))
