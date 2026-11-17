@@ -33,7 +33,8 @@ import urllib.parse
 
 DEFAULT_PORTS = {"http": 80, "https": 443}
 URL_MAX = 2000
-# RFC 1123 호스트 이름 (점으로 구분한 라벨) — IPv4 주소도 이 모양에 맞는다
+# RFC 1123 호스트 이름 (점으로 구분한 라벨) — IPv4 주소와 그 16진 변형 표기(0x7f000001)도 이 모양에 맞으므로
+# _check_host 가 숫자·16진 라벨만으로 된 이름을 따로 거른다
 _HOST_RE = re.compile(r"(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*")
 _ENTRY_RE = re.compile(r"(https?)://([^/:\s]+)(?::(\d{1,5}))?/?")
 _PROD_RE = re.compile(r"(?i)(?<![a-z0-9])prod(?:uction)?(?![a-z0-9])")
@@ -60,8 +61,9 @@ def _check_host(host: str, where: str) -> str:
         ip = ipaddress.ip_address(h)
         loop = loop or ip.is_loopback or ip.is_unspecified
     except ValueError:
-        if re.fullmatch(r"[0-9.]+", h):
-            raise TargetError(f"{where}: IPv4 주소 형식이 아닙니다 ({host})") from None
+        # 10진·8진·16진(0x…) 라벨만으로 된 이름은 inet_aton 이 IPv4 로 해석한다 (0x7f.1 = 127.0.0.1) — 받지 않는다
+        if all(re.fullmatch(r"[0-9]+|0x[0-9a-f]*", lab) for lab in h.split(".")):
+            raise TargetError(f"{where}: IPv4 주소 형식이 아닙니다 ({host}) — 점 네 개로 된 10진 표기만 받습니다") from None
     if loop:
         raise TargetError(f"{where}: {host} 는 컨테이너 자신을 가리킵니다. {_HOST_HINT}")
     return h
@@ -135,6 +137,8 @@ def parse_target(url: str):
         raise TargetError(f"http·https URL 만 점검합니다 (받은 scheme: {u.scheme or '없음'})")
     if "@" in u.netloc:
         raise TargetError("URL 에 사용자 정보(user@host)를 넣을 수 없습니다")
+    if u.netloc.count(":") > 1:
+        raise TargetError(f"URL 의 호스트·포트를 해석할 수 없습니다 ({u.netloc}) — ':' 는 포트 앞에 하나만 씁니다")
     host = _check_host(u.hostname or "", "URL")
     port = _check_port(port_raw, scheme, "URL")
     path = u.path or "/"
@@ -149,16 +153,29 @@ def match(entries, scheme, host, port):
     return None
 
 
+def display_url(norm: str) -> str:
+    """로그·리포트에 남기는 점검 URL — 질의 문자열 값·조각을 가린다 (ZAP 에는 원문을 넘긴다, PR #34 리뷰 W1)."""
+    return _redact_url(norm)
+
+
+def prod_like_host(host: str) -> bool:
+    """호스트 이름의 라벨이 prod·production 이면 운영 대상일 수 있다 (경고만, PR #34 리뷰 S7)."""
+    return any(lab in ("prod", "production") or lab.startswith(("prod-", "production-")) or lab.endswith(("-prod", "-production"))
+               for lab in host.split("."))
+
+
 def proxy_filters(scheme: str, host: str, port: int):
     """tinyproxy(FilterType ere, FilterURLs On) 필터 — 요청 URL 전체에 맞춘다.
     http 는 'http://host[:port]/…', https 는 CONNECT 의 'host:port' 로 들어온다 (tinyproxy 1.11.3 실측).
-    대소문자는 tinyproxy 기본값(FilterCaseSensitive No)으로 무시된다."""
+    대소문자는 tinyproxy 기본값(FilterCaseSensitive No)으로 무시된다.
+    http 는 출처 바로 뒤에 '/' 나 끝만 허용한다 — tinyproxy 는 첫 '/' 앞을 호스트 부분으로 보고 그 안의 '@' 앞을 버리므로,
+    'http://허용:3000?@다른곳:3000/' 처럼 '?' 를 허용하면 필터는 통과하고 '다른곳'으로 접속한다 (PR #34 리뷰 C1, 1.11.3 실측)."""
     # 호스트 이름은 [a-z0-9.-] 만 남는다(_check_host). POSIX ERE 에서 '\-' 같은 이스케이프는 정의되지 않으므로 '.' 만 이스케이프한다
     h = host.replace(".", "\\.")
     if scheme == "https":
         return [f"^{h}:{port}$"]
     p = f"(:{port})?" if port == DEFAULT_PORTS[scheme] else f":{port}"
-    return [f"^http://{h}{p}([/?]|$)"]
+    return [f"^http://{h}{p}(/|$)"]
 
 
 # ---------------------------------------------------------------------------
@@ -170,14 +187,25 @@ ISOLATION_PROBE_HOST = "dwk-isolation-probe.invalid"
 DENIED_MAX = 50
 
 
+def _mask_params(text: str, sep: str) -> str:
+    return sep.join(p.split("=", 1)[0] + ("=[MASKED]" if "=" in p else "") for p in text.split(sep))
+
+
 def _redact_url(u: str) -> str:
-    """질의 문자열 값·사용자 정보는 토큰일 수 있으므로 지운다 (출처와 경로만 남긴다)."""
+    """URL 에서 토큰일 수 있는 부분을 가린다 — 사용자 정보, 질의 문자열 값, 조각(#…) 전체, 경로 매개변수(;jsessionid=…) 값.
+    출처와 경로·매개변수 이름만 남긴다 (PR #34 리뷰 S2: 조각 뒤 '?' 를 질의로 오인하지 않게 조각을 먼저 자른다)."""
     u = re.sub(r"[\x00-\x1f\x7f]", "", u)[:500]
     u = re.sub(r"(?<=://)[^/@\s]*@", "[MASKED]@", u)
+    u, h, _frag = u.partition("#")
     base, q, query = u.partition("?")
+    head, sl, path = base.partition("://")
+    if sl:
+        auth, slash, rest = path.partition("/")
+        path = auth + slash + "/".join(_mask_params(seg, ";") if ";" in seg else seg for seg in rest.split("/"))
+        base = head + sl + path
     if q:
-        base += "?" + "&".join(p.split("=", 1)[0] + ("=[MASKED]" if "=" in p else "") for p in query.split("&"))
-    return base
+        base += "?" + _mask_params(query, "&")
+    return base + ("#[MASKED]" if h else "")
 
 
 def denied_requests(log_text: str):
@@ -214,7 +242,10 @@ def main(argv) -> int:
             print(str(ex), file=sys.stderr)
             return 1
         print(f"url\t{norm}")
+        print(f"display\t{display_url(norm)}")
         print(f"origin\t{scheme}://{host}:{port}")
+        if prod_like_host(host):
+            print(f"warning\t호스트 이름({host})에 prod 가 들어 있습니다 — 운영 대상이 아닌지 확인하세요. 운영이면 허용목록에서 빼거나 '# prod' 로 표시하세요")
         for f in proxy_filters(scheme, host, port):
             print(f"filter\t{f}")
         return 0
