@@ -353,9 +353,11 @@ class MobsfReportTest(unittest.TestCase):
                 self.assertRegex(enc[:-1], r"^[a-z]*(%EA%B0%80)+$", (prefix, limit))
                 urllib.parse.unquote(enc[:-1], errors="strict")
         # 앞에서부터 자른다 — 넘치는 글자 뒤의 짧은 글자를 건너뛰어 붙이지 않는다 (5차 S1)
-        for s in ("가" * 40 + "abc", "a" * 290 + "가" + "bcdefghijk"):
-            enc = mobsf_report.safe_ident(s, 300)
-            self.assertTrue(mobsf_report.safe_ident(s, 10_000).startswith(enc[:-1]), s[-12:])
+        s = "가" * 40 + "abc"
+        enc = mobsf_report.safe_ident(s, 300)
+        self.assertTrue(mobsf_report.safe_ident(s, 10_000).startswith(enc[:-1]))
+        # 딱 맞게 들어가는 조각은 버리지 않는다 (6차 N1)
+        self.assertEqual(mobsf_report.safe_ident("a" * 290 + "가" + "bcdefghijk", 300), "a" * 290 + "%EA%B0%80…")
         # 짝 없는 서로게이트도 예외 없이 되돌릴 수 있는 표기로 남는다 (5차 Open Question)
         self.assertEqual(mobsf_report.safe_ident("a\udcffb"), "a%ED%B3%BFb")
         # 산출물 안 항목 이름에 든 접두사 토큰은 Gitleaks 위치에서도 가린다 (3차 NT3·4차 S2)
@@ -470,16 +472,6 @@ class ComposeProxyTest(unittest.TestCase):
 
 
 class NormalizeAppTest(unittest.TestCase):
-    def test_write_survives_lone_surrogate(self):
-        """5차 Open Question: 잘못된 UTF-8 이름이 남긴 짝 없는 서로게이트가 든 정제본도 쓰기가 예외로 끝나지 않는다."""
-        rep = {"permissions": {"a\udcffb": {"status": "dangerous"}}, "package_name": "x"}
-        text = json.dumps(mobsf_report.sanitize(rep, lambda t: normalize.clean_text(t, 4000)), ensure_ascii=False)
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "mobsf.json")
-            normalize._write(path, text)
-            with open(path, encoding="utf-8") as fh:
-                self.assertIn("\\udcff", fh.read())
-
     def setUp(self):
         self.run = tempfile.mkdtemp()
         os.mkdir(os.path.join(self.run, "raw"))
@@ -490,6 +482,31 @@ class NormalizeAppTest(unittest.TestCase):
     def write(self, name, text):
         with open(os.path.join(self.run, "raw", name), "w", encoding="utf-8") as f:
             f.write(text)
+
+    def test_app_run_survives_lone_surrogate_names(self):
+        """5차 Open Question·6차 W1: 앱이 잘못된 UTF-8 이름을 넣어 리포트에 짝 없는 서로게이트(\\udcXX)가 생겨도
+        해석·쓰기가 예외로 끝나 MobSF·Gitleaks 결과 전체가 빠지지 않는다 (끝까지 도는 경로로 확인)."""
+        rep = load_fixture("mobsf-android.json")
+        rep["code_analysis"]["findings"]["android_md5"]["files"] = {"a/b\udcffc.java": "1"}
+        rep["binary_analysis"] = [{"name": "lib/\udcffx.so", "nx": {"severity": "high", "description": "no nx"}}]
+        self.write("mobsf-full.json", json.dumps(rep))    # MobSF 의 JsonResponse 처럼 \udcff 이스케이프로 온다
+        self.write("gitleaks-artifact.json", json.dumps([{"RuleID": "generic-api-key", "StartLine": 1,
+                                                          "File": "/in/artifact.zip!assets/\udcffz.json",
+                                                          "Match": "key=REDACTED"}]))
+        self.write("status.tsv", "mobsf\tok\t0\t\ngitleaks-artifact\tok\t0\t\n")
+        self.write("profiles.tsv", "android\t.\t\n")
+        rc = normalize.main(["--run-dir", self.run, "--kind", "app", "--target", "/x/app-release.apk",
+                             "--profiles-tsv", os.path.join(self.run, "raw", "profiles.tsv")])
+        self.assertEqual(rc, 0)
+        with open(os.path.join(self.run, "meta.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["errors"], [])
+        with open(os.path.join(self.run, "findings.json"), encoding="utf-8") as f:
+            files = {x["location"]["file"] for x in json.load(f)["findings"]}
+        for want in ("a/b%ED%B3%BFc.java", "lib/%ED%B3%BFx.so", "assets/%ED%B3%BFz.json"):
+            self.assertIn(want, files)
+        # 정제본도 유효한 JSON 이고 서로게이트를 되돌릴 수 있는 표기로 남긴다
+        with open(os.path.join(self.run, "raw", "mobsf.json"), encoding="utf-8") as f:
+            self.assertIn("a/b\udcffc.java", json.load(f)["code_analysis"]["findings"]["android_md5"]["files"])
 
     def test_app_run_writes_sanitized_raw_checklist_and_warnings(self):
         self.write("mobsf-full.json", json.dumps(injected_report()))

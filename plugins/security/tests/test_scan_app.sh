@@ -200,8 +200,8 @@ dwk-sec-app-0000000000cc 2030-01-01T11:50:00+09:00
 dwk-sec-app-0000000000ee 2020-01-01T00:00:00Z
 dwk-sec-app-0000000000ee garbage
 dwk-sec-app-0000000000ff 0001-01-01T00:00:00Z
-dwk-sec-app-0000000000ab 2020-01-01T00:00:00Z
 dwk-sec-app-0000000000ab
+dwk-sec-app-0000000000ab 2020-01-01T00:00:00Z
 EOF
   cat >"$SEC_TMP/volumes.txt" <<'EOF'
 dwk-sec-app-0000000000cc 2029-12-31T00:00:00Z
@@ -221,6 +221,7 @@ EOF
   assert_not_contains "$downs" "dwk-sec-app-0000000000ee"
   assert_not_contains "$downs" "dwk-sec-app-0000000000ff"
   # 시각 필드가 아예 없는 줄도 "모름"이다 (4차 리뷰 S2). id 는 16진수여야 이름 필터를 지나 이 판정까지 온다 (5차 W1) —
+  # 모르는 줄이 먼저 와도 뒤의 시각 있는 줄이 "모름"을 덮지 않는다 (6차 S1 — ee 는 반대 순서).
   # 반대로 xyz 는 이름 필터에서 걸러지는지 보려고 일부러 16진수가 아닌 id 를 쓴다
   assert_not_contains "$downs" "dwk-sec-app-0000000000ab"
   # 볼륨만 남은 프로젝트는 down 뒤에 그 프로젝트의 볼륨도 지운다 (NT7a·4차 N4)
