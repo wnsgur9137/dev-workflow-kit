@@ -89,7 +89,7 @@ def safe_ident(text, limit: int = 200) -> str | None:
         return None
     out = []
     for ch in str(text):
-        out.append(ch if ch in _SAFE_IDENT_CHARS else "".join(f"%{b:02X}" for b in ch.encode("utf-8")))
+        out.append(ch if ch in _SAFE_IDENT_CHARS else "".join(f"%{b:02X}" for b in ch.encode("utf-8", "surrogatepass")))
     t = "".join(out)
     if len(t) <= limit:
         return t

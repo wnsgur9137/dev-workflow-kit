@@ -858,7 +858,8 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors, checkli
 # ---------------------------------------------------------------------------
 def _write(path, text):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    # 잘못된 UTF-8 이름이 surrogateescape 로 남긴 짝 없는 서로게이트가 있어도 쓰기가 예외로 끝나지 않게 (PR #32 5차 리뷰)
+    with os.fdopen(fd, "w", encoding="utf-8", errors="backslashreplace") as f:
         f.write(text)
     os.chmod(path, 0o600)
 
