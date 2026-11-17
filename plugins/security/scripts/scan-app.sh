@@ -174,36 +174,7 @@ cleanup_stale() {
   projects=$({
     [ -n "$ids" ] && docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}} {{.Created}}' $ids 2>/dev/null
     [ -n "$vols" ] && docker volume inspect -f '{{index .Labels "com.docker.compose.project"}} {{.CreatedAt}}' $vols 2>/dev/null
-  } | python3 -I -c '
-import datetime as dt, re, sys
-def parse(t):
-    # RFC3339Nano(소수점 1~9자리)·Z·+09:00 — 3.9 의 fromisoformat 은 소수점 6자리만 받는다
-    t = re.sub(r"\.(\d{1,9})", lambda m: "." + (m.group(1) + "000000")[:6], t.strip()).replace("Z", "+00:00")
-    ts = dt.datetime.fromisoformat(t)
-    if ts.tzinfo is None:
-        raise ValueError("시간대 없음")
-    return ts
-limit = int(sys.argv[1]) * 60
-now = parse(sys.argv[2])
-newest = {}
-for line in sys.stdin:
-    p = line.split()
-    if not p or not re.fullmatch(r"dwk-sec-app-[0-9a-f]{12}", p[0]):
-        continue
-    try:
-        if len(p) != 2:
-            raise ValueError("시각 없음")
-        ts = parse(p[1])
-        if ts.year < 2000:
-            raise ValueError("zero time")   # Go 의 zero time(0001-01-01)은 "모름"이다 (3차 리뷰 NT1)
-    except ValueError:
-        newest[p[0]] = None          # 시각을 모르는 프로젝트는 지우지 않는다
-        continue
-    if p[0] in newest and newest[p[0]] is None:
-        continue
-    newest[p[0]] = max(newest.get(p[0]) or ts, ts)
-print(" ".join(k for k, v in newest.items() if v is not None and (now - v).total_seconds() > limit))
-' "$STALE_MIN" "$now" 2>/dev/null)
+  } | python3 -I "$SEC_PLUGIN/scripts/lib/stale_projects.py" dwk-sec-app "$STALE_MIN" "$now" 2>/dev/null)
   for p in $projects; do
     docker compose -p "$p" -f "$COMPOSE_FILE_PATH" --profile client down -v --remove-orphans --timeout 5 >/dev/null 2>&1 && n=$((n + 1))
     # 컨테이너 없이 볼륨만 남은 프로젝트도 지운다 (2차 리뷰 Open Question)
