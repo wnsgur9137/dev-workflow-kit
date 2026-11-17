@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 import tempfile
+import urllib.parse
 import threading
 import unittest
 import zipfile
@@ -342,10 +343,19 @@ class MobsfReportTest(unittest.TestCase):
         md5 = [x for x in f if x["rule_id"] == "mobsf.code.android-md5"]
         self.assertEqual(len({x["location"]["file"] for x in md5}), 1, "표시값은 같게 잘린다")
         self.assertEqual(len({x["id"] for x in md5}), 2)
-        # 잘릴 때 '%XX' 가운데서 끊기지 않는다 (NT4)
-        enc = mobsf_report.safe_ident("가" * 200, 100)
-        self.assertTrue(enc.endswith("…"))
-        self.assertRegex(enc[:-1], r"^(%[0-9A-F]{2})+$")
+        # 잘릴 때 '%XX' 가운데나 UTF-8 한 글자 가운데서 끊기지 않는다 (NT4·4차 S1) — 앞에 ASCII 를 붙여 경계를 어긋나게 한다
+        for prefix in ("", "a", "ab"):
+            for limit in (100, 101, 102, 300):
+                enc = mobsf_report.safe_ident(prefix + "가" * 200, limit)
+                self.assertTrue(enc.endswith("…"))
+                self.assertLessEqual(len(enc), limit)
+                self.assertRegex(enc[:-1], r"^[a-z]*(%EA%B0%80)+$", (prefix, limit))
+                urllib.parse.unquote(enc[:-1], errors="strict")
+        # 산출물 안 항목 이름에 든 접두사 토큰은 Gitleaks 위치에서도 가린다 (3차 NT3·4차 S2)
+        tok = "ghp_" + "A1b2C3d4E5" * 3 + "F6g7H8"
+        gl = normalize.parse_gitleaks([{"RuleID": "k", "File": f"/in/artifact.zip!assets/{tok}.json", "StartLine": 1}],
+                                      "artifact")
+        self.assertNotIn(tok[4:], gl[0]["location"]["file"])
         # 이미 인코딩처럼 보이는 이름도 다른 이름과 섞이지 않는다 ('%' 도 인코딩)
         self.assertNotEqual(mobsf_report.safe_ident("a%20b"), mobsf_report.safe_ident("a b"))
 
@@ -414,8 +424,12 @@ class MobsfReportTest(unittest.TestCase):
         rep["code_analysis"]["findings"]["android_md5"]["metadata"]["ref"] = f"https://x.example/{b64}"
         # 'name' 은 바이너리 섹션 아래에서만 경로로 본다 — 그 밖의 name 에 든 key=value 는 가린다 (3차 NT5)
         rep["trackers"] = {"trackers": [{"name": "password=hunter2SuperSecret"}]}
+        # 바이너리 섹션의 name 은 경로라 고엔트로피처럼 보여도 그대로 남는다 (1차 S4·4차 S2)
+        so_path = "lib/arm64-v8a/libengine_3f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e.so"
+        rep["binary_analysis"] = [{"name": so_path}]
         out = mobsf_report.sanitize(rep, lambda t: normalize.clean_text(t, 4000), lambda t: normalize.clean_ident(t, 4000))
         self.assertIn(long_path, out["code_analysis"]["findings"]["android_md5"]["files"])
+        self.assertEqual(out["binary_analysis"][0]["name"], so_path)
         dump = json.dumps(out)
         for secret in (AWS_KEY, url_tok, b64, "hunter2SuperSecret"):
             self.assertNotIn(secret, dump, secret)
@@ -430,6 +444,20 @@ class MobsfReportTest(unittest.TestCase):
         self.assertTrue(f)
         with self.assertRaises(ValueError):
             mobsf_report.parse([], normalize.clean_text, normalize.clean_ident, 160, 200, "x", "android")
+
+
+class ComposeProxyTest(unittest.TestCase):
+    def test_both_services_blank_out_proxy_env(self):
+        """4차 N3: ~/.docker/config.json 의 proxies 가 넣는 변수를 두 서비스 모두 빈 값으로 덮어쓴다.
+        지워지면 프록시 환경에서만 격리 확인이 실패해 드러나므로 텍스트로 고정한다."""
+        with open(os.path.join(HERE, "..", "docker", "compose.yml"), encoding="utf-8") as fh:
+            text = fh.read()
+        services = text.split("\n  mobsf-client:\n")
+        self.assertEqual(len(services), 2)
+        for name, body in zip(("mobsf", "mobsf-client"), services):
+            for var in ("HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY"):
+                for k in (var, var.lower()):
+                    self.assertRegex(body, rf'\n {{6}}{k}: ""\n', f"{name}: {k}")
 
 
 class NormalizeAppTest(unittest.TestCase):

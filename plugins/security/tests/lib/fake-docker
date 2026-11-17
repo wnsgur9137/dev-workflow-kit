@@ -15,7 +15,7 @@
 #                       run·logs 는 stderr 에 실제 MobSF 처럼 API 키를 찍는다 (마스킹 확인용)
 #                       FAKE_COMPOSE_RUN_SLEEP=<초> run 이 그만큼 머문다 (중단 신호 확인용)
 #   남은 스택 정리: FAKE_PS_IDS=<id ...> docker ps -aq · FAKE_INSPECT_LINES=<파일> docker inspect 출력(프로젝트 시각)
-#                   FAKE_VOLUMES=<이름 ...> docker volume ls -q · FAKE_VOLUME_LINES=<파일> docker volume inspect 출력
+#                   FAKE_VOLUMES=<이름 ...> docker volume ls -q (label=…project=<p> 로 거르면 vol-<p>) · FAKE_VOLUME_LINES=<파일> docker volume inspect 출력
 #                   FAKE_SYSTEM_TIME=<RFC3339> docker info .SystemTime (빈 값이면 출력 없음)
 [ -n "${FAKE_LOG:-}" ] && echo "docker $*" >>"$FAKE_LOG"
 case "$1" in
@@ -95,8 +95,15 @@ case "$1" in
   volume)
     case "$2" in
       ls)
-        # shellcheck disable=SC2086  # 공백으로 구분한 목록을 한 줄씩 낸다
-        [ -n "${FAKE_VOLUMES:-}" ] && printf '%s\n' $FAKE_VOLUMES
+        args="$*"
+        case "$args" in
+          # 프로젝트 하나로 거른 목록 — 그 프로젝트의 볼륨 이름만 낸다
+          *label=com.docker.compose.project=*) echo "vol-${args##*label=com.docker.compose.project=}" ;;
+          *)
+            # shellcheck disable=SC2086  # 공백으로 구분한 목록을 한 줄씩 낸다
+            [ -n "${FAKE_VOLUMES:-}" ] && printf '%s\n' $FAKE_VOLUMES
+            ;;
+        esac
         ;;
       inspect) [ -n "${FAKE_VOLUME_LINES:-}" ] && cat "$FAKE_VOLUME_LINES" ;;
     esac

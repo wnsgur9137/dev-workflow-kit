@@ -200,6 +200,8 @@ dwk-sec-app-0000000000cc 2030-01-01T11:50:00+09:00
 dwk-sec-app-0000000000ee 2020-01-01T00:00:00Z
 dwk-sec-app-0000000000ee garbage
 dwk-sec-app-0000000000ff 0001-01-01T00:00:00Z
+dwk-sec-app-0000000000gg 2020-01-01T00:00:00Z
+dwk-sec-app-0000000000gg
 EOF
   cat >"$SEC_TMP/volumes.txt" <<'EOF'
 dwk-sec-app-0000000000cc 2029-12-31T00:00:00Z
@@ -218,8 +220,11 @@ EOF
   # 시각을 모르는 줄이 섞인 프로젝트(ee)·Go zero time(ff)은 "모름"이라 지우지 않는다 (3차 리뷰 NT1·NT7b)
   assert_not_contains "$downs" "dwk-sec-app-0000000000ee"
   assert_not_contains "$downs" "dwk-sec-app-0000000000ff"
-  # 볼륨만 남은 프로젝트는 down 뒤에 볼륨도 지운다 (NT7a)
-  grep -q '^docker volume rm' "$FAKE_LOG" || fail "docker volume rm 이 호출되지 않음"
+  # 시각 필드가 아예 없는 줄도 "모름"이다 (4차 리뷰 S2)
+  assert_not_contains "$downs" "dwk-sec-app-0000000000gg"
+  # 볼륨만 남은 프로젝트는 down 뒤에 그 프로젝트의 볼륨도 지운다 (NT7a·4차 N4)
+  grep -q '^docker volume rm vol-dwk-sec-app-0000000000dd$' "$FAKE_LOG" || fail "dd 의 볼륨을 지우지 않음"
+  assert_not_contains "$(grep '^docker volume rm' "$FAKE_LOG")" "0000000000bb"
   assert_not_contains "$(cat "$FAKE_LOG")" "-p other-proj"
   assert_not_contains "$(cat "$FAKE_LOG")" "-p dwk-sec-app-xyz"
   assert_contains "$(cat "$APP_RUN/summary.md")" "이전 실행이 남긴 MobSF 스택 2개"
