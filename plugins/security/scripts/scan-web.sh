@@ -68,18 +68,21 @@ if ! CHECK=$(python3 -I "$SEC_PLUGIN/scripts/lib/web_target.py" check "$ALLOWLIS
   exit 1
 fi
 rm -f "$CHECK_ERR"
-TARGET_URL="" ORIGIN="" FILTER=""
+TARGET_URL="" DISPLAY_URL="" ORIGIN="" FILTER="" CHECK_WARN=""
 while IFS="$TAB" read -r kind value; do
   case "$kind" in
     url) TARGET_URL=$value ;;
+    display) DISPLAY_URL=$value ;;
     origin) ORIGIN=$value ;;
+    warning) CHECK_WARN="${CHECK_WARN:+$CHECK_WARN
+}$value" ;;
     filter) FILTER="${FILTER:+$FILTER
 }$value" ;;
   esac
 done <<EOF
 $CHECK
 EOF
-if [ -z "$TARGET_URL" ] || [ -z "$FILTER" ]; then
+if [ -z "$TARGET_URL" ] || [ -z "$DISPLAY_URL" ] || [ -z "$FILTER" ]; then
   sec_die "허용목록 검사 결과를 읽지 못했습니다."
 fi
 
@@ -97,7 +100,15 @@ WARNINGS_FILE="$RAW/warnings.txt"
 : >"$WARNINGS_FILE"
 STARTED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 sec_log "run-id: $SEC_RUN_ID"
-sec_log "대상: $TARGET_URL (프록시가 여는 출처: $ORIGIN)"
+# 로그·리포트에는 질의 문자열 값·조각을 가린 URL 만 남긴다 (ZAP 에는 원문, PR #34 리뷰 W1)
+sec_log "대상: $DISPLAY_URL (프록시가 여는 출처: $ORIGIN)"
+if [ -n "$CHECK_WARN" ]; then
+  printf '%s\n' "$CHECK_WARN" >>"$WARNINGS_FILE"
+  sec_warn "$CHECK_WARN"
+fi
+ORIGIN_HP=${ORIGIN#*://}
+ORIGIN_HOST=${ORIGIN_HP%:*}
+ORIGIN_PORT=${ORIGIN_HP##*:}
 
 record() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$STATUS"; }
 rand_hex() { od -An -N"$1" -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'; }
@@ -111,6 +122,11 @@ COMPOSE_PROJECT="dwk-sec-web-$PROJECT_SUFFIX"
 DWK_SPIDER_MIN=3
 DWK_PASSIVE_MIN=10
 SCAN_TIMEOUT=1800
+# 테스트 전용: 시간 초과 경로를 확인하려고 상한을 **줄이기만** 할 수 있다 (늘릴 수는 없다)
+case "${DWK_SEC_TEST_SCAN_TIMEOUT:-}" in
+  '' | *[!0-9]*) ;;
+  *) [ "$DWK_SEC_TEST_SCAN_TIMEOUT" -lt "$SCAN_TIMEOUT" ] && SCAN_TIMEOUT=$DWK_SEC_TEST_SCAN_TIMEOUT ;;
+esac
 DWK_ZAP_IMAGE=$IMG_ZAP
 DWK_PROXY_IMAGE=$IMG_PROXY
 DWK_TARGET_URL=$TARGET_URL
@@ -135,14 +151,17 @@ compose() { docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE_PATH" "$@"; }
 # 시각 판정은 scripts/lib/stale_projects.py (scan-app 과 같은 규칙 — 엔진 시계 기준, 시각을 모르면 지우지 않음)
 STALE_MIN=120
 cleanup_stale() {
-  local ids projects p n=0 now
+  local ids nets projects p n=0 now
   now=$(docker info --format '{{.SystemTime}}' 2>/dev/null)
   [ -n "$now" ] || return 0
   ids=$(docker ps -aq --filter label=com.docker.compose.project 2>/dev/null)
-  [ -n "$ids" ] || return 0
+  # 컨테이너는 지워지고 네트워크만 남은 프로젝트도 찾는다 (PR #34 리뷰 S5)
+  nets=$(docker network ls -q --filter label=com.docker.compose.project 2>/dev/null)
   # shellcheck disable=SC2086  # id 목록 — 공백 없는 이름이다
-  projects=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}} {{.Created}}' $ids 2>/dev/null |
-    python3 -I "$SEC_PLUGIN/scripts/lib/stale_projects.py" dwk-sec-web "$STALE_MIN" "$now" 2>/dev/null)
+  projects=$({
+    [ -n "$ids" ] && docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}} {{.Created}}' $ids 2>/dev/null
+    [ -n "$nets" ] && docker network inspect -f '{{index .Labels "com.docker.compose.project"}} {{.Created}}' $nets 2>/dev/null
+  } | python3 -I "$SEC_PLUGIN/scripts/lib/stale_projects.py" dwk-sec-web "$STALE_MIN" "$now" 2>/dev/null)
   for p in $projects; do
     docker compose -p "$p" -f "$COMPOSE_FILE_PATH" --profile scan down -v --remove-orphans --timeout 5 >/dev/null 2>&1 && n=$((n + 1))
   done
@@ -171,8 +190,12 @@ trap 'exit 143' TERM
 cleanup_stale
 
 save_proxy_log() {
-  # 차단 목록은 프록시 로그에서만 알 수 있다 — 스택을 내리기 전에 받는다
-  compose logs --no-color --no-log-prefix egress-proxy >"$RAW/proxy.log" 2>/dev/null
+  # 차단 목록은 프록시 로그에서만 알 수 있다 — 스택을 내리기 전에 받는다.
+  # 로그를 받지 못했거나 tinyproxy 시작 줄이 없으면(빈 로그·다른 출력) 차단 목록을 만들지 않는다 → normalize 가
+  # "없음" 대신 "읽지 못했습니다" 경고를 낸다 (PR #34 리뷰 W2)
+  rm -f "$RAW/proxy-denied.json"
+  compose logs --no-color --no-log-prefix egress-proxy >"$RAW/proxy.log" 2>/dev/null || return 0
+  grep -q 'Initializing tinyproxy' "$RAW/proxy.log" || return 0
   python3 -I "$SEC_PLUGIN/scripts/lib/web_target.py" denied "$RAW/proxy.log" >"$RAW/proxy-denied.json" 2>/dev/null ||
     rm -f "$RAW/proxy-denied.json"
 }
@@ -188,34 +211,12 @@ run_zap() {
     return
   fi
   # 스캔 전에 격리를 실제로 확인한다 (V1 N2) — ZAP 컨테이너에서
-  #   직접 이름 풀이·IP 연결이 되면(프록시 우회) 중단, 프록시 변수가 남아 있으면 중단,
+  #   직접 이름 풀이·IP 연결·대상 직접 연결이 되면(프록시 우회) 중단, 프록시 변수가 남아 있으면 중단,
   #   프록시가 허용목록 밖 요청을 403 으로 막지 않으면(필터가 안 먹음) 중단한다.
   #   허용목록 밖 확인용 이름은 .invalid 라 프록시가 필터에서 막고 이름 풀이도 하지 않는다 (차단 목록에서는 뺀다)
-  iso=$(compose --profile scan run --rm --no-deps -T --entrypoint python3 zap -I -c '
-import os, socket, urllib.request, urllib.error
-socket.setdefaulttimeout(4)
-r = []
-for h in ("example.com", "www.zaproxy.org"):
-    try:
-        socket.getaddrinfo(h, 443); r.append("dns:" + h)
-    except OSError:
-        pass
-try:
-    socket.create_connection(("1.1.1.1", 443), timeout=4); r.append("ip")
-except OSError:
-    pass
-r += ["proxy-env:" + k for k, v in os.environ.items()
-      if k.lower() in ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy") and v.strip()]
-op = urllib.request.build_opener(urllib.request.ProxyHandler({"http": "http://egress-proxy:8888"}))
-try:
-    op.open("http://dwk-isolation-probe.invalid/", timeout=6); r.append("proxy-allows-outside")
-except urllib.error.HTTPError as e:
-    if e.code != 403:
-        r.append("proxy-status:%d" % e.code)
-except OSError as e:
-    r.append("proxy-unreachable")
-print("isolated" if not r else "LEAK " + " ".join(r))
-' 2>&1 | tail -n 1)
+  # 검사 내용은 scripts/lib/iso_probe.py (ZAP 컨테이너에 마운트가 없으므로 내용을 -c 로 넘긴다). 대상 host:port 직접 연결도 본다
+  iso=$(compose --profile scan run --rm --no-deps -T --entrypoint python3 zap -I -c "$(cat "$SEC_PLUGIN/scripts/lib/iso_probe.py")" \
+    "$ORIGIN_HOST" "$ORIGIN_PORT" 2>&1 | tail -n 1)
   if [ "$iso" != isolated ]; then
     record zap failed - "격리 확인 실패 — ZAP 컨테이너에서 프록시를 거치지 않는 통신·프록시 변수·필터 미적용이 확인됩니다(${iso:-확인 불가}). 대상에 요청하지 않았습니다. Docker 엔진 버전(예: CVE-2024-29018)·~/.docker/config.json 의 proxies·런타임 네트워크 설정을 확인하세요"
     save_proxy_log
@@ -231,9 +232,11 @@ print("isolated" if not r else "LEAK " + " ".join(r))
   # 스캔이 먼저 끝나 TERM 을 받으면 sleep 도 함께 끝낸다 (서브셸만 죽이면 sleep 이 고아로 남는다)
   (
     exec >/dev/null 2>&1
+    s=""
+    # trap 을 sleep 보다 먼저 건다 — 스캔이 바로 끝나 TERM 이 먼저 오면 sleep 을 띄우지 않고 끝난다 (PR #34 리뷰 S6)
+    trap '[ -n "$s" ] && kill "$s" 2>/dev/null; exit 0' TERM
     sleep "$SCAN_TIMEOUT" &
     s=$!
-    trap 'kill "$s" 2>/dev/null; exit 0' TERM
     wait "$s" || exit 0
     : >"$RAW/zap.timeout"
     # compose run 이 띄운 일회성 컨테이너도 서비스 라벨은 zap 이다 — 프록시는 남겨 차단 로그를 받는다
@@ -294,7 +297,7 @@ json.dump({
 PY
 
 if ! python3 -I "$SEC_PLUGIN/scripts/normalize.py" --run-dir "$SEC_RUN_DIR" --kind web \
-  --target "$TARGET_URL" --meta-json "$META_IN" 2>>"$SEC_LOG_FILE"; then
+  --target "$DISPLAY_URL" --meta-json "$META_IN" 2>>"$SEC_LOG_FILE"; then
   sec_die "리포트 정규화 실패 — $SEC_LOG_FILE 확인"
 fi
 
