@@ -632,6 +632,7 @@ def parse_mobsf(data, platform_profile, converted_aab=False):
 # ZAP riskcode → severity (docs/security/02 도구/OWASP ZAP.md). confidence 0 은 ZAP 이 오탐으로 표시한 것이라 뺀다
 _ZAP_RISK = {"3": "high", "2": "medium", "1": "low", "0": "info"}
 ZAP_INSTANCES_MAX = 5
+_URL_IN_TEXT = re.compile(r"https?://[^\s\"'<>]{1,2000}")
 
 
 def _strip_html(text) -> str:
@@ -662,7 +663,8 @@ def parse_zap(data):
                 if i.get("param"):
                     bits.append(f"param={i['param']}")
                 if i.get("evidence"):
-                    bits.append(f"evidence={i['evidence']}")
+                    # 근거는 응답 조각이다 — 그 안의 URL 도 질의 문자열·조각을 가린다 (PR #34 리뷰 S1)
+                    bits.append("evidence=" + _URL_IN_TEXT.sub(lambda m: _web._redact_url(m.group(0)), str(i["evidence"])))
                 ev.append(" · ".join(bits))
             try:
                 count = int(a.get("count") or len(insts))
