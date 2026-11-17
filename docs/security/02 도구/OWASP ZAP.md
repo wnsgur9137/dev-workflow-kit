@@ -45,4 +45,5 @@ ZAP risk `High/Medium/Low/Informational` → `high/medium/low/info`
 > - **`-silent` 가 없으면 `zap-baseline.py` 가 `-addonupdate -addoninstall pscanrulesBeta` 를 실행해 외부로 나간다** (`zap-baseline.py` 435~437행). `-silent` 면 이 단계를 건너뛰고 업데이트 확인·call-home 도 하지 않는다. 그 대신 이미지에 든 애드온만 쓴다 — 수동 규칙은 release(`pscanrules-release-77`)만 있고 beta 규칙은 없다
 > - 호스트 uid 로는 시작하지 못한다 — Java 가 passwd 의 홈을 써서 `/zap/?/.ZAP` 을 만들려다 실패한다. 이미지 사용자 `zap`(1000)으로 돌리고 홈·작업 폴더를 tmpfs 로 준다 (호스트에 쓰지 않으므로 uid 를 맞출 필요가 없다)
 > - 범위 밖 링크(`http://example.com/…`)는 스파이더가 요청하지 않는다 — 프록시 로그에도 나오지 않는다
+> - 프록시 필터(tinyproxy `FilterURLs On`)는 요청줄 URL 원문에 맞추지만 접속할 호스트는 첫 `/` 앞에서 `@` 앞을 버리고 정한다. 그래서 http 필터는 출처 뒤에 `/` 나 끝만 허용한다(`(/|$)`) — `?` 를 허용하면 `http://허용:3000?@다른곳/` 이 다른 곳으로 프록시됐다 (PR #34 리뷰 C1). ZAP 스파이더는 이런 링크를 `/?@…` 로 정규화해 보내지만, 2차 강제는 클라이언트 동작과 상관없이 성립해야 한다. 통합 테스트가 원시 소켓으로 확인한다
 > - 로컬 개발 서버는 `host.docker.internal:<포트>` 를 허용목록에 넣는다. 이 이름은 egress-proxy 에서만 풀리고, 프록시는 그 출처(scheme+host+port) 하나만 연다 → [[Docker 런타임#로컬 서버 점검 시 호스트 주소]]
