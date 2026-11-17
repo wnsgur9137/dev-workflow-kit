@@ -1,0 +1,17 @@
+{
+  "description": "V2 모바일 기준선 — tests/fixtures/app/android 를 빌드한 APK·AAB 를 /security:scan-app 으로 점검 (MobSF v4.6.4)",
+  "must_find": [
+    {"tool": "mobsf", "rule_id": "mobsf.manifest.app-is-debuggable", "severity": "high", "file": "AndroidManifest.xml"},
+    {"tool": "mobsf", "rule_id": "mobsf.manifest.app-allowbackup", "severity": "medium"},
+    {"tool": "mobsf", "rule_id": "mobsf.manifest.clear-text-traffic", "severity": "high"},
+    {"tool": "mobsf", "rule_id": "mobsf.network.cleartext", "severity": "high"},
+    {"tool": "mobsf", "rule_id": "mobsf.network.user-certs", "severity": "high"},
+    {"tool": "mobsf", "rule_id": "mobsf.code.android-md5", "file": "com/example/vulnapp/MainActivity.java"},
+    {"tool": "mobsf", "rule_id": "mobsf.code.android-hardcoded"},
+    {"tool": "mobsf", "rule_id": "mobsf.secret.hardcoded", "severity": "high", "package": "google_api_key"}
+  ],
+  "must_not_find": [
+    {"tool": "mobsf", "rule_prefix": "mobsf.macho."},
+    {"tool": "mobsf", "rule_prefix": "mobsf.ats."}
+  ]
+}

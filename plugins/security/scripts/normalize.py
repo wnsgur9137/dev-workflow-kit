@@ -4,8 +4,8 @@
 docs/security/01 개요/리포트 포맷.md 의 스키마를 따른다. 표준 라이브러리만 사용한다.
 
 사용:
-  normalize.py --run-dir DIR --kind code --target PATH
-               [--profiles-tsv FILE] [--meta KEY=VALUE ...]
+  normalize.py --run-dir DIR --kind code|app --target PATH
+               [--profiles-tsv FILE] [--meta-json FILE]
 
 입력 (DIR/raw/):
   status.tsv           도구별 실행 결과  <tool>\t<ok|failed|skipped>\t<exit code>\t<메모>
@@ -14,6 +14,9 @@ docs/security/01 개요/리포트 포맷.md 의 스키마를 따른다. 표준 �
   gitleaks-dir.json    Gitleaks dir 모드 (--redact)
   osv.json             OSV-Scanner --format json
   checks.json          스택별 커스텀 검사 (scripts/lib/checks.py)
+  --kind app:
+  mobsf-full.json      MobSF report_json 원본 — 시크릿 원문이 들어 있으므로 정제본 mobsf.json 을 쓰고 지운다
+  gitleaks-artifact.json  Gitleaks dir 모드 (산출물 ZIP 내부, --redact)
 
 출력 (DIR/): findings.json, summary.md, meta.json (모두 권한 600)
 
@@ -36,6 +39,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "lib"))
 
+import mobsf_report as _mobsf  # noqa: E402
 import profiles as _profiles  # noqa: E402
 
 SEVERITIES = ("critical", "high", "medium", "low", "info")
@@ -45,9 +49,12 @@ SUMMARY_DETAIL_MAX = 50     # Critical/High 상세 표시 상한
 SUMMARY_TOP_OTHERS = 10     # Medium 이하 상위 N 개
 SECRET_EVIDENCE = "(시크릿 탐지 — 원문은 리포트에 남기지 않습니다. 위치만 참고하세요)"
 # 스캔 종류별로 status.tsv 에 반드시 있어야 하는 도구 (행이 없으면 도구가 기록 전에 비정상 종료한 것)
-EXPECTED_TOOLS = {"code": ("semgrep", "gitleaks-git", "gitleaks-dir", "osv-scanner", "checks")}
+EXPECTED_TOOLS = {"code": ("semgrep", "gitleaks-git", "gitleaks-dir", "osv-scanner", "checks"),
+                  "app": ("mobsf", "gitleaks-artifact")}
 OSV_STALE_DAYS = 7
 CONTAINER_PREFIXES = ("/src/", "/repo/")
+ARTIFACT_PREFIX = "/in/artifact.zip!"   # scan-app.sh 의 Gitleaks 마운트 — ZIP 안 경로 앞에 붙는다
+CHECKLIST_DIR = os.path.join(os.path.dirname(HERE), "checklists")
 
 # ---------------------------------------------------------------------------
 # 마스킹·정리
@@ -236,6 +243,8 @@ def clean_ident(text, limit: int) -> str:
 def strip_container_prefix(path: str) -> str:
     if not path:
         return path
+    if path.startswith(ARTIFACT_PREFIX):
+        return path[len(ARTIFACT_PREFIX):]
     for p in CONTAINER_PREFIXES:
         if path.startswith(p):
             return path[len(p):]
@@ -245,7 +254,9 @@ def strip_container_prefix(path: str) -> str:
 
 
 def finding_id(*parts) -> str:
-    return hashlib.sha256("\x1f".join(str(p) for p in parts).encode("utf-8")).hexdigest()
+    # 짝 없는 서로게이트(잘못된 UTF-8 이름)가 있어도 해석이 예외로 끝나 도구 결과 전체가 빠지지 않게 (PR #32 6차 리뷰 W1).
+    # 일반 문자열의 해시 값은 바뀌지 않는다
+    return hashlib.sha256("\x1f".join(str(p) for p in parts).encode("utf-8", "surrogatepass")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -467,13 +478,19 @@ def parse_gitleaks(data, mode: str):
     for r in data or []:
         rule = r.get("RuleID", "gitleaks")
         file = strip_container_prefix(r.get("File", ""))
+        id_file = file
+        if mode == "artifact":
+            # ZIP 항목 이름은 앱(공격자)이 정한다 — summary 의 인라인 코드에 놓이므로 식별자 문자 밖은 퍼센트 인코딩 (PR #32 리뷰 W1).
+            # id 는 인코딩 전 이름으로 계산한다 (2차 리뷰 NW2)
+            file = _mobsf.safe_ident(clean_ident(file, 2000), 300) or "?"   # 접두사 토큰도 가린다 (3차 NT3)
         line = r.get("StartLine")
         commit = (r.get("Commit") or "")[:12]
-        source = f"git 히스토리 커밋 {commit[:7]}" if mode == "git" and commit else "작업 트리"
+        source = (f"git 히스토리 커밋 {commit[:7]}" if mode == "git" and commit
+                  else "앱 산출물 내부" if mode == "artifact" else "작업 트리")
         # --redact 를 강제하지만, 혹시 남은 원문이 있어도 다시 가린다
         evidence = clean_text(f"[{source}] {r.get('Match', '')}", EVIDENCE_MAX, True)
         out.append({
-            "id": finding_id("gitleaks", rule, file, line, mode, commit),
+            "id": finding_id("gitleaks", rule, id_file, line, mode, commit),
             "tool": "gitleaks",
             "rule_id": clean_text(rule, 120, True),
             "severity": "critical" if _GITLEAKS_CRITICAL.search(rule) else "high",
@@ -482,8 +499,10 @@ def parse_gitleaks(data, mode: str):
             "title": clean_text(r.get("Description") or rule, TITLE_MAX, True),
             "location": {"file": file, "line": line, "url": None, "package": None},
             "evidence": evidence,
-            "fix_hint": "키를 먼저 폐기(rotate)한 뒤 코드에서 제거하고 환경변수·시크릿 저장소로 옮기세요."
-                        + (" 히스토리 정리는 사용자 확인 후 진행합니다." if mode == "git" else ""),
+            "fix_hint": ("앱에 들어간 키는 공개된 것으로 보고 폐기(rotate)하세요. 번들·리소스에 넣지 말고 서버 프록시나 키 제한(패키지명·번들 ID·API 범위)을 쓰세요."
+                         if mode == "artifact" else
+                         "키를 먼저 폐기(rotate)한 뒤 코드에서 제거하고 환경변수·시크릿 저장소로 옮기세요."
+                         + (" 히스토리 정리는 사용자 확인 후 진행합니다." if mode == "git" else "")),
             "references": ["CWE-798"],
         })
     return out
@@ -581,6 +600,61 @@ def parse_checks(data):
             "references": [clean_text(x, 60, True) for x in (r.get("references") or [])[:6]],
         })
     return out, errors
+
+
+def parse_mobsf(data, platform_profile, converted_aab=False):
+    """MobSF report_json → findings. 문자열은 앱에서 나온 신뢰하지 않는 데이터다 (scripts/lib/mobsf_report.py)."""
+    raw, warns = _mobsf.parse(data, clean_text, clean_ident, TITLE_MAX, EVIDENCE_MAX, SECRET_EVIDENCE, platform_profile,
+                              converted_aab)
+    out = []
+    for r in raw:
+        out.append({
+            "id": finding_id("mobsf", r["rule_id"], r["id_parts"][0], r["line"], r["id_parts"][1]),
+            "tool": "mobsf",
+            "rule_id": r["rule_id"],
+            "severity": r["severity"],
+            "category": r["category"],
+            "profile": r["profile"],
+            "title": r["title"],
+            "location": {"file": r["file"], "line": r["line"], "url": None, "package": r["package"]},
+            "evidence": r["evidence"],
+            "fix_hint": r["fix_hint"],
+            "references": r["references"],
+        })
+    return out, warns
+
+
+def app_warnings(report, labels):
+    """산출물 점검에서 결과 해석에 필요한 안내 (디버그 서명, Flutter --dart-define, RN 번들)."""
+    w = []
+    if isinstance(report, dict) and _mobsf.is_debug_signed(report):
+        w.append("디버그 키(CN=Android Debug)로 서명된 빌드입니다 — debuggable 등은 디버그 빌드에서 정상입니다. "
+                 "릴리스 빌드(assembleRelease·bundleRelease)로 다시 점검하세요.")
+    if "flutter" in labels:
+        w.append("Flutter: --dart-define 으로 넣은 값은 libapp.so 에 평문으로 남습니다(F2) — 비밀은 넣지 말고, "
+                 "MobSF 의 so 문자열·시크릿 결과를 확인하세요. 난독화(--obfuscate --split-debug-info) 여부는 /security:scan-code 가 봅니다.")
+    if "react-native" in labels:
+        w.append("React Native: JS 번들(index.android.bundle·main.jsbundle)의 키는 Gitleaks 가 텍스트 번들에서 찾습니다(R6). "
+                 "Hermes 바이트코드 번들은 바이너리라 Gitleaks 가 보지 않으므로 MobSF 문자열 결과로만 확인됩니다.")
+    return w
+
+
+def load_checklists(detected, defs):
+    """감지된 프로파일의 수동 확인 항목 — checklists/<이름>.md 의 '- [ ]' 줄 (툴킷 파일, 신뢰하는 입력)."""
+    out, seen = [], set()
+    for name, _root, _ex in detected:
+        cl = (defs.get(name) or {}).get("checklist")
+        if not cl or cl in seen or not re.fullmatch(r"[a-z0-9-]+", cl):
+            continue
+        seen.add(cl)
+        path = os.path.join(CHECKLIST_DIR, f"{cl}.md")
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            items = [ln.strip()[6:].strip() for ln in f if ln.strip().startswith("- [ ] ")]
+        if items:
+            out.append((cl, items))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +760,7 @@ def _loc(f) -> str:
     return s
 
 
-def render_summary(meta, findings, stats, status_rows, warnings, errors) -> str:
+def render_summary(meta, findings, stats, status_rows, warnings, errors, checklists=None) -> str:
     L = []
     L.append(f"# 보안 점검 요약 — {meta['kind']}")
     L.append("")
@@ -752,6 +826,14 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors) -> str:
     # 경고에는 대상 저장소의 경로·파일 이름이 들어간다
     L.append(_fence("\n".join(f"- {clean_text(w, 300, True)}" for w in warnings)) if warnings else "없음")
     L.append("")
+    if checklists:
+        L.append("## 수동 확인 (스택별 체크리스트)")
+        L.append("도구로 확인할 수 없는 항목입니다. 릴리스 전에 사람이 확인하세요.")
+        for name, items in checklists:
+            L.append("")
+            L.append(f"**{name}**")
+            L += [f"- [ ] {it}" for it in items]
+        L.append("")
     L.append("## 실행 오류·건너뛴 도구")
     problems = [r for r in status_rows if r["status"] != "ok"]
     if not problems and not errors:
@@ -778,7 +860,8 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors) -> str:
 # ---------------------------------------------------------------------------
 def _write(path, text):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    # 잘못된 UTF-8 이름이 surrogateescape 로 남긴 짝 없는 서로게이트가 있어도 쓰기가 예외로 끝나지 않게 (PR #32 5차 리뷰)
+    with os.fdopen(fd, "w", encoding="utf-8", errors="backslashreplace") as f:
         f.write(text)
     os.chmod(path, 0o600)
 
@@ -863,6 +946,31 @@ def main(argv=None) -> int:
 
     run_parser("checks.json", _checks)
 
+    mobsf_report = None
+    if args.kind == "app":
+        labels = [n for n, _r, _e in detected]
+        platform_profile = next((n for n in labels if n in ("android", "ios")), "common")
+        full = os.path.join(raw, "mobsf-full.json")
+        data, err = _load_json(full)
+        if err:
+            errors.append(err.replace("mobsf-full.json", "mobsf.json"))
+        if isinstance(data, dict):
+            mobsf_report = data
+            # raw 보관본은 시크릿·문자열 덤프를 뺀 정제본만 남긴다
+            _write(os.path.join(raw, "mobsf.json"),
+                   json.dumps(_mobsf.sanitize(data, lambda t: clean_text(t, 4000), lambda t: clean_ident(t, 4000)),
+                              ensure_ascii=False, indent=1) + "\n")
+            try:
+                f, w = parse_mobsf(data, platform_profile, args.target.lower().endswith(".aab"))
+                findings.extend(f)
+                warnings.extend(clean_text(x, 300, True) for x in w)
+            except Exception as ex:  # noqa: BLE001 — 도구 출력은 신뢰하지 않는 입력이다
+                errors.append("mobsf.json 해석 실패 — 이 도구의 결과는 리포트에서 빠졌습니다: "
+                              f"{type(ex).__name__}: {clean_text(ex, 160, True)}")
+        if os.path.exists(full):
+            os.unlink(full)
+        run_parser("gitleaks-artifact.json", lambda d: (parse_gitleaks(d, "artifact"), []))
+
     # 중복 제거 (id 기준) 후 심각도·위치 순 정렬
     uniq = {}
     for f in findings:
@@ -881,6 +989,10 @@ def main(argv=None) -> int:
         if os.path.isdir(args.target):
             warnings += missing_lockfile_hints(args.target, detected, defs)
     warnings += [clean_text(w, 300, True) for w in extra_meta.get("warnings", [])]
+    checklists = None
+    if args.kind == "app":
+        warnings += app_warnings(mobsf_report, [n for n, _r, _e in detected])
+        checklists = load_checklists(detected, defs)
 
     run_id = os.path.basename(run_dir)
     meta = {
@@ -904,7 +1016,8 @@ def main(argv=None) -> int:
 
     _write(os.path.join(run_dir, "findings.json"), json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     _write(os.path.join(run_dir, "meta.json"), json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
-    _write(os.path.join(run_dir, "summary.md"), render_summary(meta, findings, stats, status_rows, warnings, errors))
+    _write(os.path.join(run_dir, "summary.md"),
+           render_summary(meta, findings, stats, status_rows, warnings, errors, checklists))
     return 0
 
 

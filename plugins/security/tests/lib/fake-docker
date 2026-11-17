@@ -9,15 +9,49 @@
 #   FAKE_RUN_OUTPUT=<문자열>  docker run 이 출력할 내용 (설정하지 않으면 run 은 실패 99)
 #   FAKE_RUN_FAIL_MATCH=<문자열> FAKE_RUN_FAIL_RC=<n>
 #                            인자에 문자열이 들어간 docker run 만 종료코드 n 으로 실패 (예: OOM 137)
+#   FAKE_RUN_REPORT_OUTPUT=<문자열>  --report-path 가 있는 docker run(Gitleaks)만 이 내용을 출력
+#   compose (scan-app): FAKE_COMPOSE_UP_RC=<n> up 종료코드 · FAKE_COMPOSE_EXEC_OUTPUT exec 출력(기본 isolated)
+#                       FAKE_COMPOSE_RUN_FILE=<파일> run 의 stdout · FAKE_COMPOSE_RUN_RC=<n> run 종료코드
+#                       run·logs 는 stderr 에 실제 MobSF 처럼 API 키를 찍는다 (마스킹 확인용)
+#                       FAKE_COMPOSE_RUN_SLEEP=<초> run 이 그만큼 머문다 (중단 신호 확인용)
+#   남은 스택 정리: FAKE_PS_IDS=<id ...> docker ps -aq · FAKE_INSPECT_LINES=<파일> docker inspect 출력(프로젝트 시각)
+#                   FAKE_VOLUMES=<이름 ...> docker volume ls -q (label=…project=<p> 로 거르면 vol-<p>) · FAKE_VOLUME_LINES=<파일> docker volume inspect 출력
+#                   FAKE_SYSTEM_TIME=<RFC3339> docker info .SystemTime (빈 값이면 출력 없음)
 [ -n "${FAKE_LOG:-}" ] && echo "docker $*" >>"$FAKE_LOG"
 case "$1" in
   info)
     [ "${FAKE_INFO_FAIL:-0}" = 1 ] && exit 1
-    case "$*" in *MemTotal*) echo "${FAKE_MEM-8589934592}" ;; *) echo ok ;; esac
+    case "$*" in
+      *MemTotal*) echo "${FAKE_MEM-8589934592}" ;;
+      *SystemTime*) [ -n "${FAKE_SYSTEM_TIME-x}" ] && echo "${FAKE_SYSTEM_TIME-2026-11-15T12:00:00.123456789+09:00}" ;;
+      *) echo ok ;;
+    esac
     ;;
   compose)
     [ -n "${FAKE_COMPOSE-2.29.0}" ] || exit 1
-    echo "${FAKE_COMPOSE-2.29.0}"
+    sub=""
+    for a in "$@"; do
+      case "$a" in up | run | exec | down | logs | ps | version) sub=$a; break ;; esac
+    done
+    case "$sub" in
+      up) exit "${FAKE_COMPOSE_UP_RC:-0}" ;;
+      exec) echo "${FAKE_COMPOSE_EXEC_OUTPUT-isolated}" ;;
+      run)
+        echo "REST API Key: ${DWK_MOBSF_API_KEY:-}" >&2
+        echo "mobsf_client: 가짜 실행" >&2
+        if [ -n "${FAKE_COMPOSE_RUN_SLEEP:-}" ]; then
+          # 테스트가 정확히 이 프로세스만 정리할 수 있게 pid 를 남긴다 (3차 리뷰 NT2)
+          sleep "$FAKE_COMPOSE_RUN_SLEEP" &
+          [ -n "${FAKE_RUN_PIDFILE:-}" ] && echo $! >>"$FAKE_RUN_PIDFILE"
+          wait $!
+        fi
+        [ -n "${FAKE_COMPOSE_RUN_FILE:-}" ] && cat "$FAKE_COMPOSE_RUN_FILE"
+        exit "${FAKE_COMPOSE_RUN_RC:-0}"
+        ;;
+      logs) echo "REST API Key: ${DWK_MOBSF_API_KEY:-} secret=${DWK_MOBSF_SECRET:-}" ;;
+      down | ps) exit 0 ;;
+      *) echo "${FAKE_COMPOSE-2.29.0}" ;;
+    esac
     ;;
   version) echo "${FAKE_COMPONENTS-Engine containerd runc docker-init }" ;;
   context) echo "fake" ;;
@@ -33,12 +67,46 @@ case "$1" in
         ;;
       esac
     fi
+    case "$*" in *--report-path*)
+      if [ -n "${FAKE_RUN_REPORT_OUTPUT+x}" ]; then
+        printf '%s' "$FAKE_RUN_REPORT_OUTPUT"
+        echo "INF scanned ~10 bytes" >&2
+        exit 0
+      fi
+      ;;
+    esac
     if [ -n "${FAKE_RUN_OUTPUT+x}" ]; then
       printf '%s' "$FAKE_RUN_OUTPUT"
       exit 0
     fi
     echo "가짜 docker 로 run 을 실행하면 안 됩니다" >&2
     exit 99
+    ;;
+  ps)
+    # shellcheck disable=SC2086  # 공백으로 구분한 목록을 한 줄씩 낸다
+    [ -n "${FAKE_PS_IDS:-}" ] && printf '%s\n' $FAKE_PS_IDS
+    ;;
+  inspect)
+    case "$*" in
+      *OOMKilled*) echo false ;;
+      *) [ -n "${FAKE_INSPECT_LINES:-}" ] && cat "$FAKE_INSPECT_LINES" ;;
+    esac
+    ;;
+  volume)
+    case "$2" in
+      ls)
+        args="$*"
+        case "$args" in
+          # 프로젝트 하나로 거른 목록 — 그 프로젝트의 볼륨 이름만 낸다
+          *label=com.docker.compose.project=*) echo "vol-${args##*label=com.docker.compose.project=}" ;;
+          *)
+            # shellcheck disable=SC2086  # 공백으로 구분한 목록을 한 줄씩 낸다
+            [ -n "${FAKE_VOLUMES:-}" ] && printf '%s\n' $FAKE_VOLUMES
+            ;;
+        esac
+        ;;
+      inspect) [ -n "${FAKE_VOLUME_LINES:-}" ] && cat "$FAKE_VOLUME_LINES" ;;
+    esac
     ;;
   pull) echo "가짜 docker 로 $1 을 실행하면 안 됩니다" >&2; exit 99 ;;
   *) exit 0 ;;
