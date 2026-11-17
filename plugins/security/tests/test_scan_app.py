@@ -5,6 +5,7 @@ import http.server
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -351,6 +352,12 @@ class MobsfReportTest(unittest.TestCase):
                 self.assertLessEqual(len(enc), limit)
                 self.assertRegex(enc[:-1], r"^[a-z]*(%EA%B0%80)+$", (prefix, limit))
                 urllib.parse.unquote(enc[:-1], errors="strict")
+        # 앞에서부터 자른다 — 넘치는 글자 뒤의 짧은 글자를 건너뛰어 붙이지 않는다 (5차 S1)
+        for s in ("가" * 40 + "abc", "a" * 290 + "가" + "bcdefghijk"):
+            enc = mobsf_report.safe_ident(s, 300)
+            self.assertTrue(mobsf_report.safe_ident(s, 10_000).startswith(enc[:-1]), s[-12:])
+        # 짝 없는 서로게이트도 예외 없이 되돌릴 수 있는 표기로 남는다 (5차 Open Question)
+        self.assertEqual(mobsf_report.safe_ident("a\udcffb"), "a%ED%B3%BFb")
         # 산출물 안 항목 이름에 든 접두사 토큰은 Gitleaks 위치에서도 가린다 (3차 NT3·4차 S2)
         tok = "ghp_" + "A1b2C3d4E5" * 3 + "F6g7H8"
         gl = normalize.parse_gitleaks([{"RuleID": "k", "File": f"/in/artifact.zip!assets/{tok}.json", "StartLine": 1}],
@@ -452,15 +459,27 @@ class ComposeProxyTest(unittest.TestCase):
         지워지면 프록시 환경에서만 격리 확인이 실패해 드러나므로 텍스트로 고정한다."""
         with open(os.path.join(HERE, "..", "docker", "compose.yml"), encoding="utf-8") as fh:
             text = fh.read()
-        services = text.split("\n  mobsf-client:\n")
-        self.assertEqual(len(services), 2)
-        for name, body in zip(("mobsf", "mobsf-client"), services):
+        # 서비스(2칸 들여쓰기)마다 나눈 뒤 environment 블록(6칸 들여쓰기 줄이 이어지는 구간)에서만 찾는다 (5차 N2)
+        blocks = dict(re.findall(r"(?m)^  ([a-z][a-z-]*):\n((?:(?:    .*)?\n)*)", text))
+        for name in ("mobsf", "mobsf-client"):
+            env = re.search(r"(?m)^    environment:\n((?:      .*\n)*)", blocks[name])
+            self.assertIsNotNone(env, name)
             for var in ("HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY"):
                 for k in (var, var.lower()):
-                    self.assertRegex(body, rf'\n {{6}}{k}: ""\n', f"{name}: {k}")
+                    self.assertRegex(env.group(1), rf'(?m)^      {k}: ""$', f"{name}: {k}")
 
 
 class NormalizeAppTest(unittest.TestCase):
+    def test_write_survives_lone_surrogate(self):
+        """5차 Open Question: 잘못된 UTF-8 이름이 남긴 짝 없는 서로게이트가 든 정제본도 쓰기가 예외로 끝나지 않는다."""
+        rep = {"permissions": {"a\udcffb": {"status": "dangerous"}}, "package_name": "x"}
+        text = json.dumps(mobsf_report.sanitize(rep, lambda t: normalize.clean_text(t, 4000)), ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "mobsf.json")
+            normalize._write(path, text)
+            with open(path, encoding="utf-8") as fh:
+                self.assertIn("\\udcff", fh.read())
+
     def setUp(self):
         self.run = tempfile.mkdtemp()
         os.mkdir(os.path.join(self.run, "raw"))
