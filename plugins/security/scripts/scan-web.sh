@@ -181,6 +181,8 @@ stack_down() {
   compose --profile scan down -v --remove-orphans --timeout 10 >/dev/null 2>&1 && STACK_UP=0
 }
 cleanup() {
+  # 정리 중 두 번째 Ctrl-C·TERM 으로 스택 내리기·진행 로그 가림을 건너뛰지 않게 막는다 (5차 리뷰 R5-S3)
+  trap '' INT TERM
   [ -n "$pid_watchdog" ] && kill "$pid_watchdog" 2>/dev/null
   # 백그라운드 compose run CLI 는 down 으로 컨테이너가 사라지면 함께 끝난다
   [ -n "$pid_scan" ] && kill "$pid_scan" 2>/dev/null
