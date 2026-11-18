@@ -298,7 +298,7 @@ test_built_image_ref_and_d6_follow_the_build_record() {
   printf 'egress-proxy-base alpine 3.24.3 sha256:%s linux/arm64\n' "$(printf 'f%.0s' $(seq 64))" >"$SEC_IMAGES_LOCK"
   assert_status 2 sec_built_id egress-proxy
   assert_status 1 sec_preflight web egress-proxy
-  assert_contains "$OUT" "Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다"
+  assert_contains "$OUT" "이 바뀌어 다시 빌드해야 합니다"
   # 베이스 항목이 없으면 입력을 계산할 수 없다 (기록 없음으로 오인하지 않는다, 리뷰 N4)
   printf 'zap zaproxy/zap-stable 1 sha256:%s linux/arm64\n' "$d" >"$SEC_IMAGES_LOCK"
   assert_status 3 sec_built_id egress-proxy
@@ -334,6 +334,22 @@ test_built_image_ref_and_d6_follow_the_build_record() {
   chmod +x "$other/docker/egress-proxy/extra.conf"
   i4=$(SEC_PLUGIN=$other sec_build_input egress-proxy)
   [ "$i4" != "$i3" ] || fail "실행 비트가 바뀌어도 입력이 같음"
+  # 하위 폴더의 숨김·임시 파일, 숨김 폴더도 넣지 않는다 (PR #45 리뷰 S5)
+  mkdir -p "$other/docker/egress-proxy/sub/.git" "$other/docker/egress-proxy/.cache"
+  printf 'x\n' >"$other/docker/egress-proxy/sub/.hidden"
+  printf 'x\n' >"$other/docker/egress-proxy/sub/c~"
+  printf 'x\n' >"$other/docker/egress-proxy/sub/.git/HEAD"
+  printf 'x\n' >"$other/docker/egress-proxy/.cache/x"
+  assert_eq "$(SEC_PLUGIN=$other sec_build_input egress-proxy)" "$(SEC_PLUGIN=$other sec_build_input egress-proxy)"
+  [ "$(SEC_PLUGIN=$other sec_build_input egress-proxy)" = "$i4" ] || fail "숨김·임시 파일·숨김 폴더가 입력을 바꿈"
+  # 폴더로 가는 링크는 실패한다 (PR #45 리뷰 S2)
+  ln -s "$SEC_TMP" "$other/docker/egress-proxy/linkdir"
+  # shellcheck disable=SC2317  # assert_status 가 부른다
+  _input_link() { SEC_PLUGIN=$other sec_build_input egress-proxy; }
+  assert_status 1 _input_link
+  rm "$other/docker/egress-proxy/linkdir"
+  # 이 규칙은 실제 빌드 문맥의 .dockerignore 와 같아야 한다 — 다르면 해시는 같은데 이미지 내용이 달라진다 (PR #45 리뷰 S1)
+  assert_eq "$(grep -v '^#' "$PLUGIN_DIR/docker/egress-proxy/.dockerignore" | LC_ALL=C sort | tr '\n' ' ')" "**/*.swp **/*~ **/.* *.swp *~ .* "
   mkfifo "$other/docker/egress-proxy/pipe"
   # shellcheck disable=SC2317  # assert_status 가 부른다
   _input_fifo() { SEC_PLUGIN=$other sec_build_input egress-proxy; }

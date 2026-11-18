@@ -343,8 +343,8 @@ sec_built_base() {
   return 1
 }
 
-# sec_build_input <name> — 빌드 입력의 sha256: 빌드 문맥 폴더($SEC_PLUGIN/docker/<이름>/)의 모든 파일(상대 경로·내용, 이름순)
-#   + 베이스 <image>@<digest>. 하나라도 바뀌면 다시 빌드해야 한다 (Dockerfile 이 COPY 할 파일도 덮는다, PR #37 리뷰 S3)
+# sec_build_input <name> — 빌드 입력의 sha256: 빌드 문맥 폴더($SEC_PLUGIN/docker/<이름>/)의 파일(상대 경로·실행 비트·내용, 이름순 —
+#   숨김·편집기 임시 파일은 .dockerignore 와 같이 뺀다) + 베이스 <image>@<digest>. 하나라도 바뀌면 다시 빌드해야 한다 (Dockerfile 이 COPY 할 파일도 덮는다, PR #37 리뷰 S3)
 sec_build_input() {
   local base ref
   base=$(sec_built_base "$1") || return 1
@@ -356,11 +356,15 @@ if not os.path.isfile(os.path.join(root, "Dockerfile")):
     sys.exit(1)
 import stat
 # 숨김·편집기 임시 파일은 빼고(빌드 문맥의 .dockerignore 와 같은 규칙), 일반 파일이 아닌 항목(FIFO·링크·장치)은 실패,
-# 파일의 실행 비트도 넣는다 — COPY 가 모드를 보존한다 (이슈 #36, PR #37 2차 R2-N1)
+# 파일의 실행 비트도 넣는다 — COPY 가 모드를 보존한다. 다른 권한 비트는 빌드 결과에 의미가 없어 넣지 않는다 (이슈 #36, PR #37 2차 R2-N1)
+# 이 규칙은 docker/<이름>/.dockerignore 와 같아야 한다 (tests/test_common.sh 가 고정)
 def ignored(name):
     return name.startswith(".") or name.endswith("~") or name.endswith(".swp")
 h = hashlib.sha256()
 for d, dirs, files in os.walk(root):
+    for x in dirs:
+        if not ignored(x) and os.path.islink(os.path.join(d, x)):
+            sys.exit(1)          # 폴더로 가는 링크도 일반 파일이 아니다 — 조용히 빼지 않는다 (PR #45 리뷰 S2)
     dirs[:] = sorted(x for x in dirs if not ignored(x))
     for f in sorted(files):
         if ignored(f):
@@ -576,8 +580,8 @@ sec_preflight() {
             missing="$missing$NL$name — 빌드 기록이 가리키는 이미지($ref)가 지금 빌드 입력으로 만든 것이 아닙니다"
           fi
           ;;
-        2) missing="$missing$NL$name — Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다" ;;
-        3) missing="$missing$NL$name — 빌드 입력을 계산할 수 없습니다 (images.lock 의 베이스 항목·$SEC_PLUGIN/docker/$name/Dockerfile 확인)" ;;
+        2) missing="$missing$NL$name — 빌드 입력(Dockerfile·빌드 문맥·베이스, 또는 플러그인 업데이트로 바뀐 계산 방식)이 바뀌어 다시 빌드해야 합니다" ;;
+        3) missing="$missing$NL$name — 빌드 입력을 계산할 수 없습니다 (images.lock 의 베이스 항목, $SEC_PLUGIN/docker/$name/ 의 Dockerfile·일반 파일이 아닌 항목(FIFO·링크) 확인)" ;;
         4) missing="$missing$NL$name — 빌드 기록이 손상됐습니다" ;;
         *) missing="$missing$NL$name — 로컬 빌드 기록이 없습니다" ;;
       esac

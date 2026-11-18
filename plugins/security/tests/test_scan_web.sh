@@ -110,7 +110,7 @@ test_web_d6_proxy_build_record_missing_stale_or_gone() {
   assert_contains "$OUT" "update.sh"
   web_fake_built_proxy "$FAKE_PROXY_ID" "$(printf '0%.0s' $(seq 64))"
   assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
-  assert_contains "$OUT" "Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다"
+  assert_contains "$OUT" "이 바뀌어 다시 빌드해야 합니다"
   web_fake_built_proxy "$FAKE_PROXY_ID"
   : >"$FAKE_BUILD_STATE"
   assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
@@ -250,8 +250,9 @@ test_web_unreadable_proxy_log_is_not_reported_as_none() {
   [ ! -e "$WEB_RUN/raw/proxy-denied.json" ] || fail "빈 로그로 차단 목록이 만들어짐"
 }
 
-# 가짜 docker 의 장시간 run(sleep)을 정리한다 — 테스트 함수는 별도 프로세스라 EXIT trap 으로 건다
-_kill_fake_runs() {
+# 가짜 docker 의 장시간 run(sleep)을 정리한다 — run.sh 의 EXIT trap 이 부른다(판정이 실패해 exit 해도, 이슈 #36 R8-N2).
+# 테스트에서 trap 을 직접 걸면 run.sh 의 SEC_TMP 정리를 덮어쓴다 (PR #45 리뷰 W1)
+sec_test_cleanup() {
   local p
   [ -f "${FAKE_RUN_PIDFILE:-}" ] && while read -r p; do kill "$p" 2>/dev/null; done <"$FAKE_RUN_PIDFILE"
   return 0
@@ -261,7 +262,6 @@ _kill_fake_runs() {
 test_web_term_during_scan_removes_stack() {
   setup_web_fake
   export FAKE_COMPOSE_RUN_SLEEP=30 FAKE_RUN_PIDFILE="$SEC_TMP/run.pids"
-  trap _kill_fake_runs EXIT   # 판정이 실패(exit)해도 가짜 sleep 을 남기지 않는다 (이슈 #36, PR #34 8차 R8-N2)
   local pid rc start
   "$SCAN_WEB" http://host.docker.internal:3000/ >/dev/null 2>"$SEC_TMP/scan.err" &
   pid=$!
@@ -281,7 +281,6 @@ test_web_term_during_scan_removes_stack() {
 test_web_term_with_closed_stderr_pipe_still_cleans_up() {
   setup_web_fake
   export FAKE_COMPOSE_RUN_SLEEP=30 FAKE_RUN_PIDFILE="$SEC_TMP/run.pids"
-  trap _kill_fake_runs EXIT   # 판정이 실패(exit)해도 가짜 sleep 을 남기지 않는다 (이슈 #36, PR #34 8차 R8-N2)
   local pid rc rpid fifo="$SEC_TMP/err.fifo"
   mkfifo "$fifo"
   cat "$fifo" >/dev/null &
@@ -319,7 +318,6 @@ test_web_closed_pipe_and_failed_down_still_redact_and_log() {
   export FAKE_COMPOSE_RUN_SLEEP=30 FAKE_RUN_PIDFILE="$SEC_TMP/run.pids" FAKE_COMPOSE_DOWN_RC=1
   export FAKE_COMPOSE_RUN_STDERR_FILE="$SEC_TMP/zap-progress.log"
   printf 'Job spider error accessing URL http://host.docker.internal:3000/cb?code=SECRETQ1 status code returned : 500\n' >"$FAKE_COMPOSE_RUN_STDERR_FILE"
-  trap _kill_fake_runs EXIT
   local pid rc rpid fifo="$SEC_TMP/err.fifo" run
   mkfifo "$fifo"
   cat "$fifo" >/dev/null &
