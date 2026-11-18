@@ -181,7 +181,12 @@ class BaselineTest(unittest.TestCase):
         self.assertIn(f"`semgrep` {cap}개 파일", render(cap))
         self.assertIn(f"`semgrep` {cap}개가 넘는 파일", render(cap + 1))
         self.assertIn(f"`semgrep` {cap}개가 넘는 파일", render(cap * 2))
-        self.assertNotIn("True개", render(True))     # bool 은 개수가 아니다 (N5)
+        # bool·0·모르는 도구는 줄 자체가 없다 (N5, 2차 리뷰 NIT1~3)
+        self.assertNotIn("점검하지 못한 도구", render(True))
+        self.assertNotIn("점검하지 못한 도구", render(0))
+        self.assertNotIn("점검하지 못한 도구", "\n".join(normalize._render_baseline({
+            "run_id": "r", "compared_units": ["semgrep"], "new": 0, "existing": 0, "moved": 0, "resolved": 0,
+            "partial_units": {"bogus": 3}})))
         text = render(cap * 2)
         self.assertIn("이번이나 직전 실행에서", text)
         self.assertIn("이번 실행의 파일은 경고 절 참조", text)   # N2
