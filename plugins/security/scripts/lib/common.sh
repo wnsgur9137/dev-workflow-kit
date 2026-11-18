@@ -339,6 +339,14 @@ sec_validate_target() {
   printf '%s\n' "$resolved"
 }
 
+# sec_colima_mounts_hint — D7 공유 경로 안내. Colima 는 mounts 가 비어 있을 때만 홈을 자동 공유하므로,
+#   항목을 적으면 홈(~)도 함께 적어야 플러그인·데이터 폴더가 계속 보인다 (이슈 #43, README 문제 해결과 같은 문구)
+sec_colima_mounts_hint() {
+  sec_log "  Colima: colima stop 후 colima start --edit 로 mounts 를 고치세요. mounts 가 비어 있을 때만 홈이 자동 공유되고,"
+  sec_log "  항목을 적으면 적은 것만 공유됩니다 — '- location: ~' (writable: true)를 함께 적고 그 아래에 이 경로를 더하세요."
+  sec_log "  Docker Desktop: Settings → Resources → File sharing"
+}
+
 # ---------------------------------------------------------------------------
 # lock 파일
 # ---------------------------------------------------------------------------
@@ -551,9 +559,16 @@ sec_preflight() {
   esac
   if [ "$major" -lt 2 ]; then
     sec_err "[D3] docker compose v2 이상이 필요합니다 (현재: ${compose_ver:-없음})."
+    local brew_prefix
+    # Homebrew 위치는 기기마다 다르다(Apple Silicon /opt/homebrew, Intel /usr/local) — 이 기기의 값을 보여 준다 (이슈 #43)
+    brew_prefix=$(brew --prefix 2>/dev/null) || brew_prefix=""
     sec_log "  brew install docker-compose 후 ~/.docker/config.json 에"
-    sec_log '    "cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]'
-    sec_log "  를 추가하세요 (Intel Mac: /usr/local/lib/docker/cli-plugins)."
+    sec_log "    \"cliPluginsExtraDirs\": [\"${brew_prefix:-/opt/homebrew}/lib/docker/cli-plugins\"]"
+    if [ -z "$brew_prefix" ]; then
+      sec_log "  를 추가하세요 (Homebrew 위치: Apple Silicon /opt/homebrew, Intel Mac /usr/local)."
+    else
+      sec_log "  를 추가하세요."
+    fi
     return 1
   fi
 
