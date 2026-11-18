@@ -210,6 +210,15 @@ class RedactTest(unittest.TestCase):
             "Location: cb;jsessionid=SEC13": "Location: cb;jsessionid=[MASKED]",
             "cb#access_token=SEC14": "cb#[MASKED]",
             "`http://h/a?code=L2`": "`http://h/a?code=[MASKED]`",
+            # 이슈 #36: 값에 붙은 헤더, 접힌 Set-Cookie(Expires 의 ',' 는 건너뜀), Cookie 의 값 없는 토큰, 3중 인코딩
+            "Set-Cookie: a=Set-Cookie: sid=SECRET1": "Set-Cookie: a=[MASKED] sid=[MASKED]",
+            "Set-Cookie: a=1; Path=/, sid=SECRET2": "Set-Cookie: a=[MASKED]; Path=/, sid=[MASKED]",
+            "Set-Cookie: a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT, sid=SECRET4; Path=/":
+                "Set-Cookie: a=[MASKED]; Expires=Wed, 21 Oct 2026 07:28:00 GMT, sid=[MASKED]; Path=/",
+            "Set-Cookie: a=1; Path=/, Max-Age=5": "Set-Cookie: a=[MASKED]; Path=/, Max-Age=5",
+            "Cookie: x, sid=SECRET5": "Cookie: x, sid=[MASKED]",
+            "Cookie: x; sid=SECRET6": "Cookie: x; sid=[MASKED]",
+            "next=http%25253A%25252F%25252Fh%25252Fcb%25253Fcode%25253DSECRET3": "next=http://h/cb?code=[MASKED]",
             # 5차 리뷰 R5-S2: ';'·'=' 앞뒤 공백, '\' 가 든 값, JSON 이스케이프된 따옴표 값, 같은 토큰의 따옴표 값, 접두 붙은 헤더, 빈 이름
             "Cookie: a=1 ; b=SECRET1": "Cookie: a=[MASKED] ; b=[MASKED]",
             "Cookie: sid=abc\\def; tok=SECRET2": "Cookie: sid=[MASKED]; tok=[MASKED]",
@@ -264,12 +273,14 @@ class RedactTest(unittest.TestCase):
         import time
         for pat in ("-/", "/a", "?/", "%2", "//", "%25", "Cookie: a=1;", "cookie:a=;", "\\u002f", "a;=", "a#=",
                     "cookie:", "set-cookie:/", 'cookie:"', "Cookie: " + "a" * 300,
-                    "Cookie: a=1 x ", " ;", ("cookie:", " "), ("Cookie: a=1 cookie:", "\t")):
+                    "Cookie: a=1 x ", " ;", ("cookie:", " "), ("Cookie: a=1 cookie:", "\t"),
+                    "Set-Cookie: a=1, ", "Set-Cookie: a=", ("Set-Cookie: a=1; Path=/", ", x"), ("Cookie: x", "; x,")):
             # (패턴, 꼬리): 꼬리를 n 번 붙인다 — 헤더 여럿이 같은 긴 공백 앞에서 끝나는 입력 (7차 리뷰 R7-S1)
-            pat, tail = pat if isinstance(pat, tuple) else (pat, " //b")
+            pat, tail = pat if isinstance(pat, tuple) else (pat, None)
             def t(n):
                 s = time.perf_counter()
-                w.redact_text(pat * n + tail * n)
+                # 기본 꼬리는 긴 URL 토큰 하나(' //bbb…') — 사용자 정보 정규식 같은 긴 토큰 경로를 넓게 본다 (이슈 #36, PR #34 8차 R8-N1)
+                w.redact_text(pat * n + (tail * n if tail is not None else " //" + "b" * n))
                 return time.perf_counter() - s
             n = 2000
             base = t(n)
