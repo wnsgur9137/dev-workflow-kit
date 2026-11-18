@@ -300,9 +300,75 @@ sec_lock_line() {
   awk -v n="$1" '!/^[[:space:]]*(#|$)/ && $1 == n { print; found=1; exit } END { exit !found }' "$SEC_IMAGES_LOCK"
 }
 
-# sec_image_ref <name> — docker run 에 쓸 <image>@<digest>
+# 로컬에서 빌드하는 이미지 (이슈 #35) — 이름 → images.lock 의 베이스 항목 이름. 빌드 문맥은 $SEC_PLUGIN/docker/<이름>/
+#   update.sh --images 가 베이스를 digest 로 받은 뒤 빌드하고, 이미지 ID 를 $SEC_DATA/data/images/<이름>.built 에 기록한다.
+#   스캔 스크립트는 빌드하지 않는다 — 기록의 입력(Dockerfile + 베이스 digest)이 지금과 같고 그 ID 의 이미지가 있을 때만 쓴다 (D6)
+SEC_BUILT_IMAGES="egress-proxy:egress-proxy-base"
+
+# sec_built_base <name> — 로컬 빌드 이미지면 베이스 항목 이름을 출력, 아니면 실패
+sec_built_base() {
+  local e
+  for e in $SEC_BUILT_IMAGES; do
+    [ "${e%%:*}" = "$1" ] && { printf '%s\n' "${e#*:}"; return 0; }
+  done
+  return 1
+}
+
+# sec_build_input <name> — 빌드 입력의 sha256: 빌드 문맥 폴더($SEC_PLUGIN/docker/<이름>/)의 모든 파일(상대 경로·내용, 이름순)
+#   + 베이스 <image>@<digest>. 하나라도 바뀌면 다시 빌드해야 한다 (Dockerfile 이 COPY 할 파일도 덮는다, PR #37 리뷰 S3)
+sec_build_input() {
+  local base ref
+  base=$(sec_built_base "$1") || return 1
+  ref=$(sec_image_ref "$base") || return 1
+  python3 -I - "$SEC_PLUGIN/docker/$1" "$ref" 2>/dev/null <<'PY'
+import hashlib, os, sys
+root, ref = sys.argv[1], sys.argv[2]
+if not os.path.isfile(os.path.join(root, "Dockerfile")):
+    sys.exit(1)
+h = hashlib.sha256()
+for d, dirs, files in os.walk(root):
+    dirs.sort()
+    for f in sorted(files):
+        p = os.path.join(d, f)
+        rel = os.path.relpath(p, root).encode()
+        data = open(p, "rb").read()
+        h.update(b"F\0%d\0%s\0%d\0" % (len(rel), rel, len(data)) + data)
+h.update(b"BASE\0" + ref.encode())
+print(h.hexdigest())
+PY
+}
+
+sec_built_record() { printf '%s\n' "$SEC_DATA/data/images/$1.built"; }
+
+# sec_built_id <name> — 기록이 지금 입력과 맞으면 기록한 이미지 ID(sha256:<64 hex>)를 출력.
+#   1 기록 없음 · 2 입력 불일치(다시 빌드) · 3 입력 계산 불가(images.lock 베이스·Dockerfile) · 4 기록 손상 (리뷰 N3·N4)
+sec_built_id() {
+  local input rec_input rec_id
+  input=$(sec_build_input "$1") || return 3
+  [ -f "$(sec_built_record "$1")" ] || return 1
+  read -r rec_input rec_id <"$(sec_built_record "$1")" || return 4
+  case "$rec_id" in sha256:*) ;; *) return 4 ;; esac
+  case "${rec_id#sha256:}" in *[!0-9a-f]*) return 4 ;; esac
+  [ ${#rec_id} -eq 71 ] || return 4
+  [ "$rec_input" = "$input" ] || return 2
+  printf '%s\n' "$rec_id"
+}
+
+# sec_built_verify <name> <이미지 ID> — 그 이미지가 있고 지금 입력으로 빌드된 것(라벨 dwk.security.build-input)인지.
+#   기록 파일만 바꿔 다른 로컬 이미지(예: 옛 kalaksi/tinyproxy)를 프록시로 쓰게 할 수 없게 한다 (PR #37 리뷰 W1)
+sec_built_verify() {
+  local label
+  label=$(docker image inspect --format '{{index .Config.Labels "dwk.security.build-input"}}' "$2" 2>/dev/null) || return 1
+  [ -n "$label" ] && [ "$label" = "$(sec_build_input "$1")" ]
+}
+
+# sec_image_ref <name> — docker run 에 쓸 <image>@<digest>. 로컬 빌드 이미지는 기록한 이미지 ID (바뀌지 않는 참조)
 sec_image_ref() {
   local line
+  if sec_built_base "$1" >/dev/null; then
+    sec_built_id "$1"
+    return
+  fi
   line=$(sec_lock_line "$1") || return 1
   printf '%s\n' "$line" | awk '{ print $2 "@" $4 }'
 }
@@ -383,7 +449,7 @@ export SEC_DOCKER_CONTEXT=""
 export SEC_DOCKER_MEM_BYTES=""
 
 sec_preflight() {
-  local kind=$1 compose_ver major components mem rec_gib rec_bytes name ref missing=""
+  local kind=$1 compose_ver major components mem rec_gib rec_bytes name ref missing="" NL=$'\n'
   shift
 
   # D1 docker CLI
@@ -451,21 +517,40 @@ sec_preflight() {
     sec_log "  Colima: colima stop && colima start --memory ${rec_gib}"
   fi
 
-  # D6 필요한 이미지가 images.lock digest 로 존재 (스캔은 다운로드하지 않는다)
+  # D6 필요한 이미지가 images.lock digest 로 존재 (스캔은 다운로드하지 않는다).
+  #   로컬 빌드 이미지는 빌드 기록이 지금 Dockerfile·베이스와 맞고 그 ID 의 이미지가 있어야 한다 (스캔은 빌드하지 않는다)
   for name in "$@"; do
+    if sec_built_base "$name" >/dev/null; then
+      ref=$(sec_built_id "$name")
+      case $? in
+        0)
+          if ! docker image inspect "$ref" >/dev/null 2>&1; then
+            missing="$missing$NL$name — 빌드한 이미지($ref)가 없습니다"
+          elif ! sec_built_verify "$name" "$ref"; then
+            missing="$missing$NL$name — 빌드 기록이 가리키는 이미지($ref)가 지금 빌드 입력으로 만든 것이 아닙니다"
+          fi
+          ;;
+        2) missing="$missing$NL$name — Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다" ;;
+        3) missing="$missing$NL$name — 빌드 입력을 계산할 수 없습니다 (images.lock 의 베이스 항목·$SEC_PLUGIN/docker/$name/Dockerfile 확인)" ;;
+        4) missing="$missing$NL$name — 빌드 기록이 손상됐습니다" ;;
+        *) missing="$missing$NL$name — 로컬 빌드 기록이 없습니다" ;;
+      esac
+      continue
+    fi
     if ! ref=$(sec_image_ref "$name"); then
       sec_err "[D6] images.lock 에 '$name' 항목이 없습니다: $SEC_IMAGES_LOCK"
       return 1
     fi
     if ! docker image inspect "$ref" >/dev/null 2>&1; then
-      missing="$missing $ref"
+      missing="$missing$NL$ref"
     fi
   done
   if [ -n "$missing" ]; then
-    sec_err "[D6] 고정된 digest 의 이미지가 로컬에 없습니다:"
-    for ref in $missing; do sec_log "    $ref"; done
-    sec_log "  사용자가 직접 실행하세요 (스캔 스크립트는 다운로드하지 않습니다):"
-    sec_log "    $SEC_PLUGIN/scripts/update.sh"
+    sec_err "[D6] 필요한 이미지가 준비되지 않았습니다:"
+    printf '%s\n' "${missing#"$NL"}" | while IFS= read -r ref; do sec_log "    $ref"; done
+    sec_log "  사용자가 직접 실행하세요 (스캔 스크립트는 다운로드·빌드하지 않습니다):"
+    # D6 는 이미지만 본다 — --images 로 충분하다 (인자 없이 돌리면 OSV DB 까지 받는다, PR #37 리뷰 N2)
+    sec_log "    $SEC_PLUGIN/scripts/update.sh --images"
     return 1
   fi
   return 0

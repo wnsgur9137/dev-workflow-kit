@@ -22,7 +22,7 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/scan-web.sh:*), Read(~/.local/
 - 인자가 비어 있으면 실행하지 말고 점검할 URL 을 물어본다. `localhost:3000` 처럼 호스트의 개발 서버를 말하면 컨테이너에서 닿는 주소 `http://host.docker.internal:3000` 으로 바꿔 쓸지 확인한다(Colima 는 `host.lima.internal` 도 된다).
 - 스크립트는 옵션을 받지 않는다. active scan·full scan·인증 우회는 하지 않는다(ADR-005) — 사용자가 요청해도 실행하지 않고 이유를 설명한다. 도구를 직접 `docker run`·`docker compose` 하지 않는다.
 - **허용목록 거부**(목록 없음·형식 오류·목록에 없는 대상·`# prod` 표시)로 끝나면 그 메시지를 그대로 전하고 멈춘다. 허용목록(`~/.config/dev-workflow-kit/security/targets.allowlist`)은 **사용자가 직접** 편집한다 — Claude 는 이 파일을 만들거나 고치지 않는다(권한으로도 막혀 있다). 어떤 줄을 넣으면 되는지만 알려 준다: `scheme://host:port` 한 줄에 하나, 경로·와일드카드 없음, 직접 소유·운영하는 대상만.
-- **사전 점검(D1~D6)**·**`update.sh` 안내**로 끝나면 그 메시지를 그대로 전하고 멈춘다. `update.sh` 는 외부와 통신하므로 **사용자가 터미널에서 직접** 실행해야 한다 — 대신 실행하지 않는다. ZAP 이미지는 약 3.6GB 이고 Docker VM 메모리 6GB 를 권장한다(D5 경고).
+- **사전 점검(D1~D6)**·**`update.sh` 안내**로 끝나면 그 메시지를 그대로 전하고 멈춘다. `update.sh` 는 외부와 통신하므로 **사용자가 터미널에서 직접** 실행해야 한다 — 대신 실행하지 않는다. egress-proxy 는 받지 않고 `update.sh` 가 로컬에서 빌드하므로, 0.9.1 로 올린 뒤에는 `update.sh --images` 를 다시 실행해야 한다(D6 가 안내). ZAP 이미지는 약 3.6GB 이고 Docker VM 메모리 6GB 를 권장한다(D5 경고).
 - 점검은 보통 1~5분, 최대 30분이다. Bash 도구의 기본 시간 제한(2분)에 걸려 끊기지 않도록 **`run_in_background: true`로 실행하고 완료 알림을 기다린다** — 기다리는 동안 출력 파일을 짧은 간격으로 확인하지 않는다. 백그라운드를 쓸 수 없으면 `timeout: 600000`을 준다. 성공하면 stdout 마지막 줄이 `summary.md` 경로다.
 - 스크립트가 중간에 강제로 끝나도 남은 스택은 다음 실행이 지운다(2시간 지난 것). 스크립트가 경고로 안내한 경우만 `docker compose down` 명령을 그대로 전한다.
 

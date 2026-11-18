@@ -861,6 +861,11 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors, checkli
     if meta.get("docker_context"):
         L.append(f"- Docker 컨텍스트: {_code(meta['docker_context'])}")
     for t in meta.get("tools", []):
+        if t.get("source") == "local-build":
+            # 이미지 ID 는 기기마다 다르다 — 재현성은 빌드 입력·베이스로 본다 (PR #37 리뷰 S4). 라벨에서 온 값은 코드로 감싼다
+            L.append(f"- {t['name']}: {_code(str(t.get('tag', '?')))} (로컬 빌드 `{str(t.get('digest', '?'))[:19]}…`"
+                     f" · 입력 `{str(t.get('build_input', '?'))[:12]}` · 베이스 `{str(t.get('base', '?')).rsplit('@', 1)[-1][:19]}…`)")
+            continue
         L.append(f"- {t['name']}: {t.get('tag', '?')} (`{t.get('digest', '?')[:19]}…`)")
     if meta.get("rules"):
         for r in meta["rules"]:

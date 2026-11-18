@@ -16,6 +16,8 @@
 services:
   egress-proxy:
     image: ${DWK_PROXY_IMAGE:?}
+    # 스캔은 받지 않는다 — D6 와 기동 사이에 이미지가 사라져도 pull 하지 않고 실패한다 (PR #37 리뷰 S5)
+    pull_policy: never
     networks: [web-internal, egress]
     read_only: true
     cap_drop: [ALL]
@@ -40,6 +42,7 @@ services:
 
   zap:
     image: ${DWK_ZAP_IMAGE:?}
+    pull_policy: never
     profiles: [scan]
     networks: [web-internal]
     read_only: true
