@@ -89,6 +89,11 @@ test_app_d7_invisible_artifact_stops_before_mobsf() {
   FAKE_RUN_OUTPUT="12" assert_status 1 "$SCAN_APP" "$HOME/apps/app.apk"
   assert_contains "$OUT" "[D7]"
   assert_contains "$OUT" "- location: ~"   # mounts 를 적으면 홈 공유가 빠진다는 안내 (이슈 #43)
+  # 플러그인 폴더가 안 보이는 경우도 같은 안내 (PR #49 2차 리뷰 R2-N5)
+  : >"$FAKE_LOG"
+  FAKE_RUN_OUTPUT="client-missing" assert_status 1 "$SCAN_APP" "$HOME/apps/app.apk"
+  assert_contains "$OUT" "[D7] 컨테이너에서 플러그인 폴더가 보이지 않습니다"
+  assert_contains "$OUT" "- location: ~"
 }
 
 # --- 가짜 docker 로 MobSF 실패·정리 경로 (PR #32 리뷰 S7) ---------------------------------------------

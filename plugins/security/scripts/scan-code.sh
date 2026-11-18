@@ -145,6 +145,11 @@ case "$probe_rc:$data_seen" in
     sec_colima_mounts_hint
     exit 1
     ;;
+  0:*)
+    sec_err "[D7] 데이터 폴더 확인용 컨테이너가 예상하지 못한 응답을 냈습니다: ${data_seen:-출력 없음} ${probe_msg}"
+    sec_log "  docker info 로 런타임 상태를 확인하고, 이미지가 손상됐으면 update.sh --images 를 다시 실행하세요."
+    exit 1
+    ;;
   *)
     sec_err "[D7] 데이터 폴더 확인용 컨테이너를 실행하지 못했습니다 (종료코드 $probe_rc): ${probe_msg:-${data_seen:-출력 없음}}"
     sec_log "  docker info 로 런타임 상태를 확인하고, 이미지가 손상됐으면 update.sh --images 를 다시 실행하세요."

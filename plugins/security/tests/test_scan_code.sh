@@ -75,10 +75,11 @@ test_d7_invisible_mount_stops_before_scanning() {
   assert_contains "$OUT" "- location: ~"
 }
 
-# 이슈 #43: 대상은 보이는데 툴킷 데이터·플러그인 폴더가 안 보이면(mounts 에 대상만 적어 홈 공유가 빠짐) 스캔 전에 멈춘다
 no_tool_ran() {
   if grep -qE '^docker run .*(semgrep scan|osv-scanner scan|gitleaks (git|dir))' "$FAKE_LOG"; then fail "도구를 실행함"; fi
 }
+
+# 이슈 #43: 대상은 보이는데 툴킷 데이터·플러그인 폴더가 안 보이면(mounts 에 대상만 적어 홈 공유가 빠짐) 스캔 전에 멈춘다
 
 test_d7_invisible_data_folder_stops_before_scanning() {
   setup_fake
@@ -87,7 +88,7 @@ test_d7_invisible_data_folder_stops_before_scanning() {
   assert_status 1 "$SCAN" "$HOME/proj"
   assert_contains "$OUT" "[D7] 컨테이너에서 툴킷 데이터 폴더(규칙·OSV DB·리포트)가 보이지 않습니다"
   assert_contains "$OUT" "- location: ~"
-  assert_contains "$OUT" "writable: true"
+  assert_contains "$OUT" "홈 밖에 두었다면 writable: true"
   no_tool_ran
   # 확인 컨테이너도 같은 하드닝·읽기 전용 마운트 (PR #49 리뷰 S3a)
   local probe
@@ -96,6 +97,9 @@ test_d7_invisible_data_folder_stops_before_scanning() {
   assert_contains "$probe" "--read-only"
   assert_contains "$probe" ":/d:ro"
   assert_contains "$probe" "/p/scripts"
+  assert_contains "$probe" "/d/reports"
+  # 판정이 /d/reports 에 기대므로 확인 전에 reports/ 를 만든다 — 지워져 있어도 거짓 양성이 없게 (2차 리뷰 R2-S1)
+  [ -d "$DWK_SECURITY_DATA_DIR/reports" ] || fail "reports/ 를 만들지 않음"
   # 멈춰도 빈 실행 폴더가 남지 않는다 (S2)
   [ -z "$(ls -A "$DWK_SECURITY_DATA_DIR/reports")" ] || fail "실행 폴더가 남음: $(ls "$DWK_SECURITY_DATA_DIR/reports")"
 }
