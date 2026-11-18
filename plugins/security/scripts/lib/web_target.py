@@ -189,7 +189,9 @@ _PARAM_HINT = re.compile(r";[^=;]*=|#[^#]*=")
 # 'Set-Cookie:' 안쪽 'Cookie:' 는 바깥 매치가 먼저 소비한다
 # JSON 의 공백 제어문자 이스케이프('\u000a' 등) 뒤도 머리로 본다 — _JSON_U 는 제어문자를 풀지 않는다 (6차 리뷰 R6-S1)
 _COOKIE_HDR = re.compile(r"(?i)(?:(?<!\w)|(?<=\\[rn])|(?<=\\u000[9adAD]))(set-cookie|cookie):")
-_COOKIE_DELIM = "=;, \t\r\n\\"
+# 쿠키 이름이 끝나는 글자 — ',' 는 넣지 않는다(쌍 사이 ',' 는 _cookie_pairs 가 따로 건너뛴다, 7차 리뷰 R7-S2)
+_NAME_END = re.compile(r"[=; \t\r\n\\]")
+_NOT_BLANK = re.compile(r"[^ \t]")
 # JSON 의 ASCII 유니코드 이스케이프('\u002f'·'\u0026'·'\u003d', R4-S4) — '\/' 와 같이 미리 푼다
 _JSON_U = re.compile(r"\\u00([2-7][0-9a-fA-F])")   # 인쇄 가능한 ASCII 만 — 제어문자는 풀지 않는다 (R5 NITPICK)
 DECODE_MAX = 2   # 인코딩 풀기 단계 — 두 번 인코딩된 중첩 URL 까지 (R4-S4)
@@ -217,19 +219,22 @@ def _redact_token(tok: str, depth: int = 0) -> str:
     return tok
 
 
-def _name_ends(t: str):
-    """각 위치에서 쿠키 이름이 끝나는 곳(다음 구분자 위치) — 뒤에서 한 번 훑어 만든다.
-    이름 길이 상한 없이도 이름 읽기가 O(1) 이라 'cookie:' 반복 같은 입력에서도 선형이다 (5차 R5-S1·6차 R6-S2)."""
-    ends, nxt = [0] * (len(t) + 1), len(t)
-    ends[len(t)] = nxt
-    for i in range(len(t) - 1, -1, -1):
-        if t[i] in _COOKIE_DELIM:
-            nxt = i
-        ends[i] = nxt
-    return ends
+class _NextFinder:
+    """t 의 j 위치부터 정규식이 처음 맞는 곳 — 직전 결과 구간 [시작, 끝] 안의 j 는 같은 답이라 다시 찾지 않는다.
+    'cookie:' 반복처럼 헤더 여럿이 같은 이름·같은 공백에서 끝나는 입력에서도 전체가 선형이고 메모리는 상수다
+    (5차 R5-S1·6차 R6-S2·7차 R7-S1·R7-N1)."""
+
+    def __init__(self, t: str, pattern):
+        self.t, self.p, self.lo, self.hi = t, pattern, -1, -1
+
+    def __call__(self, j: int) -> int:
+        if not (self.lo <= j <= self.hi):
+            m = self.p.search(self.t, j)
+            self.lo, self.hi = j, (m.start() if m else len(self.t))
+        return self.hi
 
 
-def _cookie_pairs(t: str, ends, i: int, first_only: bool):
+def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool):
     """t[i:] 의 'name=value; name=value' 를 읽어 가릴 값의 (시작, 끝) 목록과 읽은 끝 위치를 돌려준다.
     공백은 이름·'='·';' 앞뒤에 허용, 쌍 구분은 ';'·공백(과 그 사이 ',', 빈 쌍 ';;' 은 건너뜀) — 다음 'name=' 이 아니면 거기서 멈춘다
     (6차 R6-W1: 'a=1 b=…'·'a=1, b=…'). 값은 따옴표(또는 JSON 이스케이프 '\\"') 통째, 아니면 구분자·이스케이프 줄바꿈·'\\"' 앞까지
@@ -242,7 +247,7 @@ def _cookie_pairs(t: str, ends, i: int, first_only: bool):
         return j
     while True:
         j = skip(i)
-        k = skip(ends[j])          # 이름 끝 뒤 공백
+        k = not_blank(name_end(j))   # 이름 끝 뒤 공백까지 건너뛴 곳
         if k >= n or t[k] != "=":
             return spans, i
         v = skip(k + 1)
@@ -268,10 +273,10 @@ def _mask_cookies(t: str) -> str:
     m = _COOKIE_HDR.search(t)
     if not m:
         return t
-    ends = _name_ends(t)
+    name_end, not_blank = _NextFinder(t, _NAME_END), _NextFinder(t, _NOT_BLANK)
     out, last, pos = [], 0, 0
     while m:
-        spans, pos = _cookie_pairs(t, ends, m.end(), m.group(1).lower() == "set-cookie")
+        spans, pos = _cookie_pairs(t, name_end, not_blank, m.end(), m.group(1).lower() == "set-cookie")
         pos = max(pos, m.end())
         for v, e in spans:
             out.append(t[last:v] + "[MASKED]")
