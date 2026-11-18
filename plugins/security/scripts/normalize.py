@@ -852,15 +852,26 @@ def _render_baseline(b) -> list:
     """이전 실행과 비교 (P4 베이스라인). 이전 리포트의 값은 도구가 뽑은 데이터라 식별자로만, 코드로 감싸 보인다."""
     L = ["## 이전 실행과 비교"]
     if not isinstance(b, dict) or not b.get("run_id") or "new" not in b:
-        reason = (b or {}).get("reason") if isinstance(b, dict) else None
+        reason = b.get("reason") if isinstance(b, dict) else None
         base = f"기준 `{b['run_id']}` — " if isinstance(b, dict) and b.get("run_id") else ""
         L += [f"{base}비교하지 않았습니다: {reason or '정보 없음'}", ""]
         return L
-    L.append(f"기준: `{b['run_id']}` (같은 대상의 직전 실행) · **신규 {b['new']}** · 유지 {b['existing']} · **해결 {b['resolved']}**"
-             + (f" · 비교 안 함 {b['not_compared']}" if b.get("not_compared") else ""))
-    if b.get("not_compared_units"):
-        L.append(f"- 비교하지 않은 도구 (어느 한쪽 실행에서 실패·건너뜀 — 그 도구의 신규·해결은 알 수 없음): "
-                 f"{', '.join(_code(u) for u in b['not_compared_units'])}")
+    known = set(_base.UNIT_TOOL)
+    units = lambda key: [u for u in b.get(key) or [] if u in known]  # noqa: E731 — 알려진 단위 이름만 (리뷰 N3)
+    if not b.get("compared_units"):
+        L.append(f"기준: `{b['run_id']}` (같은 대상의 직전 실행) — 비교할 수 있는 도구가 없습니다")   # 리뷰 N5
+    else:
+        moved = f" (위치 이동 {b['moved']})" if b.get("moved") else ""
+        L.append(f"기준: `{b['run_id']}` (같은 대상의 직전 실행) · **신규 {b['new']}** · 유지 {b['existing'] + b.get('moved', 0)}{moved}"
+                 f" · **해결 {b['resolved']}**" + (f" · 비교 안 함 {b['not_compared']}" if b.get("not_compared") else ""))
+        L.append("- 해결은 \"직전 실행에 있던 결과가 이번에 보이지 않음\"이라는 뜻입니다. 고쳤다고 단정하기 전에 위치를 확인하세요. "
+                 "같은 규칙·파일에 개수가 같게 남은 신규·해결은 줄 번호만 바뀐 것으로 보고 '위치 이동'으로 셌습니다")
+        if "zap" in units("compared_units"):
+            L.append("- 웹 점검(zap)은 크롤링한 페이지 범위에 따라 결과가 달라질 수 있습니다")
+    if units("changed_units"):
+        L.append(f"- 규칙·도구 이미지·프로파일·플러그인 버전이 바뀌어 비교하지 않은 도구: {', '.join(_code(u) for u in units('changed_units'))}")
+    if units("not_compared_units"):
+        L.append(f"- 어느 한쪽 실행에서 실패·건너뜀·부분 결과라 비교하지 않은 도구: {', '.join(_code(u) for u in units('not_compared_units'))}")
     items = b.get("resolved_items") or []
     if items:
         L.append("")
@@ -1070,12 +1081,15 @@ def main(argv=None) -> int:
             x["unit"] = unit
         findings.extend(f)
         errors.extend(e)
+        if e:
+            incomplete.add(unit)      # 일부 파일·검사가 실패한 결과 — 사라진 결과를 '해결'로 볼 수 없다 (PR #40 리뷰 W1)
 
     def _semgrep(data):
         f, e = parse_semgrep(data, index, args.target)
         w = semgrep_partial_warning(data)
         if w:
             warnings.append(w)
+            incomplete.add("semgrep")   # 일부 파일을 점검하지 못함 (리뷰 W1)
         return f, e
 
     run_parser("semgrep.json", _semgrep, "semgrep")
@@ -1085,6 +1099,8 @@ def main(argv=None) -> int:
     def _checks(data):
         f, e = parse_checks(data)
         warnings.extend(clean_text(w, 300, True) for w in (data.get("warnings") or [])[:20])
+        if any("건만 리포트에 담았습니다" in str(w) for w in data.get("warnings") or []):
+            incomplete.add("checks")    # 결과 상한으로 잘림 — 뒤쪽 결과가 '해결'로 보이지 않게 (리뷰 W1)
         return f, e
 
     run_parser("checks.json", _checks, "checks")
@@ -1160,7 +1176,9 @@ def main(argv=None) -> int:
 
     run_id = os.path.basename(run_dir)
     complete_units = sorted({r["tool"] for r in status_rows if r["status"] == "ok"} - incomplete)
-    baseline = _base.compare(findings, complete_units, _base.find_previous(run_dir, args.kind, args.target))
+    unit_keys = _base.unit_keys(complete_units, extra_meta.get("tools", []), extra_meta.get("rules", []),
+                                index.labels(), extra_meta.get("plugin_version"))
+    baseline = _base.compare(findings, complete_units, unit_keys, _base.find_previous(run_dir, args.kind, args.target))
     meta = {
         "run_id": run_id,
         "kind": args.kind,
@@ -1175,6 +1193,7 @@ def main(argv=None) -> int:
         "plugin_version": extra_meta.get("plugin_version"),
         "tool_status": status_rows,
         "complete_units": complete_units,
+        "unit_keys": unit_keys,
         "baseline": baseline,
         "warnings": warnings,
         "errors": errors,
