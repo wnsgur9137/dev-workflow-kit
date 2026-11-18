@@ -24,19 +24,19 @@ for arg in "$@"; do
   esac
 done
 
-out=$(python3 -I "$SEC_PLUGIN/scripts/lib/cleanup_reports.py" "$SEC_DATA/reports" "$@")
-rc=$?
-[ "$rc" -eq 2 ] && exit 2   # 인자 오류 — 메시지는 이미 나갔다
-days=$(printf '%s\n' "$out" | sed -n '1s/^days=//p')
-names=$(printf '%s\n' "$out" | sed '1{/^days=/d;}')
+sec_cleanup_run "$@"
+[ "$SEC_CLEAN_RC" -eq 2 ] && { printf '%s\n' "$SEC_CLEAN_WARN" >&2; exit 2; }   # 인자 오류 — 메시지만 내고 끝낸다
 case " $* " in *" --dry-run "*) verb="지울 대상" ;; *) verb="지움" ;; esac
-if [ -n "$names" ]; then
-  sec_log "$verb: $(printf '%s\n' "$names" | grep -c .)개 — ${days}일보다 오래됨 ($SEC_DATA/reports)"
-  printf '%s\n' "$names" | while IFS= read -r n; do sec_log "  $n"; done
+if [ -n "$SEC_CLEANED" ]; then
+  sec_log "$verb: $(printf '%s\n' "$SEC_CLEANED" | grep -c .)개 — ${SEC_CLEAN_DAYS}일보다 오래됨 ($SEC_DATA/reports)"
+  printf '%s\n' "$SEC_CLEANED" | while IFS= read -r n; do sec_log "  $n"; done
 fi
-if [ "$rc" -ne 0 ]; then
-  sec_err "일부 리포트를 지우지 못했습니다 — 위 메시지를 확인하세요"
-elif [ -z "$names" ]; then
-  sec_log "${days}일보다 오래된 리포트가 없습니다 ($SEC_DATA/reports)"
+if [ -n "$SEC_CLEAN_WARN" ]; then
+  printf '%s\n' "$SEC_CLEAN_WARN" | while IFS= read -r line; do sec_warn "$line"; done
 fi
-exit "$rc"
+if [ "$SEC_CLEAN_RC" -ne 0 ]; then
+  sec_err "정리하지 못한 항목이 있습니다 — 위 메시지를 확인하세요"
+elif [ -z "$SEC_CLEANED" ]; then
+  sec_log "${SEC_CLEAN_DAYS}일보다 오래된 리포트가 없습니다 ($SEC_DATA/reports)"
+fi
+exit "$SEC_CLEAN_RC"

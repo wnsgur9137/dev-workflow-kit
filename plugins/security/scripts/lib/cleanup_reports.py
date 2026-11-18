@@ -7,13 +7,13 @@ reports 자체가 링크면 그 실제 폴더를 정리한다 — 스캔도 그 
 
   python3 -I cleanup_reports.py <reports 폴더> [--days N] [--dry-run]
   보관 기간: --days N > 환경변수 DWK_SECURITY_RETENTION_DAYS > 30 (1~3650)
-  stdout: 첫 줄 "days=<N>", 이어서 지운(--dry-run 이면 지울) run-id 한 줄씩
-  stderr: 실패·경고 (실패한 run-id 포함)
+  stdout: 첫 줄 "days=<N>", 이어서 지운(--dry-run 이면 지울) run-id 한 줄씩. 경고는 "!warn <내용>", 실패는 "!fail <내용>"
+          (run-id 는 '!' 로 시작할 수 없어 섞이지 않는다 — 호출하는 쪽이 임시 파일 없이 한 흐름으로 읽는다, 이슈 #39)
+  stderr: 인자 오류·예상 못 한 예외만
   종료코드 0 정상 · 1 일부 실패 · 2 인자 오류
 """
 
 import datetime as _dt
-import errno
 import os
 import re
 import shutil
@@ -49,16 +49,18 @@ def expired(names, is_dir, days: int, now=None, warn=None):
     """보관 기간이 지난 run-id 목록 (이름순). 정확히 기간과 같은 시각은 남긴다 (경계: 'days 일보다 오래된 것')."""
     now = now or _dt.datetime.now()
     limit = now - _dt.timedelta(days=days)
-    out = []
+    out, future = [], []
     for name in sorted(names):
         t = run_time(name)
         if t is None:
             continue
-        if t > now + FUTURE_SLACK and warn:
-            # 시계가 앞서 있을 때 만든 리포트는 시각이 지날 때까지 남는다 — 알린다 (리뷰 S1)
-            warn(f"이름의 시각이 현재보다 미래인 리포트가 있습니다(시계 확인): {name}")
+        if t > now + FUTURE_SLACK:
+            future.append(name)
         if t < limit and is_dir(name):
             out.append(name)
+    if future and warn:
+        # 시계가 앞서 있을 때 만든 리포트는 시각이 지날 때까지 남는다 — 한 줄로 묶어 알린다 (리뷰 S1, 이슈 #39)
+        warn(f"이름의 시각이 현재보다 미래인 리포트 {len(future)}개 — 시계를 확인하세요 (예: {future[0]})")
     return out
 
 
@@ -77,11 +79,15 @@ def _remove(fd, root, name):
     if sys.version_info >= (3, 11):
         shutil.rmtree(name, dir_fd=fd, onerror=_gone_ok)
         return
-    # 3.8~3.10: dir_fd 를 받지 못한다 — 지우기 직전 root 경로가 아직 연 폴더와 같은지 확인하고 경로로 지운다
-    st, cur = os.fstat(fd), os.lstat(root)
-    if (st.st_dev, st.st_ino) != (cur.st_dev, cur.st_ino):
-        raise OSError(errno.ESTALE, "리포트 폴더가 바뀌었습니다")
-    shutil.rmtree(os.path.join(root, name), onerror=_gone_ok)
+    # 3.8~3.10: dir_fd 를 받지 못한다 — 연 폴더(fd)로 들어가 상대 경로로 지운다. 경로를 다시 해석하지 않으므로
+    # 그 사이 root 가 바뀌어도 다른 곳을 지우지 않는다 (이슈 #39, PR #38 2차 R2-S2). 끝나면 원래 폴더로 돌아온다
+    here = os.open(".", os.O_RDONLY)
+    try:
+        os.fchdir(fd)
+        shutil.rmtree(name, onerror=_gone_ok)
+    finally:
+        os.fchdir(here)
+        os.close(here)
 
 
 def main(argv, now=None, environ=None):
@@ -109,16 +115,20 @@ def main(argv, now=None, environ=None):
         env = environ.get(ENV_DAYS)
         days = parse_days(env) if env is not None else DEFAULT_DAYS
         if days is None:
-            print(f"{ENV_DAYS} 값이 잘못됐습니다(1~{MAX_DAYS} 정수): {env!r} — 기본 {DEFAULT_DAYS}일로 정리합니다", file=sys.stderr)
             days = DEFAULT_DAYS
-    print(f"days={days}")
+            print(f"days={days}")
+            print(f"!warn {ENV_DAYS} 값이 잘못됐습니다(1~{MAX_DAYS} 정수): {env!r} — 기본 {DEFAULT_DAYS}일로 정리합니다")
+        else:
+            print(f"days={days}")
+    else:
+        print(f"days={days}")
     if not os.path.lexists(args[0]):
         return 0          # 아직 스캔한 적 없음
     root = os.path.realpath(args[0])
     try:
         fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as e:
-        print(f"리포트 폴더를 열 수 없습니다: {root} ({e.__class__.__name__})", file=sys.stderr)
+        print(f"!fail 리포트 폴더를 열 수 없습니다: {root} ({e.__class__.__name__})")
         return 1
     rc = 0
     try:
@@ -127,13 +137,13 @@ def main(argv, now=None, environ=None):
                 return stat.S_ISDIR(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode)
             except OSError:
                 return False
-        warn = lambda m: print(m, file=sys.stderr)  # noqa: E731
+        warn = lambda m: print("!warn " + m)  # noqa: E731
         for name in expired(os.listdir(fd), is_dir, days, now, warn):
             if not dry:
                 try:
                     _remove(fd, root, name)
                 except OSError as e:
-                    print(f"지우지 못했습니다: {name} ({e.__class__.__name__}: {e.strerror or e})", file=sys.stderr)
+                    print(f"!fail 지우지 못했습니다: {name} ({e.__class__.__name__}: {e.strerror or e})")
                     rc = 1
                     continue
             print(name)
