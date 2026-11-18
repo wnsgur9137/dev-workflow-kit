@@ -455,20 +455,87 @@ class MobsfReportTest(unittest.TestCase):
             mobsf_report.parse([], normalize.clean_text, normalize.clean_ident, 160, 200, "x", "android")
 
 
+def compose_service_env(text, service):
+    """compose.yml 의 services.<service>.environment 를 줄 단위로 읽는다 (정규식 대신 — 빈 줄·주석·끝 줄바꿈 없음·
+    최상위의 같은 이름 키에 흔들리지 않게, 이슈 #33·PR #32 6차 N2). 'KEY: value' 사전을 돌려준다. 없으면 None."""
+    lines = text.splitlines()
+    in_services = in_service = in_env = False
+    env = None
+    for raw in lines:
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue                                   # 빈 줄·주석은 구조를 바꾸지 않는다
+        indent = len(raw) - len(raw.lstrip(" "))
+        body = raw.strip()
+        if indent == 0:
+            in_services, in_service, in_env = body == "services:", False, False
+            continue
+        if not in_services:
+            continue
+        if indent == 2:
+            in_service, in_env = body == f"{service}:", False
+            continue
+        if in_service and indent == 4:
+            in_env = body == "environment:"
+            if in_env:
+                env = {}
+            continue
+        if in_env and indent == 6 and ":" in body:
+            k, _, v = body.partition(":")
+            env[k.strip()] = v.strip()
+    return env
+
+
 class ComposeProxyTest(unittest.TestCase):
     def test_both_services_blank_out_proxy_env(self):
         """4차 N3: ~/.docker/config.json 의 proxies 가 넣는 변수를 두 서비스 모두 빈 값으로 덮어쓴다.
-        지워지면 프록시 환경에서만 격리 확인이 실패해 드러나므로 텍스트로 고정한다."""
+        지워지면 프록시 환경에서만 격리 확인이 실패해 드러나므로 텍스트로 고정한다. 목록은 격리 확인 스크립트와 같다."""
+        import app_iso_probe
         with open(os.path.join(HERE, "..", "docker", "compose.yml"), encoding="utf-8") as fh:
             text = fh.read()
-        # 서비스(2칸 들여쓰기)마다 나눈 뒤 environment 블록(6칸 들여쓰기 줄이 이어지는 구간)에서만 찾는다 (5차 N2)
-        blocks = dict(re.findall(r"(?m)^  ([a-z][a-z-]*):\n((?:(?:    .*)?\n)*)", text))
         for name in ("mobsf", "mobsf-client"):
-            env = re.search(r"(?m)^    environment:\n((?:      .*\n)*)", blocks[name])
+            env = compose_service_env(text, name)
             self.assertIsNotNone(env, name)
-            for var in ("HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY"):
-                for k in (var, var.lower()):
-                    self.assertRegex(env.group(1), rf'(?m)^      {k}: ""$', f"{name}: {k}")
+            for var in app_iso_probe.PROXY_ENV_KEYS:
+                for k in (var, var.upper()):
+                    self.assertEqual(env.get(k), '""', f"{name}: {k}")
+
+    def test_env_reader_is_not_fooled(self):
+        """6차 N2 의 거짓 양성: environment 안 빈 줄·4칸 주석, 최상위 같은 이름 키, 끝 줄바꿈 없음."""
+        text = ("services:\n  mobsf:\n    environment:\n      A: \"1\"\n\n    # 주석\n      B: \"\"\n    image: x\n"
+                "  other:\n    environment:\n      A: \"9\"\nvolumes:\n  mobsf:\n    environment:\n      Z: \"\"")
+        self.assertEqual(compose_service_env(text, "mobsf"), {"A": '"1"', "B": '""'})
+        self.assertIsNone(compose_service_env("services:\n  mobsf:\n    image: x", "mobsf"))
+        self.assertEqual(compose_service_env("services:\n  mobsf:\n    environment:\n      K: \"\"", "mobsf"), {"K": '""'})
+
+
+class AppIsoProbeTest(unittest.TestCase):
+    """격리 확인 스크립트를 파일로 빼서 고정한다 (이슈 #33, PR #32 5차 N1)."""
+
+    @staticmethod
+    def fail(*a, **k):
+        raise OSError("blocked")
+
+    class Conn:
+        def close(self):
+            pass
+
+    def test_isolated_and_each_leak(self):
+        import app_iso_probe as p
+        self.assertEqual(p.probe(self.fail, self.fail, {}), [])
+        self.assertEqual(p.probe(lambda h, port: [], self.fail, {}), ["dns:example.com", "dns:play.google.com"])
+        self.assertEqual(p.probe(self.fail, lambda a, timeout=0: self.Conn(), {}), ["ip"])
+        env = {"FTP_PROXY": "http://p:1", "all_proxy": "socks5://p", "HTTP_PROXY": " ", "NO_PROXY": "x", "PATH": "/bin"}
+        self.assertEqual(p.probe(self.fail, self.fail, env), ["proxy-env:FTP_PROXY", "proxy-env:all_proxy"])
+        self.assertEqual(p.PROXY_ENV_KEYS, ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy"))
+
+    def test_script_runs_standalone_and_fails_closed(self):
+        import subprocess
+        path = os.path.join(HERE, "..", "scripts", "lib", "app_iso_probe.py")
+        src = open(path, encoding="utf-8").read()
+        out = subprocess.run([sys.executable, "-I", "-c", src], capture_output=True, text=True, timeout=30,
+                             env={"PATH": os.environ.get("PATH", ""), "HTTPS_PROXY": "http://p:1"})
+        self.assertTrue(out.stdout.strip().splitlines()[-1].startswith("LEAK "), out.stdout)
+        self.assertIn("proxy-env:HTTPS_PROXY", out.stdout)
 
 
 class NormalizeAppTest(unittest.TestCase):

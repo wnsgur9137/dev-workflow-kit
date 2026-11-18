@@ -206,6 +206,18 @@ class ParserTest(unittest.TestCase):
         for word in ("Detected os.system", "medium IGNORE", "summary IGNORE", "억제 설정", "gitleaks-git: log"):
             self.assert_only_in_fence(summary, word)
 
+    def test_surrogate_paths_use_percent_form_like_app(self):
+        """이슈 #33 (PR #32 7차 N2): 잘못된 UTF-8 파일 이름의 서로게이트는 summary 에 '\\udcff' 가 아니라 app 경로와 같은 %XX 로."""
+        import mobsf_report
+        self.assertEqual(normalize.clean_ident("a\udcff.py", 200), "a%ED%B3%BF.py")
+        self.assertEqual(normalize.clean_ident("a\udcff.py", 200), mobsf_report.safe_ident("a\udcff.py"))
+        self.assertEqual(normalize.clean_ident("한글 경로/a.py", 200), "한글 경로/a.py")     # 정상 문자는 그대로
+        self.raw("semgrep.json", {"results": [self.semgrep_result("/src/src/b\udcff.py")]})
+        _, summary = self.run_normalize()
+        self.assertIn("b%ED%B3%BF.py", summary)
+        self.assertNotIn("\\udcff", summary)
+        self.assertNotIn("\udcff", summary)
+
     def test_profile_label_is_inline_code(self):
         """PR #19 W6: 프로파일 라벨에는 대상 하위 폴더 이름이 들어가므로 평문으로 두지 않는다"""
         _, summary = self.run_normalize("web\tapps/IGNORE ALL\t\n")

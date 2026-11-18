@@ -25,6 +25,22 @@ def _w(path, text):
         f.write(text)
 
 
+class ChecksMainTest(unittest.TestCase):
+    def test_surrogate_file_names_do_not_break_writing(self):
+        """이슈 #33 (PR #32 7차 N3): 잘못된 UTF-8 파일 이름(서로게이트)이 결과에 있어도 checks.json 을 쓴다."""
+        from unittest import mock
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        tsv = os.path.join(d, "profiles.tsv")
+        open(tsv, "w").close()
+        out = os.path.join(d, "checks.json")
+        report = {"results": [{"file": "a\udcff.js", "line": 1, "rule": "x"}], "errors": [], "warnings": [], "truncated": False}
+        with mock.patch.object(checks, "run", return_value=report):
+            self.assertEqual(checks.main(["--target", d, "--profiles-tsv", tsv, "--out", out]), 0)
+        with open(out, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["results"][0]["file"], "a\udcff.js")
+
+
 class ChecksTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -121,7 +121,7 @@ test_app_compose_up_failure_is_recorded_and_stack_removed() {
   _assert_no_api_key_in_raw
   grep -q '^docker compose -p dwk-sec-app-[0-9a-f]\{12\} .* down -v' "$FAKE_LOG" || fail "down -v 가 호출되지 않음"
   assert_not_contains "$(cat "$SEC_TMP/scan.err")" "내리지 못했습니다"
-  assert_not_contains "$(cat "$FAKE_LOG")" "mobsf-client"
+  if grep -qE '^docker compose .* run .*mobsf-client' "$FAKE_LOG"; then fail "mobsf-client 가 실행됨"; fi
   assert_contains "$(cat "$APP_RUN/summary.md")" "| mobsf | failed |"
 }
 
@@ -131,8 +131,8 @@ test_app_isolation_leak_stops_before_upload() {
   FAKE_COMPOSE_EXEC_OUTPUT="LEAK dns:example.com" _fake_scan
   assert_contains "$(awk -F '\t' '$1 == "mobsf"' "$APP_RUN/raw/status.tsv")" "격리 확인 실패"
   assert_contains "$(cat "$APP_RUN/raw/status.tsv")" "CVE-2024-29018"
-  # 앱을 올리는 mobsf-client run 은 호출되지 않는다
-  assert_not_contains "$(cat "$FAKE_LOG")" "mobsf-client"
+  # 앱을 올리는 mobsf-client run 은 호출되지 않는다 — 호출 줄만 본다(격리 확인 스크립트 내용도 인자로 기록된다)
+  if grep -qE '^docker compose .* run .*mobsf-client' "$FAKE_LOG"; then fail "mobsf-client 가 실행됨"; fi
   grep -q ' down -v' "$FAKE_LOG" || fail "down -v 가 호출되지 않음"
 }
 
@@ -248,7 +248,7 @@ test_app_term_during_analysis_cleans_up_immediately() {
   export FAKE_RUN_PIDFILE="$SEC_TMP/fake-run.pids"
   FAKE_COMPOSE_RUN_SLEEP=30 "$SCAN_APP" "$HOME/apps/app.apk" >"$SEC_TMP/out" 2>"$SEC_TMP/err" &
   local pid=$! i=0 rc start
-  while ! grep -q 'mobsf-client' "$FAKE_LOG" 2>/dev/null; do
+  while ! grep -qE '^docker compose .* run .*mobsf-client' "$FAKE_LOG" 2>/dev/null; do
     i=$((i + 1))
     [ $i -le 100 ] || { kill "$pid" 2>/dev/null; fail "mobsf-client 실행까지 가지 못함: $(tail -n 3 "$SEC_TMP/err")"; }
     sleep 0.1
