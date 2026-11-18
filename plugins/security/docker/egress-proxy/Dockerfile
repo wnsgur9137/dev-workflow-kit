@@ -6,6 +6,7 @@
 #     버전은 리비전(-rN)까지 고정한다. Alpine 은 같은 브랜치에 최신 리비전만 남기므로, 저장소에서 바뀌면 빌드가 실패한다
 #     → 관리자가 PR 로 이 줄을 올린다 (docs/security/03 워크플로/업데이트 절차.md)
 #
+# 이 폴더의 모든 파일이 빌드 입력 해시(common.sh sec_build_input)에 들어간다 — COPY 할 파일을 더해도 바뀌면 다시 빌드된다.
 # 실행 설정은 이미지에 넣지 않는다 — compose-web.yml 이 설정·필터를 tmpfs(/run/dwk, uid 57981)에 쓰고 tinyproxy -d -c 로 실행한다.
 # 쓰는 것: /usr/bin/tinyproxy, /bin/sh(설정 쓰기), nc(busybox, healthcheck)
 ARG BASE

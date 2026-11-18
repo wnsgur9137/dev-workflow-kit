@@ -105,7 +105,7 @@ update_images() {
 # 로컬 빌드 이미지 (이슈 #35) — 베이스는 update_images 가 digest 로 받아 둔다
 # ---------------------------------------------------------------------------
 build_images() {
-  local entry name base base_ref input id tag rec
+  local entry name base base_ref input id tag rec tmp version
   for entry in $SEC_BUILT_IMAGES; do
     name=${entry%%:*} base=${entry#*:}
     base_ref=$(sec_image_ref "$base") || {
@@ -123,36 +123,42 @@ build_images() {
       failed=1
       continue
     }
-    if id=$(sec_built_id "$name") && docker image inspect "$id" >/dev/null 2>&1; then
+    # 기록이 최신이고 그 이미지가 지금 입력으로 빌드된 것일 때만 넘어간다 (라벨이 다르면 다시 빌드, PR #37 리뷰 W1)
+    if id=$(sec_built_id "$name") && sec_built_verify "$name" "$id"; then
       sec_log "이미지 있음: $name (로컬 빌드 ${id:7:12})"
       continue
     fi
     tag="dwk-security/$name:${input:0:12}"
+    version="$(sed -n 's/^ARG TINYPROXY_VERSION=//p' "$SEC_PLUGIN/docker/$name/Dockerfile")+alpine$(sec_image_field "$base" tag)"
     sec_log "이미지 빌드 중: $name ($base_ref 기반)"
-    # 빌드는 패키지를 받으러 네트워크를 쓴다 — apk 가 베이스의 Alpine 서명 키로 서명을 확인한다
-    if ! docker build -q --build-arg "BASE=$base_ref" --label "dwk.security.build-input=$input" \
+    # 빌드는 패키지를 받으러 네트워크를 쓴다 — apk 가 베이스의 Alpine 서명 키로 서명을 확인한다.
+    # 결과 ID 는 --iidfile 로 받는다 — 태그를 다시 읽으면 그 사이 다른 빌드가 옮긴 태그를 기록할 수 있다 (리뷰 S2,
+    # containerd 이미지 저장소에서 iidfile 값이 .Id 와 같음을 실측)
+    rm -f "$TMP_ROOT/iid-$name"
+    if ! docker build -q --iidfile "$TMP_ROOT/iid-$name" --build-arg "BASE=$base_ref" \
+      --label "dwk.security.build-input=$input" --label "dwk.security.version=$version" \
       -t "$tag" "$SEC_PLUGIN/docker/$name" >/dev/null 2>"$TMP_ROOT/build-$name.log"; then
       sec_err "빌드 실패: $name — $(tail -n 3 "$TMP_ROOT/build-$name.log" | tr '\n' ' ')"
       sec_log "  패키지 버전을 찾지 못했다면 Alpine 저장소의 리비전이 바뀐 것입니다 — 관리자가 Dockerfile 의 버전을 올려야 합니다."
       failed=1
       continue
     fi
-    # 빌드 결과는 태그가 아니라 이미지 ID 로 기록하고 쓴다 — 같은 태그를 다른 빌드가 덮어써도 스캔이 그 이미지를 쓰지 않는다
-    id=$(docker image inspect --format '{{.Id}}' "$tag" 2>/dev/null)
+    id=$(cat "$TMP_ROOT/iid-$name" 2>/dev/null)
     case "$id" in sha256:*) ;; *)
       sec_err "빌드한 이미지의 ID 를 읽지 못했습니다: $tag"
       failed=1
       continue
       ;;
     esac
-    # (build -q 의 출력은 이미지 저장소 종류(containerd 등)에 따라 형식이 달라 비교하지 않는다 — 라벨의 입력 해시로 확인한다)
-    if [ "$(docker image inspect --format '{{index .Config.Labels "dwk.security.build-input"}}' "$id" 2>/dev/null)" != "$input" ]; then
-      sec_err "빌드한 이미지($tag)가 이번 빌드 결과와 다릅니다 — 중단합니다."
+    # 빌드 결과는 태그가 아니라 이미지 ID 로 기록하고 쓴다 — 같은 태그를 다른 빌드가 덮어써도 스캔이 그 이미지를 쓰지 않는다
+    if ! sec_built_verify "$name" "$id"; then
+      sec_err "빌드한 이미지($id)가 이번 빌드 입력과 다릅니다 — 중단합니다."
       exit 1
     fi
     rec=$(sec_built_record "$name")
-    if ! { mkdir -p "${rec%/*}" && printf '%s %s\n' "$input" "$id" >"$rec.tmp" && mv "$rec.tmp" "$rec"; }; then
+    if ! { mkdir -p "${rec%/*}" && tmp=$(mktemp "$rec.XXXXXX") && printf '%s %s\n' "$input" "$id" >"$tmp" && mv "$tmp" "$rec"; }; then
       sec_err "빌드 기록을 쓰지 못했습니다: $rec"
+      rm -f "${tmp:-}"
       failed=1
       continue
     fi
