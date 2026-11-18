@@ -20,6 +20,13 @@ RESOLVED_MAX = 50
 SEVERITIES = ("critical", "high", "medium", "low", "info")
 MAX_FILE = 64 * 1024 * 1024
 ID_VERSION = 1      # normalize.finding_id 의 입력이 바뀌면 올린다 — 다르면 비교하지 않는다 (리뷰 S6)
+# 단위별 파서 버전 — 파서가 결과를 거르는 방식이 바뀌면 그 단위만 올린다. 플러그인 버전은 툴킷 자체 검사(checks)에만 넣는다
+# (모든 단위에 넣으면 업그레이드마다 비교가 통째로 끊긴다, 2차 리뷰 S2)
+PARSER_VERSION = {"semgrep": 1, "gitleaks-git": 1, "gitleaks-dir": 1, "osv-scanner": 1, "checks": 1, "mobsf": 1,
+                  "gitleaks-artifact": 1, "zap": 1}
+# 위치 이동으로 짝짓지 않는 단위 — 시크릿은 위치가 바뀐 것보다 새로 들어온 것이 위험하다 (2차 리뷰 S1)
+NO_MOVE = {"gitleaks-git", "gitleaks-dir", "gitleaks-artifact"}
+PARTIAL_PATHS_MAX = 2000
 # 단위 → 이미지 이름(images.lock). checks 는 툴킷 자체 검사라 플러그인 버전이 곧 도구 버전이다
 UNIT_TOOL = {"semgrep": "semgrep", "gitleaks-git": "gitleaks", "gitleaks-dir": "gitleaks", "osv-scanner": "osv-scanner",
              "checks": None, "mobsf": "mobsf", "gitleaks-artifact": "gitleaks", "zap": "zap"}
@@ -31,7 +38,9 @@ def unit_keys(units, tools, rules, profiles, plugin_version):
     commits = sorted(f"{r.get('name')}@{r.get('commit')}" for r in rules or [] if isinstance(r, dict))
     out = {}
     for u in units:
-        parts = [f"id={ID_VERSION}", f"plugin={plugin_version}"]
+        parts = [f"id={ID_VERSION}", f"parser={PARSER_VERSION.get(u)}"]
+        if u == "checks":
+            parts.append(f"plugin={plugin_version}")
         if UNIT_TOOL.get(u):
             parts.append(f"image={digest.get(UNIT_TOOL[u])}")
         if u in ("semgrep", "checks"):
@@ -45,7 +54,8 @@ def unit_keys(units, tools, rules, profiles, plugin_version):
 def _load(path):
     """링크·큰 파일은 읽지 않는다 — 연 파일 자체를 확인한다 (리뷰 N2)."""
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # O_NONBLOCK: FIFO 를 열 때 쓰는 쪽을 기다리며 멈추지 않게 (2차 리뷰 S4). 정규 파일에는 영향이 없다
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError:
         return None
     try:
@@ -114,8 +124,11 @@ def _move_key(f):
     return (f.get("unit"), str(f.get("rule_id")), str(loc.get("file") or loc.get("url")), str(loc.get("package")))
 
 
-def compare(findings, complete_units, keys, prev):
-    """findings 에 'baseline'(new|existing|moved|not-compared)을 붙이고 meta 용 요약을 돌려준다."""
+def compare(findings, complete_units, keys, prev, all_units=(), partial_paths=None):
+    """findings 에 'baseline'(new|existing|moved|not-compared)을 붙이고 meta 용 요약을 돌려준다.
+    all_units: 이번 실행 status 의 도구 전체 — 양쪽 모두 불완전한 도구도 '비교하지 않음'으로 보이게 (2차 리뷰 W1)
+    partial_paths: {단위: [파일]} — 그 파일만 점검하지 못한 단위. 단위는 비교하되 두 실행 중 어느 쪽에서든 오류가 난
+                   파일의 결과는 비교하지 않는다 (파싱 못 하는 파일이 늘 있어도 나머지는 비교, 2차 리뷰 W2)"""
     def none(run_id, reason):
         for f in findings:
             f["baseline"] = "not-compared"
@@ -130,13 +143,25 @@ def compare(findings, complete_units, keys, prev):
     both = set(complete_units) & prev_complete
     changed = {u for u in both if meta["unit_keys"].get(u) != keys.get(u)}
     comparable = both - changed
+    prev_partial = meta.get("partial_paths") if isinstance(meta.get("partial_paths"), dict) else {}
+    skip = {u: set(map(str, (partial_paths or {}).get(u) or [])) | set(map(str, prev_partial.get(u) or []))
+            for u in comparable}
+
+    def file_of(f):
+        loc = f.get("location") if isinstance(f.get("location"), dict) else {}
+        return str(loc.get("file"))
+
+    def in_scope(f):
+        u = f.get("unit")
+        return u in comparable and file_of(f) not in skip.get(u, ())
+
     prev_ids = {}
     for f in prev_findings:
-        if isinstance(f, dict) and f.get("unit") in comparable and isinstance(f.get("id"), str):
+        if isinstance(f, dict) and in_scope(f) and isinstance(f.get("id"), str):
             prev_ids.setdefault(f["id"], f)
     cur_ids, new = set(), []
     for f in findings:
-        if f.get("unit") in comparable:
+        if in_scope(f):
             cur_ids.add(f["id"])
             if f["id"] in prev_ids:
                 f["baseline"] = "existing"
@@ -146,21 +171,31 @@ def compare(findings, complete_units, keys, prev):
         else:
             f["baseline"] = "not-compared"
     gone = [f for i, f in prev_ids.items() if i not in cur_ids]
-    # 위치만 바뀐 결과 — 같은 (단위, 규칙, 파일, 패키지)에 남은 신규와 해결을 개수만큼 짝짓는다 (리뷰 W2)
+    # 위치만 바뀐 결과 — 같은 (단위, 규칙, 파일, 패키지)에 남은 신규와 해결을 개수만큼 짝짓는다 (리뷰 W2). 시크릿은 짝짓지 않는다
     pool = {}
     for f in gone:
-        pool.setdefault(_move_key(f), []).append(f)
+        if f.get("unit") not in NO_MOVE:
+            pool.setdefault(_move_key(f), []).append(f)
+    moved_away = set()
     for f in new:
         bucket = pool.get(_move_key(f))
         if bucket:
-            bucket.pop()
+            old = bucket.pop()
+            moved_away.add(id(old))
             f["baseline"] = "moved"
-    gone = [f for b in pool.values() for f in b]
+            line = (old.get("location") or {}).get("line") if isinstance(old.get("location"), dict) else None
+            if isinstance(line, int):
+                f["baseline_prev_line"] = line
+    gone = [f for f in gone if id(f) not in moved_away]
     counts = {k: sum(1 for f in findings if f["baseline"] == k) for k in ("new", "existing", "moved", "not-compared")}
     order = {s: i for i, s in enumerate(SEVERITIES)}
     resolved = sorted((_brief(f) for f in gone), key=lambda b: (order[b["severity"]], b["tool"], b["location"].get("file") or ""))
-    units = set(complete_units) | prev_complete
+    prev_status = {r.get("tool") for r in meta.get("tool_status") or [] if isinstance(r, dict)}
+    units = ({u for u in all_units if u in UNIT_TOOL} | {u for u in prev_status if u in UNIT_TOOL}
+             | set(complete_units) | prev_complete)
     return {"run_id": name, "compared_units": sorted(comparable), "changed_units": sorted(changed),
-            "not_compared_units": sorted(units - both), "new": counts["new"], "existing": counts["existing"],
+            "not_compared_units": sorted(units - comparable - changed),
+            "partial_units": {u: len(p) for u, p in sorted(skip.items()) if p},
+            "new": counts["new"], "existing": counts["existing"],
             "moved": counts["moved"], "not_compared": counts["not-compared"],
             "resolved": len(resolved), "resolved_items": resolved[:RESOLVED_MAX]}
