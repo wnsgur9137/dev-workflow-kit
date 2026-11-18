@@ -219,6 +219,19 @@ class RedactTest(unittest.TestCase):
             "Cookie: sid = SECRET14": "Cookie: sid = [MASKED]",
             "Cookie: =SECRET15; b=SECRET16": "Cookie: =[MASKED]; b=[MASKED]",
             "xcookie: a=1": "xcookie: a=1",
+            # 6차 리뷰 R6-W1: 공백·탭·', ' 로 구분된 쌍, 따옴표 값 뒤 공백 구분 / R6-S1: JSON 공백 제어문자 이스케이프 뒤 헤더 /
+            # R6-S2: 256자 넘는 이름 / 빈 쌍 / 값 안 ','
+            "Cookie: a=1 b=SECRET": "Cookie: a=[MASKED] b=[MASKED]",
+            "Cookie: a=1\tb=SECRET": "Cookie: a=[MASKED]\tb=[MASKED]",
+            "Cookie: a=1, b=SECRET": "Cookie: a=[MASKED] b=[MASKED]",
+            "Cookie: a=1 b=SECRET; c=SECRET2": "Cookie: a=[MASKED] b=[MASKED]; c=[MASKED]",
+            'Cookie: a="SECRET; b" c=SECRET2': "Cookie: a=[MASKED] c=[MASKED]",
+            "x\\u000aCookie: sid=SECRET": "x\\u000aCookie: sid=[MASKED]",
+            "\\u0009Cookie: sid=SECRET": "\\u0009Cookie: sid=[MASKED]",
+            "Cookie: a=1; " + "n" * 300 + "=SECRET": "Cookie: a=[MASKED]; " + "n" * 300 + "=[MASKED]",
+            "Cookie: a=1; ; b=SECRET": "Cookie: a=[MASKED]; ; b=[MASKED]",
+            "Cookie: a=x,y=SECRET": "Cookie: a=[MASKED]",
+            "cookie:" * 40 + " sid=SECRET": "cookie:" * 40 + " sid=[MASKED]",
             # R5 NITPICK: 제어문자 이스케이프는 풀지 않는다
             "\\u001b[31m": "\\u001b[31m",
         }
@@ -241,17 +254,23 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(len(long_path), w.URL_SHOW_MAX + len("…[TRUNCATED]"))
 
     def test_redact_text_is_linear(self):
-        # 시작 위치마다 다시 훑는 입력('-/'·'?/')과 인코딩 풀기('%2')를 포함한다 (3차 리뷰 NITPICK)
+        # 시작 위치마다 다시 훑는 입력('-/'·'?/')·인코딩 풀기('%2')·쿠키 이름이 다음 헤더까지 이어지는 경로(R5-S1)를 포함한다.
+        # 4배 입력에 8배 미만 — 선형이면 약 4배, 이차면 약 16배라 둘을 가른다 (2배·6배 비교는 이차도 통과했다, 5차 리뷰 R5-S1).
+        # 기준 시간이 너무 짧으면 잡음에 묻히므로 패턴마다 기준이 10ms 를 넘을 때까지 입력을 키운다 (6차 리뷰 R6-N1)
         import time
         for pat in ("-/", "/a", "?/", "%2", "//", "%25", "Cookie: a=1;", "cookie:a=;", "\\u002f", "a;=", "a#=",
-                    "cookie:", "set-cookie:/", 'cookie:"', "Cookie: " + "a" * 300):   # 이름이 다음 헤더까지 이어지는 경로 (R5-S1)
+                    "cookie:", "set-cookie:/", 'cookie:"', "Cookie: " + "a" * 300,
+                    "Cookie: a=1 x ", " ;"):
             def t(n):
                 s = time.perf_counter()
                 w.redact_text(pat * n + " //" + "b" * n)
                 return time.perf_counter() - s
-            t(1000)
-            # 4배 입력에 8배 미만 — 선형이면 약 4배, 이차면 약 16배라 둘을 가른다 (2배·6배 비교는 이차도 통과했다, 5차 리뷰 R5-S1)
-            self.assertLess(t(40000), max(t(10000), 0.005) * 8, pat)
+            n = 2000
+            base = t(n)
+            while base < 0.01 and n < 2_000_000:
+                n *= 2
+                base = t(n)
+            self.assertLess(t(n * 4), base * 8, (pat, n))
 
     def test_prod_like_host(self):
         for h in ("api.prod.example.com", "production.example.com", "app-prod.example", "prod-api.example"):
