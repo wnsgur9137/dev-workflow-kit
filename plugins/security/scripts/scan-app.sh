@@ -93,13 +93,14 @@ if [ $probe_rc -ne 0 ] && [ -z "$seen" ]; then
 fi
 if [ "$seen" = client-missing ]; then
   sec_err "[D7] 컨테이너에서 플러그인 폴더가 보이지 않습니다 — Docker 런타임이 이 경로를 공유하지 않습니다: $SEC_PLUGIN"
-  sec_log "  Colima 는 기본적으로 홈 디렉터리만 공유합니다. 플러그인을 홈 아래에 설치하거나 mounts 에 경로를 추가하세요."
+  sec_log "  Colima 는 기본적으로 홈 디렉터리만 공유합니다. 플러그인을 홈 아래에 설치하거나 공유 경로에 더하세요."
+  sec_colima_mounts_hint
   exit 1
 fi
 if [ "$seen" != "$HOST_SIZE" ]; then
   sec_err "[D7] 컨테이너에서 산출물이 보이지 않습니다 — Docker 런타임이 이 경로를 공유하지 않습니다: $TARGET"
-  sec_log "  Colima 는 기본적으로 홈 디렉터리만 공유합니다. 파일을 홈 아래로 옮기거나"
-  sec_log "  ~/.colima/default/colima.yaml 의 mounts 에 경로를 추가한 뒤 colima restart 하세요."
+  sec_log "  Colima 는 기본적으로 홈 디렉터리만 공유합니다. 파일을 홈 아래로 옮기거나 공유 경로에 더하세요."
+  sec_colima_mounts_hint
   exit 1
 fi
 

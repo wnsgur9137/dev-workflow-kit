@@ -111,13 +111,23 @@ if [ -n "$(ls -A "$TARGET" 2>/dev/null)" ]; then
   fi
   if [ -z "$seen" ]; then
     sec_err "[D7] 컨테이너에서 대상 폴더가 비어 보입니다 — Docker 런타임이 이 경로를 공유하지 않습니다: $TARGET"
-    sec_log "  Colima 는 기본적으로 홈 디렉터리만 공유합니다. 프로젝트를 홈 아래로 옮기거나"
-    sec_log "  ~/.colima/default/colima.yaml 의 mounts 에 경로를 추가한 뒤 colima restart 하세요."
+    sec_log "  Colima 는 기본적으로 홈 디렉터리만 공유합니다. 프로젝트를 홈 아래로 옮기거나 공유 경로에 더하세요."
+    sec_colima_mounts_hint
     exit 1
   fi
 fi
 
 sec_new_run code || sec_die "리포트 폴더를 만들 수 없습니다."
+
+# [D7] 데이터·플러그인 폴더 가시성 — 규칙·OSV DB·리포트(/out)·플러그인 설정을 마운트한다. 런타임이 공유하지 않으면
+#      컨테이너에 빈 폴더로 보여 도구 실패나 빈 결과가 난다 (이슈 #43 — 대상 폴더만 mounts 에 적어 홈 공유가 빠진 경우)
+data_seen=$(docker run "${DOCKER_HARDEN[@]}" --tmpfs /tmp:rw,size=8m -v "$SEC_DATA:/d:ro" -v "$SEC_PLUGIN:/p:ro" \
+  --entrypoint sh "$IMG_GITLEAKS" -c '[ -d /d/reports ] && [ -d /p/scripts ] && ls -A /d | head -n 1' 2>/dev/null)
+if [ -z "$data_seen" ]; then
+  sec_err "[D7] 컨테이너에서 툴킷 데이터·플러그인 폴더가 보이지 않습니다 — Docker 런타임이 이 경로를 공유하지 않습니다: $SEC_DATA · $SEC_PLUGIN"
+  sec_colima_mounts_hint
+  exit 1
+fi
 RAW="$SEC_RUN_DIR/raw"
 STATUS="$RAW/status.tsv"
 : >"$STATUS"

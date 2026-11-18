@@ -71,6 +71,19 @@ test_d7_invisible_mount_stops_before_scanning() {
   assert_contains "$OUT" "[D7]"
   assert_eq "$(grep -c '^docker run' "$FAKE_LOG")" 1 "(D7 확인용 컨테이너 1개만)"
   assert_contains "$(cat "$FAKE_LOG")" "--network none"
+  # mounts 에 경로만 적으면 홈 공유가 빠진다는 안내 (이슈 #43)
+  assert_contains "$OUT" "- location: ~"
+}
+
+# 이슈 #43: 대상은 보이는데 툴킷 데이터·플러그인 폴더가 안 보이면(mounts 에 대상만 적어 홈 공유가 빠짐) 스캔 전에 멈춘다
+test_d7_invisible_data_folder_stops_before_scanning() {
+  setup_fake
+  fake_data
+  export FAKE_RUN_OUTPUT="a.py" FAKE_RUN_FAIL_MATCH=":/d:ro" FAKE_RUN_FAIL_RC=0
+  assert_status 1 "$SCAN" "$HOME/proj"
+  assert_contains "$OUT" "[D7] 컨테이너에서 툴킷 데이터·플러그인 폴더가 보이지 않습니다"
+  assert_contains "$OUT" "- location: ~"
+  if grep -qE '^docker run .*(semgrep scan|osv-scanner scan|gitleaks (git|dir))' "$FAKE_LOG"; then fail "데이터 폴더가 안 보이는데 도구를 실행함"; fi
 }
 
 test_rules_mismatch_with_lock_is_warned() {
