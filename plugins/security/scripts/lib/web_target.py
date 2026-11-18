@@ -184,12 +184,13 @@ _TOKEN = re.compile(r"[^\s\"'<>()`]+")
 _URL_START = re.compile(r"(?i)(?:https?:)?//")
 # '/' 없는 상대 URL 의 경로 매개변수·조각 값('cb;jsessionid=…', 'cb#access_token=…', 4차 리뷰 R4-S4) — 문자 클래스가 구분자를 빼서 선형
 _PARAM_HINT = re.compile(r";[^=;]*=|#[^#]*=")
-# 쿠키 헤더와 그 뒤의 'name=value' 쌍들 — 값은 따옴표 통째·또는 ';'·공백·'\' 앞까지. 쌍 문법이 끝나면 멈춰 줄 나머지를 남긴다.
-# 'Set-Cookie' 안의 'Cookie' 나 단어 중간은 잡지 않되, 이스케이프된 줄바꿈('\r\nSet-Cookie:') 뒤는 잡는다 (4차 리뷰 R4-S1)
-_COOKIE_HDR = re.compile(r'(?i)(?:(?<![\w-])|(?<=\\[rn]))(set-cookie|cookie):((?:[ \t]*[^=;\s\\]+=(?:"[^"]*"|[^;\s\\]*);?)*)')
-_COOKIE_PAIR = re.compile(r'([ \t]*[^=;\s\\]+)=(?:"[^"]*"|[^;\s\\]*)')
+# 쿠키 헤더 이름 — 값은 _mask_cookies 가 한 글자씩 읽는다(정규식 반복 그룹은 'cookie:' 반복에서 이차 시간, 5차 리뷰 R5-S1).
+# 단어 중간('xcookie:')은 잡지 않되 'X-Session-Cookie:' 와 이스케이프된 줄바꿈('\r\nSet-Cookie:') 뒤는 잡는다.
+# 'Set-Cookie:' 안쪽 'Cookie:' 는 바깥 매치가 먼저 소비한다
+_COOKIE_HDR = re.compile(r"(?i)(?:(?<!\w)|(?<=\\[rn]))(set-cookie|cookie):")
+COOKIE_NAME_MAX = 256
 # JSON 의 ASCII 유니코드 이스케이프('\u002f'·'\u0026'·'\u003d', R4-S4) — '\/' 와 같이 미리 푼다
-_JSON_U = re.compile(r"\\u00([0-7][0-9a-fA-F])")
+_JSON_U = re.compile(r"\\u00([2-7][0-9a-fA-F])")   # 인쇄 가능한 ASCII 만 — 제어문자는 풀지 않는다 (R5 NITPICK)
 DECODE_MAX = 2   # 인코딩 풀기 단계 — 두 번 인코딩된 중첩 URL 까지 (R4-S4)
 
 
@@ -215,17 +216,63 @@ def _redact_token(tok: str, depth: int = 0) -> str:
     return tok
 
 
-def _mask_cookie(m) -> str:
-    # Set-Cookie 는 첫 쌍만 값이고 뒤는 속성(Path=/ 등), Cookie 는 모든 쌍이 값이다. 따옴표 값은 통째로 가린다
-    n = 1 if m.group(1).lower() == "set-cookie" else -1
-    return m.group(1) + ":" + _COOKIE_PAIR.sub(r"\1=[MASKED]", m.group(2), count=max(n, 0))
+def _cookie_pairs(t: str, i: int, first_only: bool):
+    """t[i:] 의 'name=value; name=value' 를 읽어 가릴 값의 (시작, 끝) 목록과 읽은 끝 위치를 돌려준다 — 한 번 훑는다.
+    공백은 이름·'='·';' 앞뒤에 허용, 값은 따옴표(또는 JSON 이스케이프 '\\"') 통째, 아니면 ';'·공백·이스케이프 줄바꿈·'\\"' 앞까지
+    (5차 리뷰 R5-S2: 'a=1 ; b=…'·'sid=abc\\def; tok=…'·'a=\\"q\\"; tok=…')."""
+    n, spans = len(t), []
+    def skip(j):
+        while j < n and t[j] in " \t":
+            j += 1
+        return j
+    while True:
+        j = skip(i)
+        k = j
+        while k < n and k - j <= COOKIE_NAME_MAX and t[k] not in "=; \t\r\n\\":
+            k += 1
+        if k - j > COOKIE_NAME_MAX:   # 이름이 아니다 — 'cookie:' 반복 같은 입력에서 길게 훑지 않는다 (R5-S1)
+            return spans, i
+        k = skip(k)
+        if k >= n or t[k] != "=":
+            return spans, i
+        v = skip(k + 1)
+        if t.startswith('"', v) or t.startswith('\\"', v):
+            q = '"' if t[v] == '"' else '\\"'
+            e = t.find(q, v + len(q))
+            e = n if e < 0 else e + len(q)
+        else:
+            e = v
+            while e < n and t[e] not in "; \t\r\n" and not (t[e] == "\\" and t[e + 1:e + 2] in ("r", "n", '"')):
+                e += 1
+        spans.append((v, e))
+        i = skip(e)
+        if first_only or i >= n or t[i] != ";":
+            return spans, i
+        i += 1
+
+
+def _mask_cookies(t: str) -> str:
+    """Cookie 는 모든 쌍, Set-Cookie 는 첫 쌍(뒤는 Path=/ 같은 속성)의 값을 가린다. 쌍 문법이 끝나면 멈춰 줄 나머지를 남긴다."""
+    out, last, pos = [], 0, 0
+    while True:
+        m = _COOKIE_HDR.search(t, pos)
+        if not m:
+            break
+        spans, pos = _cookie_pairs(t, m.end(), m.group(1).lower() == "set-cookie")
+        pos = max(pos, m.end())
+        for v, e in spans:
+            out.append(t[last:v] + "[MASKED]")
+            last = e
+    out.append(t[last:])
+    return "".join(out)
 
 
 def redact_text(text: str) -> str:
     """로그·근거 같은 자유 텍스트 안의 URL 값과 쿠키 값을 가린다 (JSON 이스케이프 '\\/' 도 풀어서 본다)."""
     t = _JSON_U.sub(lambda m: chr(int(m.group(1), 16)), str(text).replace("\\/", "/"))
-    t = _TOKEN.sub(lambda m: _redact_token(m.group(0)), t)
-    return _COOKIE_HDR.sub(_mask_cookie, t)
+    # 쿠키를 먼저 가린다 — URL 가림이 먼저 'a=1;tok=' 를 바꾸면 따옴표 값이 쌍 문법에서 빠진다 (5차 리뷰 R5-S2)
+    t = _mask_cookies(t)
+    return _TOKEN.sub(lambda m: _redact_token(m.group(0)), t)
 
 
 # ---------------------------------------------------------------------------
