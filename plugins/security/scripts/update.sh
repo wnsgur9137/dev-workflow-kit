@@ -3,7 +3,7 @@
 # Claude 는 이 스크립트를 실행할 권한이 없다. 사용자가 터미널에서 직접 실행한다.
 #
 # 사용: update.sh [--images] [--rules] [--osv]   (인자가 없으면 전부)
-#   --images  images.lock 의 이미지를 digest 그대로 pull
+#   --images  images.lock 의 이미지를 digest 그대로 pull 하고, 로컬 빌드 이미지(egress-proxy)를 그 베이스로 빌드
 #   --rules   rules.lock 의 규칙 저장소를 고정 커밋으로 받아 $DATA/data/<name>/ 에 설치
 #   --osv     OSV 오프라인 DB 를 받아 $DATA/data/osv/ 에 설치 (주 1회 권장)
 #
@@ -102,6 +102,65 @@ update_images() {
 }
 
 # ---------------------------------------------------------------------------
+# 로컬 빌드 이미지 (이슈 #35) — 베이스는 update_images 가 digest 로 받아 둔다
+# ---------------------------------------------------------------------------
+build_images() {
+  local entry name base base_ref input id tag rec
+  for entry in $SEC_BUILT_IMAGES; do
+    name=${entry%%:*} base=${entry#*:}
+    base_ref=$(sec_image_ref "$base") || {
+      sec_err "images.lock 에 $name 의 베이스($base)가 없습니다."
+      failed=1
+      continue
+    }
+    if ! docker image inspect "$base_ref" >/dev/null 2>&1; then
+      sec_err "$name 의 베이스 이미지가 없어 빌드하지 않습니다: $base_ref"
+      failed=1
+      continue
+    fi
+    input=$(sec_build_input "$name") || {
+      sec_err "$name 의 빌드 입력을 계산하지 못했습니다 ($SEC_PLUGIN/docker/$name/Dockerfile 확인)."
+      failed=1
+      continue
+    }
+    if id=$(sec_built_id "$name") && docker image inspect "$id" >/dev/null 2>&1; then
+      sec_log "이미지 있음: $name (로컬 빌드 ${id:7:12})"
+      continue
+    fi
+    tag="dwk-security/$name:${input:0:12}"
+    sec_log "이미지 빌드 중: $name ($base_ref 기반)"
+    # 빌드는 패키지를 받으러 네트워크를 쓴다 — apk 가 베이스의 Alpine 서명 키로 서명을 확인한다
+    if ! docker build -q --build-arg "BASE=$base_ref" --label "dwk.security.build-input=$input" \
+      -t "$tag" "$SEC_PLUGIN/docker/$name" >/dev/null 2>"$TMP_ROOT/build-$name.log"; then
+      sec_err "빌드 실패: $name — $(tail -n 3 "$TMP_ROOT/build-$name.log" | tr '\n' ' ')"
+      sec_log "  패키지 버전을 찾지 못했다면 Alpine 저장소의 리비전이 바뀐 것입니다 — 관리자가 Dockerfile 의 버전을 올려야 합니다."
+      failed=1
+      continue
+    fi
+    # 빌드 결과는 태그가 아니라 이미지 ID 로 기록하고 쓴다 — 같은 태그를 다른 빌드가 덮어써도 스캔이 그 이미지를 쓰지 않는다
+    id=$(docker image inspect --format '{{.Id}}' "$tag" 2>/dev/null)
+    case "$id" in sha256:*) ;; *)
+      sec_err "빌드한 이미지의 ID 를 읽지 못했습니다: $tag"
+      failed=1
+      continue
+      ;;
+    esac
+    # (build -q 의 출력은 이미지 저장소 종류(containerd 등)에 따라 형식이 달라 비교하지 않는다 — 라벨의 입력 해시로 확인한다)
+    if [ "$(docker image inspect --format '{{index .Config.Labels "dwk.security.build-input"}}' "$id" 2>/dev/null)" != "$input" ]; then
+      sec_err "빌드한 이미지($tag)가 이번 빌드 결과와 다릅니다 — 중단합니다."
+      exit 1
+    fi
+    rec=$(sec_built_record "$name")
+    if ! { mkdir -p "${rec%/*}" && printf '%s %s\n' "$input" "$id" >"$rec.tmp" && mv "$rec.tmp" "$rec"; }; then
+      sec_err "빌드 기록을 쓰지 못했습니다: $rec"
+      failed=1
+      continue
+    fi
+    sec_log "  완료: ${id:7:12} ($(docker image inspect --format '{{.Size}}' "$id" | awk '{ printf "%.0fMB", $1/1024/1024 }'))"
+  done
+}
+
+# ---------------------------------------------------------------------------
 # 규칙 (GitHub 커밋 tarball → 경로 필터 → 규칙 YAML 만 설치)
 # ---------------------------------------------------------------------------
 update_rules() {
@@ -196,7 +255,10 @@ update_osv() {
   sec_log "  설치: $SEC_DATA/data/osv ($(du -sh "$SEC_DATA/data/osv" | cut -f1), $(find "$SEC_DATA/data/osv" -name all.zip | wc -l | tr -d ' ')개 생태계)"
 }
 
-[ $DO_IMAGES -eq 1 ] && update_images
+if [ $DO_IMAGES -eq 1 ]; then
+  update_images
+  build_images
+fi
 [ $DO_RULES -eq 1 ] && update_rules
 [ $DO_OSV -eq 1 ] && update_osv
 
