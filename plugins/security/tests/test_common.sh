@@ -458,10 +458,48 @@ test_new_run_removes_reports_past_retention() {
 test_new_run_continues_when_cleanup_fails() {
   load_common
   sec_init_dirs
-  # 정리 스크립트가 실패해도 스캔 폴더는 만든다 (경고만)
-  SEC_PLUGIN="$SEC_TMP/broken" sec_cleanup_reports 2>"$SEC_TMP/err"
-  assert_contains "$(cat "$SEC_TMP/err")" "오래된 리포트를 정리하지 못했습니다"
-  sec_new_run code 2>/dev/null || fail "정리 실패로 스캔이 멈춤"
+  # 정리 자체가 실패해도(여기서는 python3 가 실패) sec_new_run 은 실행 폴더를 만들고 성공한다 — 경고만 (PR #38 리뷰 W3)
+  mkdir -p "$SEC_TMP/fakepy"
+  printf '#!/bin/sh\necho boom >&2\nexit 1\n' >"$SEC_TMP/fakepy/python3"
+  chmod +x "$SEC_TMP/fakepy/python3"
+  PATH="$SEC_TMP/fakepy:$PATH" sec_new_run code 2>"$SEC_TMP/err" || fail "정리 실패로 스캔이 멈춤"
+  [ -d "$SEC_RUN_DIR/raw" ] || fail "실행 폴더가 없음"
+  assert_contains "$(cat "$SEC_TMP/err")" "리포트 정리: boom"
+  assert_contains "$(cat "$SEC_TMP/err")" "오래된 리포트를 다 정리하지 못했습니다"
+}
+
+# 리뷰 W1: 일부만 실패하면 실패한 run 과 원인을 보이고, 나머지는 지우고 그 개수와 이름(run.log)을 남긴다
+test_new_run_reports_partial_cleanup_failure_precisely() {
+  load_common
+  sec_init_dirs
+  local bad good
+  bad=$(_run_id_days_ago 50 code)
+  good=$(_run_id_days_ago 60 web)
+  mkdir -p "$SEC_DATA/reports/$bad/raw/sub" "$SEC_DATA/reports/$good/raw"
+  touch "$SEC_DATA/reports/$bad/raw/sub/f"
+  chmod 500 "$SEC_DATA/reports/$bad/raw/sub"
+  sec_new_run code 2>"$SEC_TMP/err" || fail "sec_new_run 실패"
+  chmod 700 "$SEC_DATA/reports/$bad/raw/sub"
+  assert_contains "$(cat "$SEC_TMP/err")" "리포트 정리: 지우지 못했습니다: $bad"
+  assert_contains "$(cat "$SEC_TMP/err")" "1개를 지웠습니다"
+  [ ! -e "$SEC_DATA/reports/$good" ] || fail "다른 만료 리포트를 지우지 않음"
+  assert_contains "$(cat "$SEC_LOG_FILE")" "보관 기간이 지나 지운 리포트: $good"
+  assert_not_contains "$(cat "$SEC_LOG_FILE")" "$bad"
+}
+
+# 리뷰 W4: reports 가 링크면(외장 디스크 등) 스캔이 쓰는 그 실제 폴더를 정리한다
+test_new_run_cleans_linked_reports_folder() {
+  load_common
+  sec_init_dirs
+  local real="$SEC_TMP/ext-reports" old
+  old=$(_run_id_days_ago 45 app)
+  mkdir -p "$real/$old/raw"
+  rmdir "$SEC_DATA/reports"
+  ln -s "$real" "$SEC_DATA/reports"
+  sec_new_run code 2>"$SEC_TMP/err" || fail "sec_new_run 실패"
+  [ ! -e "$real/$old" ] || fail "링크된 리포트 폴더를 정리하지 않음"
+  [ -d "$real/$SEC_RUN_ID" ] || fail "새 실행 폴더가 링크 대상에 없음"
+  assert_not_contains "$(cat "$SEC_TMP/err")" "경고"
 }
 
 test_cleanup_script_dry_run_days_and_bad_args() {
@@ -472,14 +510,36 @@ test_cleanup_script_dry_run_days_and_bad_args() {
   b=$(_run_id_days_ago 40 app)
   mkdir -p "$SEC_DATA/reports/$a" "$SEC_DATA/reports/$b"
   assert_status 0 "$PLUGIN_DIR/scripts/cleanup.sh" --dry-run
-  assert_contains "$OUT" "지울 대상: 1개"
+  assert_contains "$OUT" "지울 대상: 1개 — 30일보다 오래됨"
   assert_contains "$OUT" "$b"
   [ -d "$SEC_DATA/reports/$b" ] || fail "--dry-run 이 지움"
+  # 자동 정리와 같은 보관 기간 설정(환경변수)을 따른다 (리뷰 W5·S5)
+  DWK_SECURITY_RETENTION_DAYS=60 assert_status 0 "$PLUGIN_DIR/scripts/cleanup.sh" --dry-run
+  assert_contains "$OUT" "60일보다 오래된 리포트가 없습니다"
   assert_status 0 "$PLUGIN_DIR/scripts/cleanup.sh" --days 7
-  assert_contains "$OUT" "지움: 2개"
+  assert_contains "$OUT" "지움: 2개 — 7일보다 오래됨"
   if [ -e "$SEC_DATA/reports/$a" ] || [ -e "$SEC_DATA/reports/$b" ]; then fail "--days 7 로 지우지 않음"; fi
   assert_status 0 "$PLUGIN_DIR/scripts/cleanup.sh"
-  assert_contains "$OUT" "보관 기간이 지난 리포트가 없습니다"
+  assert_contains "$OUT" "30일보다 오래된 리포트가 없습니다"
+  # 인자 오류는 '없습니다'를 덧붙이지 않는다 (리뷰 S4)
   assert_status 2 "$PLUGIN_DIR/scripts/cleanup.sh" --days 0
+  assert_not_contains "$OUT" "없습니다"
   assert_status 2 "$PLUGIN_DIR/scripts/cleanup.sh" --all
+  assert_status 2 "$PLUGIN_DIR/scripts/cleanup.sh" extra
+  assert_not_contains "$OUT" "없습니다"
+}
+
+test_cleanup_script_partial_failure_is_an_error() {
+  load_common
+  sec_init_dirs
+  local bad
+  bad=$(_run_id_days_ago 50 code)
+  mkdir -p "$SEC_DATA/reports/$bad/raw/sub"
+  touch "$SEC_DATA/reports/$bad/raw/sub/f"
+  chmod 500 "$SEC_DATA/reports/$bad/raw/sub"
+  assert_status 1 "$PLUGIN_DIR/scripts/cleanup.sh"
+  chmod 700 "$SEC_DATA/reports/$bad/raw/sub"
+  assert_contains "$OUT" "지우지 못했습니다: $bad"
+  assert_contains "$OUT" "일부 리포트를 지우지 못했습니다"
+  assert_not_contains "$OUT" "없습니다"
 }
