@@ -76,14 +76,49 @@ test_d7_invisible_mount_stops_before_scanning() {
 }
 
 # 이슈 #43: 대상은 보이는데 툴킷 데이터·플러그인 폴더가 안 보이면(mounts 에 대상만 적어 홈 공유가 빠짐) 스캔 전에 멈춘다
+no_tool_ran() {
+  if grep -qE '^docker run .*(semgrep scan|osv-scanner scan|gitleaks (git|dir))' "$FAKE_LOG"; then fail "도구를 실행함"; fi
+}
+
 test_d7_invisible_data_folder_stops_before_scanning() {
   setup_fake
   fake_data
-  export FAKE_RUN_OUTPUT="a.py" FAKE_RUN_FAIL_MATCH=":/d:ro" FAKE_RUN_FAIL_RC=0
+  export FAKE_RUN_OUTPUT="a.py" FAKE_DATA_PROBE=data-missing
   assert_status 1 "$SCAN" "$HOME/proj"
-  assert_contains "$OUT" "[D7] 컨테이너에서 툴킷 데이터·플러그인 폴더가 보이지 않습니다"
+  assert_contains "$OUT" "[D7] 컨테이너에서 툴킷 데이터 폴더(규칙·OSV DB·리포트)가 보이지 않습니다"
   assert_contains "$OUT" "- location: ~"
-  if grep -qE '^docker run .*(semgrep scan|osv-scanner scan|gitleaks (git|dir))' "$FAKE_LOG"; then fail "데이터 폴더가 안 보이는데 도구를 실행함"; fi
+  assert_contains "$OUT" "writable: true"
+  no_tool_ran
+  # 확인 컨테이너도 같은 하드닝·읽기 전용 마운트 (PR #49 리뷰 S3a)
+  local probe
+  probe=$(grep ':/p:ro' "$FAKE_LOG")
+  assert_contains "$probe" "--network none"
+  assert_contains "$probe" "--read-only"
+  assert_contains "$probe" ":/d:ro"
+  assert_contains "$probe" "/p/scripts"
+  # 멈춰도 빈 실행 폴더가 남지 않는다 (S2)
+  [ -z "$(ls -A "$DWK_SECURITY_DATA_DIR/reports")" ] || fail "실행 폴더가 남음: $(ls "$DWK_SECURITY_DATA_DIR/reports")"
+}
+
+test_d7_invisible_plugin_folder_names_only_plugin() {
+  setup_fake
+  fake_data
+  export FAKE_RUN_OUTPUT="a.py" FAKE_DATA_PROBE=plugin-missing
+  assert_status 1 "$SCAN" "$HOME/proj"
+  assert_contains "$OUT" "[D7] 컨테이너에서 플러그인 폴더가 보이지 않습니다"
+  assert_not_contains "$OUT" "툴킷 데이터 폴더"
+  no_tool_ran
+}
+
+# 확인 컨테이너 자체가 실패하면(데몬·이미지 오류) 공유 문제로 안내하지 않는다 (PR #49 리뷰 W1)
+test_d7_data_probe_container_failure_is_not_reported_as_sharing() {
+  setup_fake
+  fake_data
+  export FAKE_RUN_OUTPUT="a.py" FAKE_RUN_FAIL_MATCH=":/p:ro" FAKE_RUN_FAIL_RC=125
+  assert_status 1 "$SCAN" "$HOME/proj"
+  assert_contains "$OUT" "확인용 컨테이너를 실행하지 못했습니다 (종료코드 125)"
+  assert_not_contains "$OUT" "공유하지 않습니다"
+  no_tool_ran
 }
 
 test_rules_mismatch_with_lock_is_warned() {

@@ -226,6 +226,21 @@ test_preflight_d3_compose_v1_or_missing() {
   FAKE_COMPOSE=v5.1.0 assert_status 0 sec_preflight code
 }
 
+# D3 안내는 이 기기의 Homebrew 경로를 보여 주고, brew 를 못 쓰면 두 경로를 함께 안내한다 (이슈 #43, PR #49 리뷰 S3c)
+test_preflight_d3_uses_brew_prefix() {
+  load_common
+  use_fake_docker
+  # shellcheck disable=SC2016  # 가짜 brew 스크립트 본문 — 여기서 펼치지 않는다
+  printf '#!/bin/sh\n[ "$1" = --prefix ] && [ -z "${FAKE_BREW_FAIL:-}" ] && echo /usr/local && exit 0\nexit 1\n' >"$SEC_TMP/bin/brew"
+  chmod +x "$SEC_TMP/bin/brew"
+  FAKE_COMPOSE="" assert_status 1 sec_preflight code
+  assert_contains "$OUT" '"/usr/local/lib/docker/cli-plugins"'
+  assert_not_contains "$OUT" "Apple Silicon"
+  FAKE_BREW_FAIL=1 FAKE_COMPOSE="" assert_status 1 sec_preflight code
+  assert_contains "$OUT" '"/opt/homebrew/lib/docker/cli-plugins"'
+  assert_contains "$OUT" "Intel Mac /usr/local"
+}
+
 test_preflight_d4_podman_rejected() {
   load_common
   use_fake_docker

@@ -14,6 +14,7 @@
 #   FAKE_RUN_FAIL_MATCH=<문자열> FAKE_RUN_FAIL_RC=<n>
 #                            인자에 문자열이 들어간 docker run 만 종료코드 n 으로 실패 (예: OOM 137)
 #   FAKE_RUN_REPORT_OUTPUT=<문자열>  --report-path 가 있는 docker run(Gitleaks)만 이 내용을 출력
+#   FAKE_DATA_PROBE=<표지>    scan-code 의 데이터·플러그인 폴더 확인(-v …:/p:ro)이 낼 표지 (기본 ok, FAKE_RUN_OUTPUT 이 있을 때)
 #   compose (scan-app): FAKE_COMPOSE_UP_RC=<n> up 종료코드 · FAKE_COMPOSE_EXEC_OUTPUT exec 출력(기본 isolated)
 #                       FAKE_COMPOSE_RUN_FILE=<파일> run 의 stdout · FAKE_COMPOSE_RUN_RC=<n> run 종료코드
 #                       run·logs 는 stderr 에 실제 MobSF 처럼 API 키를 찍는다 (마스킹 확인용)
@@ -126,6 +127,13 @@ case "$1" in
         ;;
       esac
     fi
+    case "$*" in *":/p:ro"*)
+      if [ -n "${FAKE_RUN_OUTPUT+x}" ]; then
+        echo "${FAKE_DATA_PROBE:-ok}"
+        exit 0
+      fi
+      ;;
+    esac
     case "$*" in *--report-path*)
       if [ -n "${FAKE_RUN_REPORT_OUTPUT+x}" ]; then
         printf '%s' "$FAKE_RUN_REPORT_OUTPUT"

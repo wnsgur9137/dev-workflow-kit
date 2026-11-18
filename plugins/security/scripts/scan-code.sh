@@ -117,17 +117,43 @@ if [ -n "$(ls -A "$TARGET" 2>/dev/null)" ]; then
   fi
 fi
 
+# [D7] 데이터·플러그인 폴더 가시성 — 규칙·OSV DB·리포트(/out)·플러그인 설정을 마운트한다. 런타임이 공유하지 않으면
+#      컨테이너에 빈 폴더로 보여 도구 실패나 빈 결과가 난다 (이슈 #43 — 대상 폴더만 mounts 에 적어 홈 공유가 빠진 경우).
+#      실행 폴더를 만들기 전에 본다 — 멈출 때 빈 실행 폴더가 남지 않게 reports/ 만 먼저 만든다 (PR #49 리뷰 S2)
+sec_init_dirs || sec_die "툴킷 데이터 폴더를 만들 수 없습니다: $SEC_DATA"
+probe_err=$(mktemp "${TMPDIR:-/tmp}/sec-d7.XXXXXX") || sec_die "임시 파일을 만들 수 없습니다."
+trap 'rm -f "$probe_err"' EXIT
+# 판정 셸은 늘 표지를 내고 0 으로 끝난다 — 종료코드가 0 이 아니면 컨테이너 자체의 실패다 (PR #49 리뷰 W1)
+data_seen=$(docker run "${DOCKER_HARDEN[@]}" --tmpfs /tmp:rw,size=8m -v "$SEC_DATA:/d:ro" -v "$SEC_PLUGIN:/p:ro" \
+  --entrypoint sh "$IMG_GITLEAKS" -c \
+  'if [ ! -d /d/reports ]; then echo data-missing; elif [ ! -d /p/scripts ]; then echo plugin-missing; else echo ok; fi' \
+  2>"$probe_err")
+probe_rc=$?
+probe_msg=$(tail -n 3 "$probe_err" | tr '\n' ' ' | cut -c1-300)
+rm -f "$probe_err"
+trap - EXIT
+case "$probe_rc:$data_seen" in
+  0:ok) ;;
+  0:data-missing)
+    sec_err "[D7] 컨테이너에서 툴킷 데이터 폴더(규칙·OSV DB·리포트)가 보이지 않습니다 — Docker 런타임이 이 경로를 공유하지 않습니다: $SEC_DATA"
+    sec_colima_mounts_hint
+    sec_log "  데이터 폴더는 리포트를 쓰므로 홈 밖에 두었다면 writable: true 로 적으세요."
+    exit 1
+    ;;
+  0:plugin-missing)
+    sec_err "[D7] 컨테이너에서 플러그인 폴더가 보이지 않습니다 — Docker 런타임이 이 경로를 공유하지 않습니다: $SEC_PLUGIN"
+    sec_colima_mounts_hint
+    exit 1
+    ;;
+  *)
+    sec_err "[D7] 데이터 폴더 확인용 컨테이너를 실행하지 못했습니다 (종료코드 $probe_rc): ${probe_msg:-${data_seen:-출력 없음}}"
+    sec_log "  docker info 로 런타임 상태를 확인하고, 이미지가 손상됐으면 update.sh --images 를 다시 실행하세요."
+    exit 1
+    ;;
+esac
+
 sec_new_run code || sec_die "리포트 폴더를 만들 수 없습니다."
 
-# [D7] 데이터·플러그인 폴더 가시성 — 규칙·OSV DB·리포트(/out)·플러그인 설정을 마운트한다. 런타임이 공유하지 않으면
-#      컨테이너에 빈 폴더로 보여 도구 실패나 빈 결과가 난다 (이슈 #43 — 대상 폴더만 mounts 에 적어 홈 공유가 빠진 경우)
-data_seen=$(docker run "${DOCKER_HARDEN[@]}" --tmpfs /tmp:rw,size=8m -v "$SEC_DATA:/d:ro" -v "$SEC_PLUGIN:/p:ro" \
-  --entrypoint sh "$IMG_GITLEAKS" -c '[ -d /d/reports ] && [ -d /p/scripts ] && ls -A /d | head -n 1' 2>/dev/null)
-if [ -z "$data_seen" ]; then
-  sec_err "[D7] 컨테이너에서 툴킷 데이터·플러그인 폴더가 보이지 않습니다 — Docker 런타임이 이 경로를 공유하지 않습니다: $SEC_DATA · $SEC_PLUGIN"
-  sec_colima_mounts_hint
-  exit 1
-fi
 RAW="$SEC_RUN_DIR/raw"
 STATUS="$RAW/status.tsv"
 : >"$STATUS"

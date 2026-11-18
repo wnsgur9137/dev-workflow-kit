@@ -88,6 +88,7 @@ test_app_d7_invisible_artifact_stops_before_mobsf() {
   : >"$FAKE_LOG"
   FAKE_RUN_OUTPUT="12" assert_status 1 "$SCAN_APP" "$HOME/apps/app.apk"
   assert_contains "$OUT" "[D7]"
+  assert_contains "$OUT" "- location: ~"   # mounts 를 적으면 홈 공유가 빠진다는 안내 (이슈 #43)
 }
 
 # --- 가짜 docker 로 MobSF 실패·정리 경로 (PR #32 리뷰 S7) ---------------------------------------------
