@@ -515,7 +515,9 @@ test_new_run_reports_partial_cleanup_failure_precisely() {
   assert_contains "$(cat "$SEC_TMP/err")" "1개를 지웠습니다"
   [ ! -e "$SEC_DATA/reports/$good" ] || fail "다른 만료 리포트를 지우지 않음"
   assert_contains "$(cat "$SEC_LOG_FILE")" "보관 기간이 지나 지운 리포트: $good"
-  assert_not_contains "$(cat "$SEC_LOG_FILE")" "$bad"
+  # 지우지 못한 리포트도 run.log 에 남는다 — 나중에 추적할 수 있게 (이슈 #39)
+  assert_contains "$(cat "$SEC_LOG_FILE")" "리포트 정리 경고: 지우지 못했습니다: $bad"
+  assert_not_contains "$(cat "$SEC_LOG_FILE")" "보관 기간이 지나 지운 리포트: $bad"
 }
 
 # 리뷰 W4: reports 가 링크면(외장 디스크 등) 스캔이 쓰는 그 실제 폴더를 정리한다
@@ -572,6 +574,6 @@ test_cleanup_script_partial_failure_is_an_error() {
   assert_status 1 "$PLUGIN_DIR/scripts/cleanup.sh"
   chmod 700 "$SEC_DATA/reports/$bad/raw/sub"
   assert_contains "$OUT" "지우지 못했습니다: $bad"
-  assert_contains "$OUT" "일부 리포트를 지우지 못했습니다"
+  assert_contains "$OUT" "정리하지 못한 항목이 있습니다"
   assert_not_contains "$OUT" "없습니다"
 }

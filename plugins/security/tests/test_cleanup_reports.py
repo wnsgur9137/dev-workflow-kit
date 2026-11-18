@@ -27,8 +27,11 @@ def run(argv, now=NOW, environ=None):
     out, err = io.StringIO(), io.StringIO()
     with redirect_stdout(out), redirect_stderr(err):
         rc = c.main(argv, now, environ if environ is not None else {})
-    lines = out.getvalue().split()
-    return rc, lines[1:] if lines and lines[0].startswith("days=") else lines, lines[0] if lines else "", err.getvalue()
+    lines = out.getvalue().splitlines()
+    names = [x for x in lines[1:] if not x.startswith("!")]
+    # 경고·실패는 stdout 의 '!warn '·'!fail ' 줄과 stderr 를 합쳐 돌려준다 (이슈 #39)
+    msgs = "\n".join(x for x in lines if x.startswith("!")) + err.getvalue()
+    return rc, names, lines[0] if lines else "", msgs
 
 
 class CleanupTest(unittest.TestCase):
@@ -97,6 +100,35 @@ class CleanupTest(unittest.TestCase):
         self.assertIn(f"지우지 못했습니다: {os.path.basename(bad)}", err)
         self.assertFalse(os.path.exists(good))
 
+    def test_pre311_path_removes_relative_to_the_opened_folder(self):
+        # 이슈 #39 (R2-S2): 3.8~3.10 경로 — 연 폴더(fd)로 들어가 상대 경로로 지우고, 끝나면 원래 작업 폴더로 돌아온다
+        from unittest import mock
+        old = self.mk(rid(45))
+        cwd = os.getcwd()
+        with mock.patch.object(c.sys, "version_info", (3, 9, 0)):
+            self.assertEqual(run([self.d])[:2], (0, [os.path.basename(old)]))
+        self.assertFalse(os.path.exists(old))
+        self.assertEqual(os.getcwd(), cwd)
+
+    def test_pre311_path_survives_a_swapped_root(self):
+        # 이슈 #39: 고른 뒤 reports 경로가 다른 폴더로 바뀌어도(이름 바꾸기 + 같은 이름의 미끼) 연 폴더 안의 것만 지운다
+        from unittest import mock
+        name = rid(45)
+        self.mk(name)
+        moved = self.d + "-moved"
+        self.addCleanup(__import__("shutil").rmtree, moved, True)
+        orig = c.expired
+
+        def swap(*a, **k):
+            res = orig(*a, **k)
+            os.rename(self.d, moved)
+            os.makedirs(os.path.join(self.d, name, "raw"))      # 같은 이름의 미끼 — 지워지면 안 된다
+            return res
+        with mock.patch.object(c.sys, "version_info", (3, 9, 0)), mock.patch.object(c, "expired", swap):
+            run([self.d])
+        self.assertTrue(os.path.isdir(os.path.join(self.d, name)), "바뀐 경로의 미끼를 지움")
+        self.assertFalse(os.path.exists(os.path.join(moved, name)))
+
     def test_concurrent_cleanups_do_not_report_failure(self):
         # 동시 스캔 두 개가 같은 run 을 함께 지워도 이미 사라진 항목은 성공 (리뷰 W2)
         for i in range(30):
@@ -141,9 +173,11 @@ class CleanupTest(unittest.TestCase):
 
     def test_future_names_warn_and_missing_root_is_fine(self):
         self.mk(rid(-5))
+        self.mk(rid(-9, kind="web"))
         rc, names, _, err = run([self.d])
         self.assertEqual((rc, names), (0, []))
-        self.assertIn("미래인 리포트", err)                              # 리뷰 S1
+        self.assertEqual(err.count("미래인 리포트"), 1)                  # 리뷰 S1 — 한 줄로 묶음 (이슈 #39)
+        self.assertIn("미래인 리포트 2개", err)
         self.assertEqual(run([os.path.join(self.d, "none")])[0], 0)
         f = os.path.join(self.d, "file-root")
         open(f, "w").close()
