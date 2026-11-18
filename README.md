@@ -119,7 +119,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 
 ## security 플러그인
 
-> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성), `/security:scan-app`(APK·AAB·IPA 정적 분석), `/security:scan-web`(허용목록 웹 대상의 수동 점검)을 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다. 남은 일은 사람이 수행하는 LuLu 실측입니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
+> ✅ **사용 가능** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성), `/security:scan-app`(APK·AAB·IPA 정적 분석), `/security:scan-web`(허용목록 웹 대상의 수동 점검)을 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다. 남은 일은 사람이 수행하는 LuLu 실측입니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
 
 개인 앱·웹 프로젝트를 **Claude Code 안에서, 외부 전송 없이** 점검합니다. 모든 도구는 네트워크가 차단된 컨테이너에서 실행되고, Claude는 정규화된 요약 리포트만 읽습니다. 설계: [보안 툴킷](docs/security/보안%20툴킷.md)
 
@@ -254,17 +254,17 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 |---|---|---|
 | `[D2] Docker 엔진에 연결할 수 없습니다 (꺼져 있음)` | 런타임이 꺼져 있거나, 현재 docker 컨텍스트가 지운·꺼진 런타임을 가리킴 | `colima start`(Docker Desktop 이면 앱 실행). 컨텍스트는 `docker context ls` 로 확인 |
 | `[D3] docker compose v2 이상이 필요합니다` | `brew install colima docker` 만 하고 compose 를 빠뜨림 | `brew install docker-compose` 후 메시지가 안내하는 `cliPluginsExtraDirs` 설정 |
-| `[D5]` 메모리 경고 | VM 메모리가 권장치보다 작음 (scan-code 4·scan-web 6·scan-app 8 GiB) | 경고에 나온 값으로 `colima stop && colima start --memory <GiB>` (Docker Desktop: Settings → Resources → Memory). 경고만이라 진행은 됩니다 |
+| `[D5]` 메모리 경고 | VM 메모리가 권장치보다 작음 (scan-code 4·scan-web 6·scan-app 8 GB) | 경고에 나온 값으로 `colima stop && colima start --memory <GB>` (Docker Desktop: Settings → Resources → Memory). 경고만이라 진행은 됩니다 |
 | `[D6] 필요한 이미지가 준비되지 않았습니다` | 처음 설치, 플러그인 업데이트로 고정 버전·egress-proxy 가 바뀜, 런타임을 바꿈(Colima ↔ Docker Desktop), `docker image prune -a`·`colima delete` | 터미널에서 `update.sh --images` |
 | `[D6] Semgrep 규칙 또는 OSV 오프라인 DB 가 없습니다` (scan-code) | 규칙·OSV DB 를 아직 받지 않음 | 메시지에 찍힌 대로 인자 없이 `update.sh` |
-| `[D7]` 컨테이너에서 대상 폴더가 보이지 않음 | 런타임이 그 폴더를 공유하지 않음 (Colima 기본값은 홈 아래만) | Colima: `colima stop` 후 `colima start --edit` 로 `mounts` 에 그 폴더를 더함. Docker Desktop: Settings → Resources → File sharing. 공유는 필요한 폴더로만 좁히세요(`/`·`/Volumes` 전체는 피함). 툴킷은 읽기 전용으로 마운트합니다 |
-| `[D7] … 확인용 컨테이너를 실행하지 못했습니다` | 공유 경로가 아니라 컨테이너 실행 자체가 실패 | 메시지의 종료코드·출력을 확인하고 런타임을 다시 시작 |
-| 대상 경로 거부 | 홈 전체·그 상위, `~/.ssh` 같은 자격증명 폴더, 시스템 폴더, `:`·`,` 가 든 경로 | 점검할 저장소 폴더를 정확히 지정 |
-| scan-app 산출물 거부 | APK·AAB·IPA 가 아니거나 ZIP 이 아님, 크기 상한 초과 | 빌드 산출물을 직접 지정 |
+| `[D7]` 컨테이너에서 대상 폴더가 보이지 않음 | 런타임이 그 폴더를 공유하지 않음 (Colima 기본값은 홈 아래만) | Colima: `colima stop` 후 `colima start --edit` 로 `mounts` 를 고칩니다. **`mounts` 가 비어 있을 때만 홈이 자동 공유되고, 항목을 적으면 적은 것만 공유됩니다** — `- location: ~` (`writable: true`)를 함께 적고 그 아래에 대상 폴더(`writable: false` 로 충분)를 더하세요. 빠뜨리면 플러그인·데이터 폴더가 안 보여 다른 D7 이 납니다. 확인: `colima ssh -- ls <경로>`. Docker Desktop: Settings → Resources → File sharing. 공유는 필요한 폴더로만 좁히세요(`/`·`/Volumes` 전체는 피함). 툴킷은 읽기 전용으로 마운트합니다 |
+| `[D7] … 확인용 컨테이너를 실행하지 못했습니다` | 공유 경로가 아니라 컨테이너 실행 자체가 실패 | 메시지의 종료코드·출력을 확인하고 `docker info` 로 런타임 상태를 봅니다. 이미지가 손상됐으면 `update.sh --images` 를 다시 실행 |
+| 대상 경로 거부 | 홈 전체·그 상위, 최상위 폴더 자체(`/tmp`·`/Volumes`), 시스템 공용 폴더(`/private/tmp` 등), 자격증명 폴더(`~/.ssh`·`~/.aws`·`~/.config`·`~/.claude`·`~/.gradle`·`~/.android` 등 — 그 아래 프로젝트도), 툴킷 데이터·설정 폴더, `:`·`,` 가 든 경로 | 메시지에 거부 이유가 나옵니다. 점검할 저장소 폴더를 정확히 지정 |
+| scan-app 산출물 거부 | APK·AAB·IPA 가 아니거나 ZIP 이 아님, 500MB 초과, 항목 20만 개 초과, 압축 해제 합계 4GB 초과 | 빌드 산출물을 직접 지정 |
 | `update.sh` 가 `credsStore` 오류로 멈춤 | Docker Desktop 을 지운 뒤 `~/.docker/config.json` 에 `"credsStore": "desktop"` 이 남음 (그 helper 가 없어 이미 깨진 설정) | 그 줄을 지우세요(앞 줄 끝의 쉼표도 확인 — JSON 이 깨지면 docker 전체가 실패). 나중에 `docker login` 을 할 거라면 `brew install docker-credential-helper` 후 `"credsStore": "osxkeychain"` 으로 바꾸는 편이 안전합니다(지우면 자격증명이 `config.json` 에 평문으로 저장됨) |
 | `update.sh` 의 egress-proxy 빌드 실패 (`unable to select packages`) | Alpine 저장소의 tinyproxy 리비전이 바뀜 | 그동안 scan-web 은 쓸 수 없습니다(scan-code·scan-app 은 영향 없음). 관리자가 Dockerfile 버전을 올린 플러그인 업데이트를 기다리거나 이슈로 알려 주세요 |
 | arm64 에뮬레이션 경고 | 그 이미지에 Apple Silicon 용 빌드가 없음 (지금 고정된 이미지는 모두 arm64 를 지원) | 느리지만 동작합니다 |
-| scan-web `허용목록에 없는 대상입니다` | `~/.config/dev-workflow-kit/security/targets.allowlist` 에 그 출처(scheme·host·port)가 없음 | 허용목록에 직접 추가 (Claude 는 이 파일을 고칠 수 없게 권한에서 막습니다) |
+| scan-web `허용목록에 없는 대상입니다` | `~/.config/dev-workflow-kit/security/targets.allowlist` 에 그 출처(scheme·host·port)가 없음 | 메시지에 나온 허용목록 파일에 직접 추가 ([권한 설정](#권한-설정)의 deny 규칙을 병합했다면 Claude 는 이 파일을 고칠 수 없습니다) |
 | scan-web `… 는 컨테이너 자신을 가리킵니다` | 대상이 `localhost`·`127.0.0.1` | 호스트의 개발 서버는 `http://host.docker.internal:<포트>` 로 지정 |
 | scan-web "대상에 접속하지 못했습니다" | 서버가 꺼져 있거나 포트·주소가 허용목록과 다름 | 서버가 떠 있는지, 허용목록의 포트가 맞는지 확인 |
 | scan-web "55초 안에 응답하지 않았습니다" | 개발 서버의 첫 요청 컴파일·콜드 스타트 | 브라우저로 한 번 열어 둔 뒤 다시 실행 |
