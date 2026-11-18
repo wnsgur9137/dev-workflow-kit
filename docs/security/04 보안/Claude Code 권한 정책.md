@@ -22,7 +22,7 @@ updated: 2026-11-09
 |---|---|---|
 | 스캔 스크립트 실행 (Bash) | 스킬 frontmatter `allowed-tools` — `Bash(${CLAUDE_PLUGIN_ROOT}/scripts/scan-code.sh:*)` | 플러그인 스킬은 `allowed-tools`의 **Bash 규칙**에서 `${CLAUDE_PLUGIN_ROOT}`를 치환한다 ([skills 문서](https://code.claude.com/docs/en/skills): "In a plugin skill, Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` … the skill's markdown content, and Bash rules in the `allowed-tools` frontmatter"). 스킬이 실행 중일 때만 적용 |
 | 리포트 열람 (`Read`) | 스킬 `allowed-tools`의 `Read(~/.local/share/…/reports/**)` + 사용자 settings | `Read` 규칙의 `${CLAUDE_PLUGIN_ROOT}` 치환은 문서에 명시 없음 → `~/…`로 적는다. 데이터 폴더를 바꾸면(`DWK_SECURITY_DATA_DIR`) 사용자가 settings에 바뀐 절대 경로 규칙을 추가해야 한다 |
-| deny 목록 (`update.sh`·`.env`·허용목록·플러그인 파일 보호) | **사용자 settings 병합만 가능** | 플러그인은 권한을 스스로 설정할 수 없다. `examples/settings.permissions.json`을 사용자가 `~/.claude/settings.json`에 직접 병합한다. README와 `/security:scan-*` 첫 실행 시 안내 |
+| deny 목록 (`update.sh`·`.env`·허용목록·플러그인 파일·데이터 폴더(`$DATA/data` — 규칙·OSV DB·로컬 빌드 기록) 보호, 이미지 빌드·태그 금지) | **사용자 settings 병합만 가능** | 플러그인은 권한을 스스로 설정할 수 없다. `examples/settings.permissions.json`을 사용자가 `~/.claude/settings.json`에 직접 병합한다. README와 `/security:scan-*` 첫 실행 시 안내 |
 
 아래 예시의 `allow` 중 스캔 스크립트 항목은 스킬 밖에서 스크립트를 직접 실행할 때를 위한 것이다.
 
@@ -42,9 +42,14 @@ updated: 2026-11-09
       "Write(~/.config/dev-workflow-kit/security/targets.allowlist)",
       "Edit(~/.claude/plugins/cache/dev-workflow-kit/**)",
       "Write(~/.claude/plugins/cache/dev-workflow-kit/**)",
+      "Edit(~/.local/share/dev-workflow-kit/security/data/**)",
+      "Write(~/.local/share/dev-workflow-kit/security/data/**)",
       "Bash(*/security/*/scripts/update.sh:*)",
       "Bash(docker run:*)",
-      "Bash(docker compose:*)"
+      "Bash(docker compose:*)",
+      "Bash(docker build:*)",
+      "Bash(docker tag:*)",
+      "Bash(docker image tag:*)"
     ]
   }
 }
@@ -69,6 +74,7 @@ updated: 2026-11-09
 
 ## 한계와 보완
 - Bash 접두사 매칭 deny는 우회 가능(`sh -c` 등)하므로 **보안 경계가 아니라 실수 방지용**이다.
+- `$DATA/data/images/*.built`(로컬 빌드 기록)는 어떤 이미지를 egress-proxy 로 띄울지 정한다. 그래서 쓰기를 막고, 사전 점검(D6)이 기록의 이미지에 지금 빌드 입력 라벨이 붙어 있는지 확인한다. 기록만 바꿔서는 다른 로컬 이미지로 바꿔치기할 수 없고, 같은 라벨의 이미지를 만들려면 `docker build`·`tag` 권한이 필요하다 (PR #37 리뷰 W1)
 - 진짜 경계는 [[네트워크 격리]](스캐너 측)와 권한 프롬프트(Claude 측)다. allow에 없는 명령은 매번 사용자 승인을 받는다.
 - 추가 옵션: Claude Code의 sandbox 기능 → [[미결정 사항]]
 
