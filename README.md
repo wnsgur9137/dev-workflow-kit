@@ -117,7 +117,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 
 ## security 플러그인
 
-> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성), `/security:scan-app`(APK·AAB·IPA 정적 분석), `/security:scan-web`(허용목록 웹 대상의 수동 점검)을 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다. 남은 단계는 P4 마무리(베이스라인 비교·보관 정리 등)입니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
+> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성), `/security:scan-app`(APK·AAB·IPA 정적 분석), `/security:scan-web`(허용목록 웹 대상의 수동 점검)을 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다. 남은 단계는 P4 마무리(베이스라인 비교·실측 등)입니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
 
 개인 앱·웹 프로젝트를 **Claude Code 안에서, 외부 전송 없이** 점검합니다. 모든 도구는 네트워크가 차단된 컨테이너에서 실행되고, Claude는 정규화된 요약 리포트만 읽습니다. 설계: [보안 툴킷](docs/security/보안%20툴킷.md)
 
@@ -207,7 +207,14 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 - 호스트에서 띄운 개발 서버는 `localhost` 대신 `host.docker.internal` 로 지정합니다 (컨테이너 안의 `localhost` 는 컨테이너 자신).
 - 소스맵 공개·API 에러 스택트레이스·로그인 뒤 페이지처럼 baseline 이 확인하지 못하는 항목은 summary 의 수동 체크리스트로 붙습니다.
 
-모든 컨테이너는 `--network none`(MobSF 는 내부 전용 네트워크, ZAP 은 허용목록 프록시만 닿는 내부 네트워크)·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.
+모든 컨테이너는 `--network none`(MobSF 는 내부 전용 네트워크, ZAP 은 허용목록 프록시만 닿는 내부 네트워크)·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다. 리포트는 **30일** 보관합니다. 스캔할 때마다 그보다 오래된 `reports/<run-id>/` 를 지우고, 지운 이름을 새 실행의 `run.log` 에 남깁니다.
+
+> [!WARNING]
+> **0.10.0 으로 올린 뒤 첫 스캔에서 30일 지난 리포트가 바로 지워집니다 (되돌릴 수 없음)**
+> - 먼저 확인: `~/.claude/plugins/cache/dev-workflow-kit/security/<버전>/scripts/cleanup.sh --dry-run`
+> - 가장 안전한 방법: **업그레이드 전에** 남길 리포트를 `reports/` 밖의 다른 폴더로 복사하세요. 폴더 이름을 바꿔도 됩니다(`<run-id>` 형식이 아니면 건드리지 않습니다). `reports` 자체를 링크로 다른 곳에 두었다면 **그 대상 폴더도 같은 규칙으로 정리**되니, 보관용 사본은 링크 대상이 아닌 별도 폴더에 두세요
+> - 보관 기간 늘리기(1~3650일): 스캔은 Claude Code 가 실행하므로 **Claude Code 가 보는 환경**에 넣어야 합니다. 다른 터미널에서 `export` 한 것은 이미 떠 있는 세션에 전달되지 않습니다. `~/.claude/settings.json` 에 `"env": {"DWK_SECURITY_RETENTION_DAYS": "90"}` 을 넣거나, 셸 설정 파일(`~/.zshrc` 등)에 `export DWK_SECURITY_RETENTION_DAYS=90` 을 넣은 뒤 Claude Code 를 다시 시작하세요. 스캔 출력의 "보관 기간(N일)" 으로 적용됐는지 확인할 수 있습니다
+> - 직접 정리: `cleanup.sh [--days N] [--dry-run]`. 나이는 폴더 이름의 시각으로 판정하고, 다른 이름·링크는 건드리지 않습니다. 자동 정리는 `DWK_SECURITY_RETENTION_DAYS` 를 따르므로 `--days` 로 길게 잡아도 다음 스캔에서 그 기간으로 다시 정리됩니다
 
 ### 권한 설정
 

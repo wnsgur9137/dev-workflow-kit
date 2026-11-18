@@ -63,6 +63,29 @@ sec_init_dirs() {
   chmod 700 "$SEC_DATA" "$SEC_DATA/data" "$SEC_DATA/reports" "$SEC_CONF" || return 1
 }
 
+# sec_cleanup_reports — 보관 기간(기본 30일, DWK_SECURITY_RETENTION_DAYS)이 지난 리포트를 지운다
+#   스캔마다 자동, scripts/cleanup.sh 와 같은 규칙(scripts/lib/cleanup_reports.py). 실패해도 스캔은 계속한다 — 경고만 낸다.
+#   지운 run-id 는 SEC_CLEANED 에 남겨 sec_new_run 이 새 run.log 에 적는다 (PR #38 리뷰 N1)
+sec_cleanup_reports() {
+  local out err rc days names n
+  SEC_CLEANED=""
+  err=$(mktemp "${TMPDIR:-/tmp}/dwk-cleanup.XXXXXX") || { sec_warn "오래된 리포트를 정리하지 못했습니다 (임시 파일)"; return 0; }
+  # stdout(지운 이름)과 stderr(실패·경고)를 따로 받는다 — 섞으면 실패 원인 대신 지운 이름이 보인다 (리뷰 W1)
+  out=$(python3 -I "$SEC_PLUGIN/scripts/lib/cleanup_reports.py" "$SEC_DATA/reports" 2>"$err")
+  rc=$?
+  days=$(printf '%s\n' "$out" | sed -n '1s/^days=//p')
+  names=$(printf '%s\n' "$out" | sed '1{/^days=/d;}')
+  n=$(printf '%s' "$names" | grep -c .)
+  SEC_CLEANED=$names
+  [ "$n" -gt 0 ] && sec_log "보관 기간(${days:-?}일)이 지난 리포트 ${n}개를 지웠습니다"
+  if [ "$rc" -ne 0 ] || [ -s "$err" ]; then
+    while IFS= read -r line; do [ -n "$line" ] && sec_warn "리포트 정리: $line"; done <"$err"
+    [ "$rc" -ne 0 ] && sec_warn "오래된 리포트를 다 정리하지 못했습니다 — $SEC_PLUGIN/scripts/cleanup.sh --dry-run 으로 확인하세요"
+  fi
+  rm -f "$err"
+  return 0
+}
+
 # sec_new_run <code|app|web>  → SEC_RUN_ID, SEC_RUN_DIR 설정, raw/ 생성
 sec_new_run() {
   local kind=$1 base n=1
@@ -74,6 +97,7 @@ sec_new_run() {
       ;;
   esac
   sec_init_dirs || return 1
+  sec_cleanup_reports
   base="$(date '+%Y%m%d-%H%M%S')-$kind"
   SEC_RUN_ID=$base
   # mkdir(-p 없이)의 성공 여부로 선점한다 — 동시 실행해도 두 스캔이 같은 폴더를 쓰지 않는다
@@ -88,6 +112,9 @@ sec_new_run() {
   SEC_LOG_FILE="$SEC_RUN_DIR/run.log"
   : >"$SEC_LOG_FILE"
   chmod 600 "$SEC_LOG_FILE"
+  if [ -n "${SEC_CLEANED:-}" ]; then
+    printf '%s\n' "$SEC_CLEANED" | sed 's/^/보관 기간이 지나 지운 리포트: /' >>"$SEC_LOG_FILE"
+  fi
   export SEC_RUN_ID SEC_RUN_DIR
 }
 
