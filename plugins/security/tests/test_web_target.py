@@ -210,6 +210,17 @@ class RedactTest(unittest.TestCase):
             "Location: cb;jsessionid=SEC13": "Location: cb;jsessionid=[MASKED]",
             "cb#access_token=SEC14": "cb#[MASKED]",
             "`http://h/a?code=L2`": "`http://h/a?code=[MASKED]`",
+            # 5차 리뷰 R5-S2: ';'·'=' 앞뒤 공백, '\' 가 든 값, JSON 이스케이프된 따옴표 값, 같은 토큰의 따옴표 값, 접두 붙은 헤더, 빈 이름
+            "Cookie: a=1 ; b=SECRET1": "Cookie: a=[MASKED] ; b=[MASKED]",
+            "Cookie: sid=abc\\def; tok=SECRET2": "Cookie: sid=[MASKED]; tok=[MASKED]",
+            'Cookie: a=\\"q\\"; tok=SECRET41': "Cookie: a=[MASKED]; tok=[MASKED]",
+            'Cookie: a=1;tok="x SECRET40"': "Cookie: a=[MASKED];tok=[MASKED]",
+            "X-Session-Cookie: sid=SECRET3": "X-Session-Cookie: sid=[MASKED]",
+            "Cookie: sid = SECRET14": "Cookie: sid = [MASKED]",
+            "Cookie: =SECRET15; b=SECRET16": "Cookie: =[MASKED]; b=[MASKED]",
+            "xcookie: a=1": "xcookie: a=1",
+            # R5 NITPICK: 제어문자 이스케이프는 풀지 않는다
+            "\\u001b[31m": "\\u001b[31m",
         }
         for src, want in cases.items():
             self.assertEqual(w.redact_text(src), want, src)
@@ -232,13 +243,15 @@ class RedactTest(unittest.TestCase):
     def test_redact_text_is_linear(self):
         # 시작 위치마다 다시 훑는 입력('-/'·'?/')과 인코딩 풀기('%2')를 포함한다 (3차 리뷰 NITPICK)
         import time
-        for pat in ("-/", "/a", "?/", "%2", "//", "%25", "Cookie: a=1;", "cookie:a=;", "\\u002f", "a;=", "a#="):
+        for pat in ("-/", "/a", "?/", "%2", "//", "%25", "Cookie: a=1;", "cookie:a=;", "\\u002f", "a;=", "a#=",
+                    "cookie:", "set-cookie:/", 'cookie:"', "Cookie: " + "a" * 300):   # 이름이 다음 헤더까지 이어지는 경로 (R5-S1)
             def t(n):
                 s = time.perf_counter()
                 w.redact_text(pat * n + " //" + "b" * n)
                 return time.perf_counter() - s
             t(1000)
-            self.assertLess(t(80000), max(t(40000), 0.01) * 6, pat)
+            # 4배 입력에 8배 미만 — 선형이면 약 4배, 이차면 약 16배라 둘을 가른다 (2배·6배 비교는 이차도 통과했다, 5차 리뷰 R5-S1)
+            self.assertLess(t(40000), max(t(10000), 0.005) * 8, pat)
 
     def test_prod_like_host(self):
         for h in ("api.prod.example.com", "production.example.com", "app-prod.example", "prod-api.example"):
