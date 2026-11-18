@@ -906,8 +906,11 @@ def _render_baseline(b) -> list:
             L.append("- 웹 점검(zap)은 크롤링한 페이지 범위에 따라 결과가 달라질 수 있습니다")
     partial = {u: n for u, n in (b.get("partial_units") or {}).items() if u in known and isinstance(n, int)}
     if partial:
-        L.append("- 일부 파일을 점검하지 못한 도구 — 그 파일의 결과는 비교하지 않았습니다(경고 절 참조): "
-                 + ", ".join(f"{_code(u)} {n}개 파일" for u, n in partial.items()))
+        # 이전 실행의 파일도 들어가므로 이번 경고 절에 없는 파일이 있다 (이슈 #41 R3-N2). 개수는 표시 상한을 둔다 (R3-N1)
+        cap = _base.PARTIAL_PATHS_MAX
+        L.append("- 이번이나 직전 실행에서 일부 파일을 점검하지 못한 도구 — 그 파일의 결과는 비교하지 않았습니다"
+                 "(이번 실행의 파일은 경고 절 참조): "
+                 + ", ".join(f"{_code(u)} {n if n <= cap else f'{cap}개 넘는'}{'' if n > cap else '개'} 파일" for u, n in partial.items()))
     if units("changed_units"):
         L.append(f"- 규칙·도구 이미지·프로파일·플러그인 버전이 바뀌어 비교하지 않은 도구: {', '.join(_code(u) for u in units('changed_units'))}")
     if units("not_compared_units"):
@@ -1147,7 +1150,8 @@ def main(argv=None) -> int:
     def _checks(data):
         f, e = parse_checks(data)
         warnings.extend(clean_text(w, 300, True) for w in (data.get("warnings") or [])[:20])
-        if data.get("truncated") or any("건만 리포트에 담았습니다" in str(w) for w in data.get("warnings") or []):
+        # checks.json 은 같은 실행에서 같은 플러그인이 만든다 — 구조화된 truncated 만 본다(문구 폴백 없음, 이슈 #41 R3-N4)
+        if data.get("truncated") is True:
             incomplete.add("checks")    # 결과 상한으로 잘림 — 뒤쪽 결과가 '해결'로 보이지 않게 (리뷰 W1)
         return f, e
 
