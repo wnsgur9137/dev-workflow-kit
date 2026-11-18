@@ -221,6 +221,30 @@ test_web_term_during_scan_removes_stack() {
   return 0
 }
 
+# 7차 리뷰 R7-W1: '… 2>&1 | tee' 로 실행하다 Ctrl-C 로 파이프가 닫혀도 정리(스택 내리기)를 끝까지 한다
+#   (정리 안내 printf 의 SIGPIPE 가 셸을 죽이면 down -v 가 호출되지 않는다)
+test_web_term_with_closed_stderr_pipe_still_cleans_up() {
+  setup_web_fake
+  export FAKE_COMPOSE_RUN_SLEEP=30 FAKE_RUN_PIDFILE="$SEC_TMP/run.pids"
+  local pid rc rpid fifo="$SEC_TMP/err.fifo"
+  mkfifo "$fifo"
+  cat "$fifo" >/dev/null &
+  rpid=$!
+  "$SCAN_WEB" http://host.docker.internal:3000/ >/dev/null 2>"$fifo" &
+  pid=$!
+  for _ in $(seq 1 50); do grep -q ' run --rm --no-deps -T zap' "$FAKE_LOG" 2>/dev/null && break; sleep 0.2; done
+  kill "$rpid"
+  wait "$rpid" 2>/dev/null
+  kill -TERM "$pid"
+  wait "$pid"
+  rc=$?
+  grep -q ' down -v' "$FAKE_LOG" || fail "파이프가 닫힌 뒤 TERM 에 down -v 가 호출되지 않음 (rc=$rc)"
+  assert_eq "$rc" 143 "(TERM 종료코드)"
+  local p
+  [ -f "$FAKE_RUN_PIDFILE" ] && while read -r p; do kill "$p" 2>/dev/null; done <"$FAKE_RUN_PIDFILE"
+  return 0
+}
+
 # 리뷰 W3: 시간 상한을 넘으면 ZAP 을 끄고 실패로 기록한다 (결과를 리포트에 넣지 않는다)
 test_web_scan_timeout_is_recorded_as_failure() {
   setup_web_fake

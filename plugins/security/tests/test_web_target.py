@@ -231,6 +231,10 @@ class RedactTest(unittest.TestCase):
             "Cookie: a=1; " + "n" * 300 + "=SECRET": "Cookie: a=[MASKED]; " + "n" * 300 + "=[MASKED]",
             "Cookie: a=1; ; b=SECRET": "Cookie: a=[MASKED]; ; b=[MASKED]",
             "Cookie: a=x,y=SECRET": "Cookie: a=[MASKED]",
+            # 7차 리뷰 R7-S2: 이름 안 ','
+            "Cookie: a,b=SECRET": "Cookie: a,b=[MASKED]",
+            "Cookie: a=1; b,c=SECRET": "Cookie: a=[MASKED]; b,c=[MASKED]",
+            "Cookie: ,sid=SECRET": "Cookie: ,sid=[MASKED]",
             "cookie:" * 40 + " sid=SECRET": "cookie:" * 40 + " sid=[MASKED]",
             # R5 NITPICK: 제어문자 이스케이프는 풀지 않는다
             "\\u001b[31m": "\\u001b[31m",
@@ -260,10 +264,12 @@ class RedactTest(unittest.TestCase):
         import time
         for pat in ("-/", "/a", "?/", "%2", "//", "%25", "Cookie: a=1;", "cookie:a=;", "\\u002f", "a;=", "a#=",
                     "cookie:", "set-cookie:/", 'cookie:"', "Cookie: " + "a" * 300,
-                    "Cookie: a=1 x ", " ;"):
+                    "Cookie: a=1 x ", " ;", ("cookie:", " "), ("Cookie: a=1 cookie:", "\t")):
+            # (패턴, 꼬리): 꼬리를 n 번 붙인다 — 헤더 여럿이 같은 긴 공백 앞에서 끝나는 입력 (7차 리뷰 R7-S1)
+            pat, tail = pat if isinstance(pat, tuple) else (pat, " //b")
             def t(n):
                 s = time.perf_counter()
-                w.redact_text(pat * n + " //" + "b" * n)
+                w.redact_text(pat * n + tail * n)
                 return time.perf_counter() - s
             n = 2000
             base = t(n)
