@@ -16,10 +16,7 @@
       "Write(~/.local/share/dev-workflow-kit/security/data/**)",
       "Bash(*/security/*/scripts/update.sh:*)",
       "Bash(docker run:*)",
-      "Bash(docker compose:*)",
-      "Bash(docker build:*)",
-      "Bash(docker tag:*)",
-      "Bash(docker image tag:*)"
+      "Bash(docker compose:*)"
     ]
   }
 }
