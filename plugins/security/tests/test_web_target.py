@@ -217,7 +217,12 @@ class RedactTest(unittest.TestCase):
             "Cookie: a=x-cookie:; sid=SECRETX": "Cookie: a=[MASKED]; sid=[MASKED]",
             "Cookie: lang=en-set-cookie:t=1; session=SECRETX": "Cookie: lang=[MASKED]; session=[MASKED]",
             "Cookie: sid=Set-Cookie:SECRETX": "Cookie: sid=[MASKED]",
+            # 따옴표 값 안 'cookie:' 를 헤더로 읽어 뒤 속성까지 가린다 — 안전 쪽 과잉 가림 허용 (3차 리뷰 R3-N3)
             'Set-Cookie: s="v cookie: SECRETX"; Path=/': "Set-Cookie: s=[MASKED]; Path=[MASKED]",
+            # 3차 리뷰 R3-S2: 따옴표 없는 값은 JSON '\\"' 앞에서 끝남, 맞닿은 구간은 한 번, 빈 값은 그대로
+            '{"e":"Cookie: a=1\\", \\"x\\": \\"keep\\""}': '{"e":"Cookie: a=[MASKED]\\", \\"x\\": \\"keep\\""}',
+            'Set-Cookie: a=Cookie:b=\\"x\\"': "Set-Cookie: a=[MASKED]",
+            "Set-Cookie: a=; Path=/": "Set-Cookie: a=; Path=/",
             # 2차 리뷰 S1·S3: 포함·부분 겹침은 합쳐서 한 번 가린다 (중복·연속 마스크 없음)
             "Set-Cookie: a=x,b=SECRETX": "Set-Cookie: a=[MASKED]",
             'Set-Cookie: a=x,b="foo; bar SECRETX"': "Set-Cookie: a=[MASKED]",
@@ -294,7 +299,7 @@ class RedactTest(unittest.TestCase):
                     "cookie:", "set-cookie:/", 'cookie:"', "Cookie: " + "a" * 300,
                     "Cookie: a=1 x ", " ;", ("cookie:", " "), ("Cookie: a=1 cookie:", "\t"),
                     "Set-Cookie: a=1, ", "Set-Cookie: a=", ("Set-Cookie: a=1; Path=/", ", x"), ("Cookie: x", "; x,"),
-                    # PR #46 리뷰 W1: 공백 없이 이어진 Set-Cookie — 값이 다음 헤더까지 한 덩어리
+                    # PR #46 리뷰 W1: 공백 없이 이어진 Set-Cookie — 값이 구분자까지 이어지고 그 안에 헤더가 반복된다
                     ("Set-Cookie:a=", ""), ("set-cookie:a=-", ""), ("Set-Cookie:a=\\u000a", ""), ("Set-Cookie:a=", ";,"),
                     ('Set-Cookie: a="', ""), ('Set-Cookie:a="', ""),
                     # 2차 리뷰 R2-W1 의 값 안 'cookie:' 경로
@@ -309,8 +314,8 @@ class RedactTest(unittest.TestCase):
                 return time.process_time() - s
 
             def t(n):
-                # 3번 재서 가장 짧은 값 — 한 번 재면 일시적인 지연에 흔들린다 (PR #34 7차 R7-N2, PR #46 에서 실제로 한 번 흔들림)
-                return min(t1(n) for _ in range(3))
+                # 2번 재서 가장 짧은 값(CPU 시간이라 2번으로 충분, 3차 리뷰 R3-N5) — 한 번 재면 일시적인 지연에 흔들린다 (PR #34 7차 R7-N2, PR #46 에서 실제로 한 번 흔들림)
+                return min(t1(n) for _ in range(2))
             n = 2000
             base = t(n)
             while base < 0.01 and n < 2_000_000:
