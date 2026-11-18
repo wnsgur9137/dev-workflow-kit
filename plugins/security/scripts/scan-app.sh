@@ -257,26 +257,8 @@ run_mobsf() {
   # dockerd 가 대신 보내던 엔진(CVE-2024-29018, Moby 26.0.0·25.0.5·23.0.11 미만)에서는 스토어·Firebase 조회가
   # DNS 로 새어 나간다 (리뷰 W6). 몇 초면 끝난다
   local iso
-  iso=$(compose exec -T mobsf python3 -I -c '
-import socket
-socket.setdefaulttimeout(3)
-r = []
-for h in ("example.com", "play.google.com"):
-    try:
-        socket.getaddrinfo(h, 443); r.append("dns:" + h)
-    except OSError:
-        pass
-try:
-    socket.create_connection(("1.1.1.1", 443), timeout=3); r.append("ip")
-except OSError:
-    pass
-# 프록시 환경변수가 있으면 MobSF 의 requests(trust_env)가 internal 네트워크에서 닿는 프록시로 나갈 수 있다 (2차 리뷰 Open Question)
-import os
-# compose.yml 이 이 변수들을 빈 값으로 덮어쓰므로, 값이 있으면 무언가가 다시 넣은 것이다 (3차 리뷰 NS-B)
-r += ["proxy-env:" + k for k, v in os.environ.items()
-      if k.lower() in ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy") and v.strip()]
-print("isolated" if not r else "LEAK " + " ".join(r))
-' 2>&1 | tail -n 1)
+  # 검사 내용은 scripts/lib/app_iso_probe.py (MobSF 컨테이너에 마운트가 없으므로 내용을 -c 로 넘긴다, PR #32 5차 N1)
+  iso=$(compose exec -T mobsf python3 -I -c "$(cat "$SEC_PLUGIN/scripts/lib/app_iso_probe.py")" 2>&1 | tail -n 1)
   if [ "$iso" != isolated ]; then
     record mobsf failed - "격리 확인 실패 — MobSF 컨테이너에서 외부 이름 풀이·연결·프록시 설정이 확인됩니다(${iso:-확인 불가}). 앱을 올리지 않았습니다. Docker 엔진 버전(예: CVE-2024-29018)·~/.docker/config.json 의 proxies·런타임 네트워크 설정을 확인하세요"
     stack_down

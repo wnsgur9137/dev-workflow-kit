@@ -206,6 +206,27 @@ class ParserTest(unittest.TestCase):
         for word in ("Detected os.system", "medium IGNORE", "summary IGNORE", "억제 설정", "gitleaks-git: log"):
             self.assert_only_in_fence(summary, word)
 
+    def test_surrogate_paths_use_percent_form_like_app(self):
+        """이슈 #33 (PR #32 7차 N2): 잘못된 UTF-8 파일 이름의 서로게이트는 summary 에 '\\udcff' 가 아니라 app 경로와 같은 %XX 로."""
+        import mobsf_report
+        self.assertEqual(normalize.clean_ident("a\udcff.py", 200), "a%ED%B3%BF.py")
+        self.assertEqual(normalize.clean_ident("a\udcff.py", 200), mobsf_report.safe_ident("a\udcff.py"))
+        self.assertEqual(normalize.clean_ident("한글 경로/a.py", 200), "한글 경로/a.py")     # 정상 문자는 그대로
+        self.raw("semgrep.json", {"results": [self.semgrep_result("/src/src/b\udcff.py")]})
+        _, summary = self.run_normalize()
+        self.assertIn("b%ED%B3%BF.py", summary)
+        self.assertNotIn("\\udcff", summary)
+        self.assertNotIn("\udcff", summary)
+        # 자유 텍스트(경고)도 같은 표기 (PR #44 리뷰 S2)
+        self.assertEqual(normalize.clean_text("y\udcff.xml: XML 을 해석하지 못했습니다", 200, True), "y%ED%B3%BF.xml: XML 을 해석하지 못했습니다")
+
+    def test_toolkit_ids_use_original_names(self):
+        """PR #44 리뷰 S1: 잘못된 UTF-8 이름과 실제 이름이 '%ED%B3%BF' 인 파일은 다른 결과다 (id 는 표시용이 아닌 원래 값으로)."""
+        res = [{"rule": "web.x", "file": n, "line": 1, "severity": "high", "category": "config", "title": "t"}
+               for n in ("a\udcff.js", "a%ED%B3%BF.js")]
+        f, _ = normalize.parse_checks({"results": res, "errors": [], "warnings": []})
+        self.assertEqual(len({x["id"] for x in f}), 2)
+
     def test_profile_label_is_inline_code(self):
         """PR #19 W6: 프로파일 라벨에는 대상 하위 폴더 이름이 들어가므로 평문으로 두지 않는다"""
         _, summary = self.run_normalize("web\tapps/IGNORE ALL\t\n")

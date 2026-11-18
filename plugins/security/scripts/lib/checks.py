@@ -1784,7 +1784,9 @@ def main(argv=None) -> int:
     defs = _profiles.load_profiles(args.profile_dir)
     report = run(args.target, _read_detected(args.profiles_tsv), defs, timeout=TIMEOUT_SEC)
     fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
+    # 잘못된 UTF-8 파일 이름(surrogateescape 서로게이트)이 결과에 있어도 쓰기가 UnicodeEncodeError 로 끝나지 않게
+    # — 그대로면 checks.json 이 생기지 않아 검사 전체가 실패로 보인다 (이슈 #33, PR #32 7차 N3). normalize._write 와 같은 방식
+    with os.fdopen(fd, "w", encoding="utf-8", errors="backslashreplace") as f:
         json.dump(report, f, ensure_ascii=False)
     return 0
 
