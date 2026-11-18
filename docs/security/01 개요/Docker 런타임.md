@@ -68,7 +68,7 @@ docker info && docker compose version   # 둘 다 성공해야 함
 | D3 | `docker compose version` v2 이상 | compose 플러그인 설치 안내 |
 | D4 | 엔진이 dockerd(moby) | Podman 등 미지원 런타임 안내 |
 | D5 | VM 메모리가 해당 스캔 권장치 이상 | 경고만 (계속 진행) |
-| D6 | 필요한 이미지가 `images.lock` digest로 존재 | `update.sh` 실행 안내 (스캔 스크립트는 다운로드하지 않음) |
+| D6 | 필요한 이미지가 `images.lock` digest로 존재. 로컬 빌드 이미지(egress-proxy)는 빌드 기록이 지금 Dockerfile·베이스와 맞고 그 이미지 ID 가 존재 | `update.sh` 실행 안내 (스캔 스크립트는 다운로드·빌드하지 않음) |
 | D7 | 컨테이너에서 대상 폴더가 비어 보이지 않음 (P1 추가, `scan-code.sh`) | 런타임 공유 경로 안내 — 공유되지 않은 경로는 빈 폴더로 보여 "0건"으로 조용히 끝나기 때문. 확인용 컨테이너 자체가 실패하면(이미지·런타임 오류) 공유 문제로 안내하지 않고 종료코드·오류 출력을 보여준다 |
 
 ## 로컬 서버 점검 시 호스트 주소

@@ -136,7 +136,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
    | D3 | Compose v2 이상 | compose 플러그인 안내 |
    | D4 | dockerd(moby) 엔진 | Podman 미지원 안내 |
    | D5 | VM 메모리 권장치 이상 | 경고만 |
-   | D6 | 고정 digest 이미지·규칙·OSV DB 존재 | `update.sh` 실행 안내 (스캔은 다운로드하지 않음) |
+   | D6 | 고정 digest 이미지·로컬 빌드 이미지(egress-proxy)·규칙·OSV DB 존재 | `update.sh` 실행 안내 (스캔은 다운로드·빌드하지 않음) |
    | D7 | 컨테이너에서 대상 폴더가 보임 | 런타임 공유 경로 설정 안내 (Colima 기본값은 홈 아래만 공유) |
 
 2. **python3 3.8 이상** — 스택 감지·리포트 정규화에 씁니다 (표준 라이브러리만 사용).
@@ -147,7 +147,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
    ~/.claude/plugins/cache/dev-workflow-kit/security/<버전>/scripts/update.sh --osv    # OSV DB만 (주 1회 권장)
    ```
 
-   이미지는 `images.lock`의 digest, 규칙은 `rules.lock`의 커밋으로 고정해 받습니다.
+   이미지는 `images.lock`의 digest, 규칙은 `rules.lock`의 커밋으로 고정해 받습니다. `/security:scan-web` 의 egress-proxy(tinyproxy)는 공식 이미지가 없어 받지 않고, `update.sh` 가 고정된 공식 alpine 위에 서명된 Alpine 패키지로 빌드합니다(빌드할 때 패키지를 받으러 네트워크를 씁니다).
 
 ### 사용법
 
@@ -194,7 +194,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 | 도구 | 점검 | 비고 |
 |---|---|---|
 | OWASP ZAP 2.17.0 (baseline) | 보안 헤더(CSP·HSTS·X-Frame-Options 등) 누락, 쿠키 속성(Secure·HttpOnly·SameSite), 서버 버전·오류 정보 노출 | **수동(passive) 규칙만** — 공격 요청을 보내지 않음(active·full scan 없음). 인증 없이 크롤링(스파이더 3분). 이미지 약 3.6GB, VM 메모리 6GB 권장 |
-| egress-proxy (tinyproxy 1.11) | ZAP 의 유일한 출구 | 이번 대상의 출처(scheme+host+port) 하나만 열고 나머지는 403 + 로그 → summary 의 "프록시가 막은 요청" |
+| egress-proxy (tinyproxy 1.11, 공식 alpine 에서 `update.sh` 가 로컬 빌드) | ZAP 의 유일한 출구 | 이번 대상의 출처(scheme+host+port) 하나만 열고 나머지는 403 + 로그 → summary 의 "프록시가 막은 요청" |
 
 - **허용목록이 먼저 필요합니다.** `~/.config/dev-workflow-kit/security/targets.allowlist` 에 직접 소유·운영하는 대상을 **사용자가 직접** 한 줄에 하나씩 적습니다 (`scheme://host[:port]`, 경로·와일드카드 없음, `chmod 600`). 목록에 없거나 주석에 `prod` 가 붙은 대상은 컨테이너를 띄우기 전에 거부합니다. Claude 는 권한 설정으로 이 파일을 고칠 수 없습니다.
 
