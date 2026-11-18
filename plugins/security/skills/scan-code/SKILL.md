@@ -23,6 +23,7 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/scan-code.sh:*), Read(~/.local
 - 인자가 비어 있으면 실행하지 말고 점검할 저장소 경로를 물어본다.
 - 도구를 직접 `docker run` 하거나, 스크립트 인자에 도구 옵션을 덧붙이지 않는다. 스크립트가 모르는 옵션은 거부한다.
 - 스크립트가 **사전 점검(D1~D7)** 이나 **`update.sh` 안내**로 끝나면, 그 메시지를 사용자에게 그대로 전하고 멈춘다. `update.sh` 는 외부와 통신하므로 **사용자가 터미널에서 직접** 실행해야 한다 — 대신 실행하지 않는다.
+- 큰 저장소는 Semgrep·OSV 점검이 2분을 넘길 수 있다. Bash 도구의 기본 시간 제한(2분)에 걸려 끊기지 않도록 **`run_in_background: true`로 실행하고 완료 알림을 기다린다** — 기다리는 동안 출력 파일을 짧은 간격으로 확인하지 않는다. 백그라운드를 쓸 수 없으면 `timeout: 600000`을 준다.
 - 성공하면 stdout 마지막 줄이 `summary.md` 경로다.
 - 리포트는 기본적으로 `~/.local/share/dev-workflow-kit/security/reports/` 아래에 생긴다. 사용자가 `DWK_SECURITY_DATA_DIR`로 데이터 폴더를 바꿨다면 위 `allowed-tools`의 `Read` 규칙과 맞지 않아 열람할 때마다 권한 확인이 뜬다 — 그 경우 사용자 설정(`settings.json`의 `permissions.allow`)에 `Read(/절대/경로/reports/**)` 형식 규칙을 추가하라고 안내한다. 경로 부분은 사용자의 실제 `DWK_SECURITY_DATA_DIR` 값으로 채운다.
 
