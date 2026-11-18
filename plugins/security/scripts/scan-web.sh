@@ -184,11 +184,12 @@ cleanup() {
   [ -n "$pid_watchdog" ] && kill "$pid_watchdog" 2>/dev/null
   # 백그라운드 compose run CLI 는 down 으로 컨테이너가 사라지면 함께 끝난다
   [ -n "$pid_scan" ] && kill "$pid_scan" 2>/dev/null
-  # 스캔 도중 중단(INT·TERM)돼도 진행 로그의 URL 값을 가려 둔다 — 정상 경로는 run_zap 이 가린다 (3차 리뷰 R3-S4)
+  [ $STACK_UP -eq 1 ] && stack_down
+  # 스캔 도중 중단(INT·TERM)돼도 진행 로그의 URL 값을 가려 둔다 — 정상 경로는 run_zap 이 가린다 (3차 리뷰 R3-S4).
+  # 스택을 내린 뒤에 가린다 — 죽어 가는 compose CLI 가 zap.log 에 마지막 줄을 쓰는 중에 다시 쓰지 않게 (4차 리뷰 R4-S3)
   if [ "$ZAP_LOG_REDACTED" -eq 0 ] && [ -f "$RAW/zap.log" ]; then
     python3 -I "$SEC_PLUGIN/scripts/lib/web_target.py" redact-file "$RAW/zap.log" 2>/dev/null || : >"$RAW/zap.log"
   fi
-  [ $STACK_UP -eq 1 ] && stack_down
   if [ $STACK_UP -eq 1 ]; then
     sec_warn "ZAP 스택을 내리지 못했습니다 — docker compose -p $COMPOSE_PROJECT -f $COMPOSE_FILE_PATH --profile scan down -v 로 직접 지우세요."
   fi
@@ -229,7 +230,7 @@ run_zap() {
   case "$iso" in
     "UNREACHABLE timeout")
       # 서버는 떠 있을 수 있다 — 개발 서버 첫 요청 컴파일·콜드 스타트 (3차 리뷰 R3-S3)
-      record zap failed - "대상이 60초 안에 응답하지 않았습니다 — 점검하지 않았습니다. 개발 서버라면 브라우저로 한 번 열어 첫 컴파일을 끝낸 뒤 다시 실행하세요 ($ORIGIN)"
+      record zap failed - "대상이 55초 안에 응답하지 않았습니다 — 점검하지 않았습니다. 개발 서버라면 브라우저로 한 번 열어 첫 컴파일을 끝낸 뒤 다시 실행하세요 ($ORIGIN)"
       save_proxy_log
       stack_down
       return

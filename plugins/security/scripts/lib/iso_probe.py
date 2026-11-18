@@ -12,7 +12,7 @@ scan-web.sh 가 이 파일 내용을 `python3 -I -c "<내용>" <대상 host> <�
   dns:<이름>        인터넷 이름이 풀린다 (internal 네트워크의 DNS 가 밖으로 샌다, 예: CVE-2024-29018)
   ip                인터넷 IP 로 직접 연결된다
   target-direct     프록시를 거치지 않고 대상 host:port 로 직접 연결된다 (host-gateway 경로가 internal 을 우회, PR #34 리뷰 W4)
-  proxy-env:<키>    프록시 환경변수가 남아 있다 (compose-web.yml 이 비우므로 무언가 다시 넣은 것)
+  proxy-env:<키>    프록시 환경변수(no_proxy 포함 — 도달 확인이 프록시를 건너뛴다)가 남아 있다 (compose-web.yml 이 비우므로 무언가 다시 넣은 것)
   proxy-allows-outside / proxy-status:<코드> / proxy-unreachable
                     egress-proxy 가 허용목록 밖(.invalid)을 403 으로 막지 않는다 — 필터가 적용되지 않았다
 """
@@ -29,8 +29,9 @@ PROXY = "http://egress-proxy:8888"
 PROBE_URL = "http://dwk-isolation-probe.invalid/"   # web_target.ISOLATION_PROBE_HOST — 차단 목록에서는 뺀다
 INTERNET_NAMES = ("example.com", "www.zaproxy.org")
 INTERNET_IP = ("1.1.1.1", 443)
-# 개발 서버 첫 요청 컴파일·콜드 스타트를 기다린다 — egress-proxy 의 Timeout 과 같다 (R3-S3)
-REACH_TIMEOUT = 60
+# 개발 서버 첫 요청 컴파일·콜드 스타트를 기다린다. egress-proxy 의 Timeout(60) 보다 짧게 둬 늘 이쪽이 먼저 끝나게 한다 —
+# 같으면 프록시가 먼저 끊을 때 '시간 초과' 대신 '접속하지 못했습니다'로 갈린다 (3차 리뷰 R3-S3·4차 리뷰 R4-S2)
+REACH_TIMEOUT = 55
 
 
 def probe(target_host, target_port, resolve=socket.getaddrinfo, connect=socket.create_connection,
@@ -50,7 +51,7 @@ def probe(target_host, target_port, resolve=socket.getaddrinfo, connect=socket.c
         except OSError:
             pass
     leaks += ["proxy-env:" + k for k, v in environ.items()
-              if k.lower() in ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy") and v.strip()]
+              if k.lower() in ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "no_proxy") and v.strip()]
     if proxy_open is None:
         proxy_open = _opener(urllib.request.ProxyHandler({"http": PROXY})).open
     try:
