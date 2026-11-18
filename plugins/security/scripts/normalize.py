@@ -42,6 +42,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "lib"))
 
+import baseline as _base  # noqa: E402
 import mobsf_report as _mobsf  # noqa: E402
 import profiles as _profiles  # noqa: E402
 import web_target as _web  # noqa: E402
@@ -398,6 +399,20 @@ def read_source_lines(target, rel, start, end, max_lines=3):
     except OSError:
         return ""
     return "\n".join(out)
+
+
+def semgrep_partial_paths(data):
+    """warn 수준 오류가 난 파일(대상 기준 경로)과, 경로 없는 warn 오류가 있었는지 (베이스라인 비교 범위, PR #40 2차 리뷰 W2)."""
+    paths, pathless = set(), False
+    for e in (data or {}).get("errors", []) or []:
+        if str(e.get("level", "")).lower() != "warn":
+            continue
+        p = e.get("path")
+        if isinstance(p, str) and p:
+            paths.add(strip_container_prefix(p))       # parse_semgrep 의 location.file 과 같은 방식으로
+        else:
+            pathless = True
+    return paths, pathless
 
 
 def semgrep_partial_warning(data):
@@ -843,6 +858,62 @@ def _loc(f) -> str:
     return s
 
 
+def _new_mark(f) -> str:
+    if f.get("baseline") == "new":
+        return " [신규]"
+    if f.get("baseline") == "moved":
+        # 어느 결과를 이동으로 짝지었는지 보여 확인할 수 있게 (2차 리뷰 S1)
+        prev = f.get("baseline_prev_line")
+        return f" [위치 이동 ← {prev}행]" if isinstance(prev, int) else " [위치 이동]"
+    return ""
+
+
+def _render_baseline(b) -> list:
+    """이전 실행과 비교 (P4 베이스라인). 이전 리포트의 값은 도구가 뽑은 데이터라 식별자로만, 코드로 감싸 보인다."""
+    L = ["## 이전 실행과 비교"]
+    if not isinstance(b, dict) or not b.get("run_id") or "new" not in b:
+        reason = b.get("reason") if isinstance(b, dict) else None
+        base = f"기준 `{b['run_id']}` — " if isinstance(b, dict) and b.get("run_id") else ""
+        L += [f"{base}비교하지 않았습니다: {reason or '정보 없음'}", ""]
+        return L
+    known = set(_base.UNIT_TOOL)
+    units = lambda key: [u for u in b.get(key) or [] if u in known]  # noqa: E731 — 알려진 단위 이름만 (리뷰 N3)
+    if not b.get("compared_units"):
+        L.append(f"기준: `{b['run_id']}` (같은 대상의 직전 실행) — 비교할 수 있는 도구가 없습니다")   # 리뷰 N5
+    else:
+        moved = f" (위치 이동 {b['moved']})" if b.get("moved") else ""
+        L.append(f"기준: `{b['run_id']}` (같은 대상의 직전 실행) · **신규 {b['new']}** · 유지 {b['existing'] + b.get('moved', 0)}{moved}"
+                 f" · **해결 {b['resolved']}**" + (f" · 비교 안 함 {b['not_compared']}" if b.get("not_compared") else ""))
+        L.append("- 해결은 \"직전 실행에 있던 결과가 이번에 보이지 않음\"이라는 뜻입니다. 고쳤다고 단정하기 전에 위치를 확인하세요. "
+                 "같은 규칙·파일에 남은 신규와 해결은 개수만큼 짝지어 '위치 이동'으로 셌습니다(같은 파일에서 하나를 고치고 하나가 "
+                 "새로 생겨도 이동으로 보일 수 있음 — `[위치 이동 ← N행]` 표시를 확인하세요). 시크릿 결과(gitleaks·시크릿 분류)는 짝짓지 않으므로 "
+                 "줄만 바뀌어도 신규와 해결에 함께 나올 수 있습니다 — 해결 표의 표시를 확인하세요")
+        if "zap" in units("compared_units"):
+            L.append("- 웹 점검(zap)은 크롤링한 페이지 범위에 따라 결과가 달라질 수 있습니다")
+    partial = {u: n for u, n in (b.get("partial_units") or {}).items() if u in known and isinstance(n, int)}
+    if partial:
+        L.append("- 일부 파일을 점검하지 못한 도구 — 그 파일의 결과는 비교하지 않았습니다(경고 절 참조): "
+                 + ", ".join(f"{_code(u)} {n}개 파일" for u, n in partial.items()))
+    if units("changed_units"):
+        L.append(f"- 규칙·도구 이미지·프로파일·플러그인 버전이 바뀌어 비교하지 않은 도구: {', '.join(_code(u) for u in units('changed_units'))}")
+    if units("not_compared_units"):
+        L.append(f"- 실패·건너뜀·부분 결과(이번이나 직전 실행, 또는 둘 다)라 비교하지 않은 도구 — 이 도구 영역의 변화는 알 수 없습니다: "
+                 f"{', '.join(_code(u) for u in units('not_compared_units'))}")
+    items = b.get("resolved_items") or []
+    if items:
+        L.append("")
+        L.append(f"해결된 결과 (이전 실행에 있었고 이번에 없음{f', 처음 {len(items)}건' if b['resolved'] > len(items) else ''}):")
+        L.append("")
+        L.append("| 심각도 | 도구 | 위치 | 규칙 |")
+        L.append("|---|---|---|---|")
+        for it in items:
+            sev = it.get("severity") if it.get("severity") in SEVERITIES else "info"
+            note = " (같은 파일에 같은 규칙의 신규 있음 — 위치만 바뀌었을 수 있음)" if it.get("maybe_moved") is True else ""
+            L.append(f"| {sev} | {_code(it.get('tool', ''))} | {_code(_loc(it))}{note} | {_code(str(it.get('rule_id', '')).split('.')[-1])} |")
+    L.append("")
+    return L
+
+
 def render_summary(meta, findings, stats, status_rows, warnings, errors, checklists=None, blocked=None) -> str:
     L = []
     L.append(f"# 보안 점검 요약 — {meta['kind']}")
@@ -878,13 +949,14 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors, checkli
     L.append("|---|---|---|---|---|---|")
     L.append("| " + " | ".join(str(stats[s]) for s in SEVERITIES) + f" | {len(findings)} |")
     L.append("")
+    L += _render_baseline(meta.get("baseline"))
 
     top = [f for f in findings if f["severity"] in ("critical", "high")]
     L.append("## Critical / High")
     if not top:
         L.append("없음")
     for i, f in enumerate(top[:SUMMARY_DETAIL_MAX], 1):
-        L.append(f"### {i}. [{f['severity']}] {f['tool']} · {_code(f['rule_id'])}")
+        L.append(f"### {i}. [{f['severity']}]{_new_mark(f)} {f['tool']} · {_code(f['rule_id'])}")
         L.append(f"- 위치: {_code(_loc(f))} · 프로파일: {_code(f['profile'])} · 분류: {f['category']}")
         if f.get("references"):
             L.append(f"- 참고: {', '.join(_code(r) for r in f['references'])}")
@@ -907,7 +979,7 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors, checkli
         L.append("|---|---|---|---|---|")
         shown = others[:SUMMARY_TOP_OTHERS]
         for i, f in enumerate(shown, 1):
-            L.append(f"| {i} | {f['severity']} | {f['tool']} | {_code(_loc(f))} | {_code(f['rule_id'].split('.')[-1])} |")
+            L.append(f"| {i} | {f['severity']}{_new_mark(f)} | {f['tool']} | {_code(_loc(f))} | {_code(f['rule_id'].split('.')[-1])} |")
         L.append("")
         L.append("설명 (데이터, 번호는 위 표와 같음):")
         L.append(_fence("\n".join(f"{i}. {f['title']}" for i, f in enumerate(shown, 1))))
@@ -1015,40 +1087,57 @@ def main(argv=None) -> int:
             status_rows.append({"tool": t, "status": "failed", "exit_code": "-",
                                 "note": "상태 기록 없음 — 도구가 결과를 기록하기 전에 비정상 종료했습니다"})
     findings, errors, warnings = [], [], []
+    # 베이스라인 비교 단위 = status.tsv 의 도구. 결과 파일을 읽거나 해석하지 못한 단위는 불완전 — 비교하지 않는다
+    incomplete = set()
+    partial_paths = {}
 
-    def run_parser(filename, parse):
+    def run_parser(filename, parse, unit):
         """파서 하나가 예상과 다른 구조에서 예외를 내도 나머지 도구 결과와 summary 는 만든다."""
         data, err = _load_json(os.path.join(raw, filename))
         if err:
             errors.append(err)
         if data is None:
+            incomplete.add(unit)
             return
         try:
             f, e = parse(data)
         except Exception as ex:  # noqa: BLE001 — 도구 출력은 신뢰하지 않는 입력이다
             errors.append(f"{filename} 해석 실패 — 이 도구의 결과는 리포트에서 빠졌습니다: "
                           f"{type(ex).__name__}: {clean_text(ex, 160, True)}")
+            incomplete.add(unit)
             return
+        for x in f:
+            x["unit"] = unit
         findings.extend(f)
         errors.extend(e)
+        if e:
+            incomplete.add(unit)      # 일부 파일·검사가 실패한 결과 — 사라진 결과를 '해결'로 볼 수 없다 (PR #40 리뷰 W1)
 
     def _semgrep(data):
         f, e = parse_semgrep(data, index, args.target)
         w = semgrep_partial_warning(data)
         if w:
             warnings.append(w)
+            # 일부 파일을 점검하지 못함 — 그 파일만 비교에서 뺀다. 경로를 모르거나 너무 많으면 단위 전체를 뺀다 (리뷰 W1·2차 W2)
+            paths, pathless = semgrep_partial_paths(data)
+            if pathless or len(paths) > _base.PARTIAL_PATHS_MAX:
+                incomplete.add("semgrep")
+            else:
+                partial_paths["semgrep"] = sorted(paths)
         return f, e
 
-    run_parser("semgrep.json", _semgrep)
+    run_parser("semgrep.json", _semgrep, "semgrep")
     for mode in ("git", "dir"):
-        run_parser(f"gitleaks-{mode}.json", lambda d, m=mode: (parse_gitleaks(d, m), []))
-    run_parser("osv.json", lambda d: (parse_osv(d, index), []))
+        run_parser(f"gitleaks-{mode}.json", lambda d, m=mode: (parse_gitleaks(d, m), []), f"gitleaks-{mode}")
+    run_parser("osv.json", lambda d: (parse_osv(d, index), []), "osv-scanner")
     def _checks(data):
         f, e = parse_checks(data)
         warnings.extend(clean_text(w, 300, True) for w in (data.get("warnings") or [])[:20])
+        if data.get("truncated") or any("건만 리포트에 담았습니다" in str(w) for w in data.get("warnings") or []):
+            incomplete.add("checks")    # 결과 상한으로 잘림 — 뒤쪽 결과가 '해결'로 보이지 않게 (리뷰 W1)
         return f, e
 
-    run_parser("checks.json", _checks)
+    run_parser("checks.json", _checks, "checks")
 
     mobsf_report = None
     if args.kind == "app":
@@ -1066,18 +1155,23 @@ def main(argv=None) -> int:
                               ensure_ascii=False, indent=1) + "\n")
             try:
                 f, w = parse_mobsf(data, platform_profile, args.target.lower().endswith(".aab"))
+                for x in f:
+                    x["unit"] = "mobsf"
                 findings.extend(f)
                 warnings.extend(clean_text(x, 300, True) for x in w)
             except Exception as ex:  # noqa: BLE001 — 도구 출력은 신뢰하지 않는 입력이다
                 errors.append("mobsf.json 해석 실패 — 이 도구의 결과는 리포트에서 빠졌습니다: "
                               f"{type(ex).__name__}: {clean_text(ex, 160, True)}")
+                incomplete.add("mobsf")
+        else:
+            incomplete.add("mobsf")
         if os.path.exists(full):
             os.unlink(full)
-        run_parser("gitleaks-artifact.json", lambda d: (parse_gitleaks(d, "artifact"), []))
+        run_parser("gitleaks-artifact.json", lambda d: (parse_gitleaks(d, "artifact"), []), "gitleaks-artifact")
 
     blocked = None
     if args.kind == "web":
-        run_parser("zap.json", parse_zap)
+        run_parser("zap.json", parse_zap, "zap")
         data, err = _load_json(os.path.join(raw, "proxy-denied.json"))
         if isinstance(data, dict) and isinstance(data.get("urls"), list):
             try:
@@ -1115,6 +1209,17 @@ def main(argv=None) -> int:
         checklists = load_web_checklist()
 
     run_id = os.path.basename(run_dir)
+    complete_units = sorted({r["tool"] for r in status_rows if r["status"] == "ok"} - incomplete)
+    unit_keys = _base.unit_keys(complete_units, extra_meta.get("tools", []), extra_meta.get("rules", []),
+                                index.labels(), extra_meta.get("plugin_version"))
+    partial_paths = {u: p for u, p in partial_paths.items() if u in complete_units}
+    try:
+        baseline = _base.compare(findings, complete_units, unit_keys, _base.find_previous(run_dir, args.kind, args.target),
+                                 all_units={r["tool"] for r in status_rows}, partial_paths=partial_paths)
+    except Exception as ex:  # noqa: BLE001 — 이전 리포트는 신뢰하지 않는 입력이다. 비교만 포기하고 이번 결과는 낸다 (3차 리뷰 S3)
+        for f in findings:
+            f["baseline"] = "not-compared"
+        baseline = {"run_id": None, "reason": f"이전 실행 정보를 해석하지 못했습니다 ({type(ex).__name__})"}
     meta = {
         "run_id": run_id,
         "kind": args.kind,
@@ -1128,6 +1233,10 @@ def main(argv=None) -> int:
         "osv_db_updated_at": extra_meta.get("osv_db_updated_at"),
         "plugin_version": extra_meta.get("plugin_version"),
         "tool_status": status_rows,
+        "complete_units": complete_units,
+        "unit_keys": unit_keys,
+        "partial_paths": partial_paths,
+        "baseline": baseline,
         "warnings": warnings,
         "errors": errors,
     }

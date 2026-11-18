@@ -241,6 +241,7 @@ class ChecksTest(unittest.TestCase):
         _w(os.path.join(self.t, "package-lock.json"), json.dumps(lock))
         report = self.run_checks()
         self.assertEqual(len(report["results"]), checks.MAX_RESULTS_PER_CHECK)
+        self.assertIs(report["truncated"], True)      # 베이스라인 비교가 부분 결과로 본다 (PR #40 3차 리뷰 S2 e)
         self.assertTrue(any("건만 리포트에 담았습니다" in w for w in report["warnings"]))
 
     def test_symlinks_are_not_followed_and_outside_files_not_read(self):

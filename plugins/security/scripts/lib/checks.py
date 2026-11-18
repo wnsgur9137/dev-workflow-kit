@@ -1713,6 +1713,7 @@ class _Timeout(Exception):
 
 def run(target, detected, profile_defs, timeout=None):
     results, errors, warnings = [], [], []
+    truncated = False
     repo_wide_done, ctx_cache = set(), {}
 
     def ctx_for(name, root, excluded, exclude_paths):
@@ -1752,6 +1753,7 @@ def run(target, detected, profile_defs, timeout=None):
                     continue
                 if len(found) > MAX_RESULTS_PER_CHECK:
                     warnings.append(f"{name}/{check}: 결과 {len(found)}건 중 {MAX_RESULTS_PER_CHECK}건만 리포트에 담았습니다")
+                    truncated = True     # 베이스라인 비교가 문구가 아니라 이 값으로 부분 결과를 안다 (PR #40 2차 리뷰 N2)
                 results.extend(found[:MAX_RESULTS_PER_CHECK])
     except _Timeout:
         errors.append(f"스택 검사가 시간 제한({timeout}초)을 넘어 중단됐습니다 — 그때까지의 결과만 담았습니다")
@@ -1759,7 +1761,7 @@ def run(target, detected, profile_defs, timeout=None):
         if use_alarm:
             signal.alarm(0)
             signal.signal(signal.SIGALRM, old)
-    return {"results": results, "errors": errors, "warnings": warnings}
+    return {"results": results, "errors": errors, "warnings": warnings, "truncated": truncated}
 
 
 def _read_detected(path):
