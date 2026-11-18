@@ -191,6 +191,25 @@ class RedactTest(unittest.TestCase):
             'Set-Cookie: sid="a COOKIE8"; Path=/': "Set-Cookie: sid=[MASKED]; Path=/",
             "next=http%3A%2F%2Fh%2Fcb%3Fcode%3DENC11": "next=http://h/cb?code=[MASKED]",
             "issue #12 a;b x=1 100%": "issue #12 a;b x=1 100%",
+            # 4차 리뷰 R4-W1: 상대 URL 질의 안의 절대 URL(인코딩 여부 무관) — 앞 질의값까지 가린다
+            "Location: /authorize?client_id=c&code=SEC2&redirect_uri=https://app/cb":
+                "Location: /authorize?client_id=[MASKED]&code=[MASKED]&redirect_uri=[MASKED]",
+            "url=/cb?state=SEC4&return=http://x/": "url=/cb?state=[MASKED]&return=[MASKED]",
+            "cb?code=SEC3&next=//h/x": "cb?code=[MASKED]&next=[MASKED]",
+            "Location: /authorize?code=SEC1&redirect_uri=https%3A%2F%2Fapp%2Fcb%3Fx%3D1":
+                "Location: /authorize?code=[MASKED]&redirect_uri=[MASKED]",
+            # R4-S1: 한 줄의 쿠키 헤더 여럿(이스케이프된 줄바꿈 포함)·쌍 문법 뒤의 줄 나머지는 남김
+            "Set-Cookie: a=1; Path=/ Set-Cookie: b=SEC8": "Set-Cookie: a=[MASKED]; Path=/ Set-Cookie: b=[MASKED]",
+            "Set-Cookie: a=1; Path=/\\r\\nSet-Cookie: b=SEC7; Path=/":
+                "Set-Cookie: a=[MASKED]; Path=/\\r\\nSet-Cookie: b=[MASKED]; Path=/",
+            "cookie: sid=L29 then http://h/a": "cookie: sid=[MASKED] then http://h/a",
+            "Cookie: a=1;  b=SEC15": "Cookie: a=[MASKED];  b=[MASKED]",
+            # R4-S4: 두 번 인코딩, JSON 유니코드 이스케이프, '/' 없는 상대 URL 의 경로 매개변수·조각, 백틱 경계
+            "http%253A%252F%252Fh%252Fcb%253Fcode%253DL9": "http://h/cb?code=[MASKED]",
+            "http:\\u002f\\u002fh\\u002fcb?a=1\\u0026code=SEC10": "http://h/cb?a=[MASKED]&code=[MASKED]",
+            "Location: cb;jsessionid=SEC13": "Location: cb;jsessionid=[MASKED]",
+            "cb#access_token=SEC14": "cb#[MASKED]",
+            "`http://h/a?code=L2`": "`http://h/a?code=[MASKED]`",
         }
         for src, want in cases.items():
             self.assertEqual(w.redact_text(src), want, src)
@@ -213,7 +232,7 @@ class RedactTest(unittest.TestCase):
     def test_redact_text_is_linear(self):
         # 시작 위치마다 다시 훑는 입력('-/'·'?/')과 인코딩 풀기('%2')를 포함한다 (3차 리뷰 NITPICK)
         import time
-        for pat in ("-/", "/a", "?/", "%2", "//"):
+        for pat in ("-/", "/a", "?/", "%2", "//", "%25", "Cookie: a=1;", "cookie:a=;", "\\u002f", "a;=", "a#="):
             def t(n):
                 s = time.perf_counter()
                 w.redact_text(pat * n + " //" + "b" * n)
@@ -257,7 +276,7 @@ class IsoProbeTest(unittest.TestCase):
         self.assertEqual(self.run_probe(connect=lambda a, timeout=0: self.Conn() if a == ("host.docker.internal", 3000)
                                         else self.fail()), ["target-direct"])
         self.assertEqual(self.run_probe(environ={"https_proxy": "http://corp:3128", "NO_PROXY": "x", "HTTP_PROXY": " "}),
-                         ["proxy-env:https_proxy"])
+                         ["proxy-env:https_proxy", "proxy-env:NO_PROXY"])   # no_proxy 도 프록시를 건너뛰게 한다 (4차 리뷰 NITPICK)
         self.assertEqual(self.run_probe(proxy_open=lambda u, timeout=0: self.Conn()), ["proxy-allows-outside"])
 
         def proxy_502(url, timeout=0):
@@ -304,6 +323,17 @@ class ReachTest(unittest.TestCase):
 
 class ReachOpenerTest(unittest.TestCase):
     """기본 opener 를 가짜 프록시로 돌린다 — 리다이렉트를 따라가지 않고, 사유를 구분한다 (3차 리뷰 R3-W1·S1·S3·S5)."""
+
+    def setUp(self):
+        # ProxyHandler 는 no_proxy·macOS 시스템 프록시 예외를 본다 — 개발 PC 설정에 따라 가짜 프록시를 건너뛰지 않게 고정 (4차 리뷰 NITPICK)
+        from unittest import mock
+        for k in ("no_proxy", "NO_PROXY"):
+            p = mock.patch.dict(os.environ, {k: ""})
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch("urllib.request.proxy_bypass", return_value=False)
+        p.start()
+        self.addCleanup(p.stop)
 
     def serve(self, reply, delay=0.0):
         import socket
@@ -391,7 +421,10 @@ class ReachOpenerTest(unittest.TestCase):
         s.close()
         self.assertEqual(iso_probe.reach("http://h.example/", proxy="http://127.0.0.1:%d" % port, timeout=5),
                          "ConnectionRefusedError")
-        self.assertEqual(iso_probe.REACH_TIMEOUT, 60)
+        # 도달 확인 제한은 egress-proxy 의 Timeout 보다 짧아야 시간 초과가 늘 'timeout' 으로 나온다 (4차 리뷰 R4-S2)
+        with open(os.path.join(os.path.dirname(HERE), "scripts", "scan-web.sh"), encoding="utf-8") as f:
+            proxy_timeout = int(re.search(r"'Timeout (\d+)'", f.read()).group(1))
+        self.assertLess(iso_probe.REACH_TIMEOUT, proxy_timeout)
 
 
 class DeniedTest(unittest.TestCase):
