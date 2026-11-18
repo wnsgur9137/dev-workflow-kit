@@ -238,7 +238,7 @@ class _NextFinder:
         return self.hi
 
 
-def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool):
+def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool, next_hdr=None):
     """t[i:] 의 'name=value; name=value' 를 읽어 가릴 값의 (시작, 끝) 목록과 읽은 끝 위치를 돌려준다.
     공백은 이름·'='·';' 앞뒤에 허용, 쌍 구분은 ';'·공백(과 그 사이 ',', 빈 쌍 ';;' 은 건너뜀) — 다음 'name=' 이 아니면 거기서 멈춘다
     (6차 R6-W1: 'a=1 b=…'·'a=1, b=…'). 값은 따옴표(또는 JSON 이스케이프 '\\"') 통째, 아니면 구분자·이스케이프 줄바꿈·'\\"' 앞까지
@@ -260,14 +260,17 @@ def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool):
                 continue
             return spans, i
         v = skip(k + 1)
+        # 값은 다음 쿠키 헤더 앞에서 끝난다 — 읽기 전에 한계를 정해 각 값이 자기 구간만 읽는다. 공백 없이 붙은 헤더
+        # ('a=Set-Cookie: sid=…')를 값으로 삼키지 않고, 'Set-Cookie:a=' 반복에서도 선형이다 (PR #46 리뷰 W1)
+        lim = next_hdr(v) if next_hdr is not None else n
         if t.startswith('"', v) or t.startswith('\\"', v):
             q = '"' if t[v] == '"' else '\\"'
-            e = t.find(q, v + len(q))
-            e = n if e < 0 else e + len(q)
+            e = t.find(q, v + len(q), lim)
+            e = lim if e < 0 else e + len(q)
         else:
             e = v
             # ',' 는 값에 남긴다 — 값 안 ','(비표준)에서 끊으면 뒤쪽이 이름 후보로 밀려 노출된다. 'a=1, b=…' 은 공백 구분으로 잡힌다
-            while e < n and t[e] not in "; \t\r\n" and not (t[e] == "\\" and t[e + 1:e + 2] in ("r", "n", '"')):
+            while e < lim and t[e] not in "; \t\r\n" and not (t[e] == "\\" and t[e + 1:e + 2] in ("r", "n", '"')):
                 e += 1
         spans.append((v, e))
         if first_only:
@@ -291,8 +294,8 @@ def _folded_cookies(t: str, name_end, not_blank, line_end, next_hdr, i: int):
             j += 1
         ne = name_end(j)
         if ne > j and ne < end and t[ne] == "=" and t[j:ne].strip().lower() not in _SET_COOKIE_ATTRS:
-            got, e = _cookie_pairs(t, name_end, not_blank, j, True)
-            spans += [s for s in got if s[1] <= end or s[0] < end]
+            got, e = _cookie_pairs(t, name_end, not_blank, j, True, next_hdr)
+            spans += [s for s in got if s[0] < end]   # 다음 헤더 이름을 값으로 가리지 않게 (구간은 이미 next_hdr 앞에서 끝남)
             i = max(e, c + 1)
         else:
             i = c + 1
@@ -306,23 +309,29 @@ def _mask_cookies(t: str) -> str:
         return t
     name_end, not_blank, line_end = _NextFinder(t, _NAME_END), _NextFinder(t, _NOT_BLANK), _NextFinder(t, _LINE_END)
     next_hdr = _NextFinder(t, _COOKIE_HDR)
-    out, last, pos = [], 0, 0
+    found, pos = [], 0
     while m:
         is_set = m.group(1).lower() == "set-cookie"
-        spans, pos = _cookie_pairs(t, name_end, not_blank, m.end(), is_set)
+        spans, pos = _cookie_pairs(t, name_end, not_blank, m.end(), is_set, next_hdr)
         if is_set and spans:
-            spans += _folded_cookies(t, name_end, not_blank, line_end, next_hdr, spans[0][1])
-        # 다음 헤더는 첫 값의 시작부터 찾는다 — 값에 공백 없이 붙은 헤더('a=Set-Cookie: sid=…')를 건너뛰지 않게 (이슈 #36 R8-S1)
-        # (Set-Cookie 만 — 첫 쌍만 읽으므로 다시 훑는 구간이 짧다. Cookie 는 뒤의 쌍을 모두 읽어 다시 훑으면 이차가 된다)
-        pos = spans[0][0] if (is_set and spans) else max(pos, m.end())
+            # 첫 값의 시작부터 본다 — 'a=1, sid=…' 처럼 ',' 가 첫 값에 들어가도 접힌 쿠키를 찾게 (PR #46 리뷰 S2)
+            spans += _folded_cookies(t, name_end, not_blank, line_end, next_hdr, spans[0][0])
+        # 값이 다음 헤더 앞에서 끝나므로, 읽은 끝부터 다음 헤더를 찾아도 붙은 헤더를 건너뛰지 않는다 (이슈 #36 R8-S1)
         pos = max(pos, m.end())
-        for v, e in sorted(spans):
-            v = max(v, last)              # 앞 헤더가 이미 가린 구간과 겹치면 겹친 부분은 건너뛴다
-            if e <= v:
-                continue
-            out.append(t[last:v] + "[MASKED]")
-            last = e
+        found += [s for s in spans if s[1] > s[0]]
         m = _COOKIE_HDR.search(t, pos)
+    # 모든 헤더의 구간을 모아 정렬·병합한 뒤 한 번에 낸다 — 헤더마다 바로 내면 나중 헤더의 구간이 이미 낸 틈에 놓일 때
+    # 버려지거나 텍스트가 중복된다 (PR #46 리뷰 S1)
+    out, last = [], 0
+    for v, e in sorted(found):
+        if e <= last:
+            continue
+        if v < last:
+            v = last
+        else:
+            out.append(t[last:v])
+        out.append("[MASKED]")
+        last = e
     out.append(t[last:])
     return "".join(out)
 

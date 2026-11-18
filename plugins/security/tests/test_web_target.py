@@ -211,7 +211,15 @@ class RedactTest(unittest.TestCase):
             "cb#access_token=SEC14": "cb#[MASKED]",
             "`http://h/a?code=L2`": "`http://h/a?code=[MASKED]`",
             # 이슈 #36: 값에 붙은 헤더, 접힌 Set-Cookie(Expires 의 ',' 는 건너뜀), Cookie 의 값 없는 토큰, 3중 인코딩
-            "Set-Cookie: a=Set-Cookie: sid=SECRET1": "Set-Cookie: a=[MASKED] sid=[MASKED]",
+            "Set-Cookie: a=Set-Cookie: sid=SECRET1": "Set-Cookie: a=Set-Cookie: sid=[MASKED]",   # 값은 다음 헤더 앞에서 끝남
+            "Set-Cookie:a=Set-Cookie:sid=SECRET9": "Set-Cookie:a=Set-Cookie:sid=[MASKED]",
+            # PR #46 리뷰 S1·S2·T1: 겹치는 구간(중복·누락 없음), 첫 값에 ',' 가 든 접힘, 줄 넘김, 다음 헤더 이름
+            "Set-Cookie: a=Cookie:x=1; sid=SECRETX, b=c": "Set-Cookie: a=Cookie:x=[MASKED]; sid=[MASKED] b=[MASKED]",
+            "Set-Cookie: a=Cookie:x=1;sid=S, b=c": "Set-Cookie: a=[MASKED];sid=[MASKED] b=[MASKED]",
+            "Set-Cookie: a=1, sid=SECRETX": "Set-Cookie: a=[MASKED] sid=[MASKED]",
+            "Set-Cookie: a=1\nfoo, bar=baz": "Set-Cookie: a=[MASKED]\nfoo, bar=baz",
+            "Set-Cookie: a=1\\r\\nX-Note: hi, bar=baz": "Set-Cookie: a=[MASKED]\\r\\nX-Note: hi, bar=baz",
+            "Set-Cookie: a=1, b=Set-Cookie: c=1": "Set-Cookie: a=[MASKED] b=Set-Cookie: c=[MASKED]",
             "Set-Cookie: a=1; Path=/, sid=SECRET2": "Set-Cookie: a=[MASKED]; Path=/, sid=[MASKED]",
             "Set-Cookie: a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT, sid=SECRET4; Path=/":
                 "Set-Cookie: a=[MASKED]; Expires=Wed, 21 Oct 2026 07:28:00 GMT, sid=[MASKED]; Path=/",
@@ -274,14 +282,21 @@ class RedactTest(unittest.TestCase):
         for pat in ("-/", "/a", "?/", "%2", "//", "%25", "Cookie: a=1;", "cookie:a=;", "\\u002f", "a;=", "a#=",
                     "cookie:", "set-cookie:/", 'cookie:"', "Cookie: " + "a" * 300,
                     "Cookie: a=1 x ", " ;", ("cookie:", " "), ("Cookie: a=1 cookie:", "\t"),
-                    "Set-Cookie: a=1, ", "Set-Cookie: a=", ("Set-Cookie: a=1; Path=/", ", x"), ("Cookie: x", "; x,")):
+                    "Set-Cookie: a=1, ", "Set-Cookie: a=", ("Set-Cookie: a=1; Path=/", ", x"), ("Cookie: x", "; x,"),
+                    # PR #46 리뷰 W1: 공백 없이 이어진 Set-Cookie — 값이 다음 헤더까지 한 덩어리
+                    ("Set-Cookie:a=", ""), ("set-cookie:a=-", ""), ("Set-Cookie:a=\\u000a", ""), ("Set-Cookie:a=", ";,"),
+                    ('Set-Cookie: a="', "")):
             # (패턴, 꼬리): 꼬리를 n 번 붙인다 — 헤더 여럿이 같은 긴 공백 앞에서 끝나는 입력 (7차 리뷰 R7-S1)
             pat, tail = pat if isinstance(pat, tuple) else (pat, None)
-            def t(n):
+            def t1(n):
                 s = time.perf_counter()
                 # 기본 꼬리는 긴 URL 토큰 하나(' //bbb…') — 사용자 정보 정규식 같은 긴 토큰 경로를 넓게 본다 (이슈 #36, PR #34 8차 R8-N1)
                 w.redact_text(pat * n + (tail * n if tail is not None else " //" + "b" * n))
                 return time.perf_counter() - s
+
+            def t(n):
+                # 3번 재서 가장 짧은 값 — 한 번 재면 일시적인 지연에 흔들린다 (PR #34 7차 R7-N2, PR #46 에서 실제로 한 번 흔들림)
+                return min(t1(n) for _ in range(3))
             n = 2000
             base = t(n)
             while base < 0.01 and n < 2_000_000:
