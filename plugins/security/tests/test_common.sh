@@ -325,6 +325,20 @@ test_built_image_ref_and_d6_follow_the_build_record() {
   printf 'b\n' >"$other/docker/egress-proxy/extra.conf"
   i3=$(SEC_PLUGIN=$other sec_build_input egress-proxy)
   [ "$i3" != "$i2" ] || fail "문맥의 파일 내용이 바뀌어도 입력이 같음"
+  # 숨김·편집기 임시 파일은 입력에 넣지 않고, 실행 비트는 넣고, 일반 파일이 아닌 항목은 실패한다 (이슈 #36)
+  local i4
+  printf 'b\n' >"$other/docker/egress-proxy/.DS_Store"
+  printf 'b\n' >"$other/docker/egress-proxy/Dockerfile.swp"
+  printf 'b\n' >"$other/docker/egress-proxy/notes~"
+  assert_eq "$(SEC_PLUGIN=$other sec_build_input egress-proxy)" "$i3"
+  chmod +x "$other/docker/egress-proxy/extra.conf"
+  i4=$(SEC_PLUGIN=$other sec_build_input egress-proxy)
+  [ "$i4" != "$i3" ] || fail "실행 비트가 바뀌어도 입력이 같음"
+  mkfifo "$other/docker/egress-proxy/pipe"
+  # shellcheck disable=SC2317  # assert_status 가 부른다
+  _input_fifo() { SEC_PLUGIN=$other sec_build_input egress-proxy; }
+  assert_status 1 _input_fifo
+  rm -f "$other/docker/egress-proxy/pipe"
   rm "$other/docker/egress-proxy/Dockerfile"
   # shellcheck disable=SC2317  # assert_status 가 부른다
   _input_in_other() { SEC_PLUGIN=$other sec_build_input egress-proxy; }

@@ -250,10 +250,18 @@ test_web_unreadable_proxy_log_is_not_reported_as_none() {
   [ ! -e "$WEB_RUN/raw/proxy-denied.json" ] || fail "빈 로그로 차단 목록이 만들어짐"
 }
 
+# 가짜 docker 의 장시간 run(sleep)을 정리한다 — 테스트 함수는 별도 프로세스라 EXIT trap 으로 건다
+_kill_fake_runs() {
+  local p
+  [ -f "${FAKE_RUN_PIDFILE:-}" ] && while read -r p; do kill "$p" 2>/dev/null; done <"$FAKE_RUN_PIDFILE"
+  return 0
+}
+
 # 리뷰 W3: 중단 신호에도 스택을 내린다 (trap)
 test_web_term_during_scan_removes_stack() {
   setup_web_fake
   export FAKE_COMPOSE_RUN_SLEEP=30 FAKE_RUN_PIDFILE="$SEC_TMP/run.pids"
+  trap _kill_fake_runs EXIT   # 판정이 실패(exit)해도 가짜 sleep 을 남기지 않는다 (이슈 #36, PR #34 8차 R8-N2)
   local pid rc start
   "$SCAN_WEB" http://host.docker.internal:3000/ >/dev/null 2>"$SEC_TMP/scan.err" &
   pid=$!
@@ -265,8 +273,6 @@ test_web_term_during_scan_removes_stack() {
   assert_eq "$rc" 143 "(TERM 종료코드)"
   [ $(($(date +%s) - start)) -le 5 ] || fail "TERM 뒤 정리에 5초 넘게 걸림"
   grep -q ' down -v' "$FAKE_LOG" || fail "TERM 뒤 down -v 가 호출되지 않음"
-  local p
-  [ -f "$FAKE_RUN_PIDFILE" ] && while read -r p; do kill "$p" 2>/dev/null; done <"$FAKE_RUN_PIDFILE"
   return 0
 }
 
@@ -275,6 +281,7 @@ test_web_term_during_scan_removes_stack() {
 test_web_term_with_closed_stderr_pipe_still_cleans_up() {
   setup_web_fake
   export FAKE_COMPOSE_RUN_SLEEP=30 FAKE_RUN_PIDFILE="$SEC_TMP/run.pids"
+  trap _kill_fake_runs EXIT   # 판정이 실패(exit)해도 가짜 sleep 을 남기지 않는다 (이슈 #36, PR #34 8차 R8-N2)
   local pid rc rpid fifo="$SEC_TMP/err.fifo"
   mkfifo "$fifo"
   cat "$fifo" >/dev/null &
@@ -289,8 +296,49 @@ test_web_term_with_closed_stderr_pipe_still_cleans_up() {
   rc=$?
   grep -q ' down -v' "$FAKE_LOG" || fail "파이프가 닫힌 뒤 TERM 에 down -v 가 호출되지 않음 (rc=$rc)"
   assert_eq "$rc" 143 "(TERM 종료코드)"
-  local p
-  [ -f "$FAKE_RUN_PIDFILE" ] && while read -r p; do kill "$p" 2>/dev/null; done <"$FAKE_RUN_PIDFILE"
+  return 0
+}
+
+# 이슈 #36 (PR #37 2차 R2-N2): 버전 라벨이 없으면 summary 에 unknown 으로 보인다
+test_web_missing_proxy_version_label_is_unknown() {
+  setup_web_fake
+  local input
+  input=$(awk '{print $3}' "$FAKE_BUILD_STATE")
+  echo "dwk-security/egress-proxy:x $FAKE_PROXY_ID $input" >"$FAKE_BUILD_STATE"
+  printf '{"site":[]}' >"$SEC_TMP/zap.json"
+  FAKE_COMPOSE_RUN_FILE="$SEC_TMP/zap.json" _web_scan
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "egress-proxy: \`unknown\`"
+  # 라벨에 탭·줄바꿈이 있어도 메타 항목이 깨져 빠지지 않는다
+  FAKE_VERSION_LABEL=$(printf '1.0\tx\ny') FAKE_COMPOSE_RUN_FILE="$SEC_TMP/zap.json" _web_scan
+  assert_contains "$(cat "$WEB_RUN/summary.md")" "egress-proxy: \`1.0xy\`"
+}
+
+# 이슈 #36 (PR #34 8차 R8-N3): 파이프가 닫히고 스택 내리기까지 실패해도 진행 로그는 가리고, 경고는 run.log 에 남는다
+test_web_closed_pipe_and_failed_down_still_redact_and_log() {
+  setup_web_fake
+  export FAKE_COMPOSE_RUN_SLEEP=30 FAKE_RUN_PIDFILE="$SEC_TMP/run.pids" FAKE_COMPOSE_DOWN_RC=1
+  export FAKE_COMPOSE_RUN_STDERR_FILE="$SEC_TMP/zap-progress.log"
+  printf 'Job spider error accessing URL http://host.docker.internal:3000/cb?code=SECRETQ1 status code returned : 500\n' >"$FAKE_COMPOSE_RUN_STDERR_FILE"
+  trap _kill_fake_runs EXIT
+  local pid rc rpid fifo="$SEC_TMP/err.fifo" run
+  mkfifo "$fifo"
+  cat "$fifo" >/dev/null &
+  rpid=$!
+  "$SCAN_WEB" http://host.docker.internal:3000/ >/dev/null 2>"$fifo" &
+  pid=$!
+  for _ in $(seq 1 50); do grep -q ' run --rm --no-deps -T zap' "$FAKE_LOG" 2>/dev/null && break; sleep 0.2; done
+  sleep 0.5
+  kill "$rpid"
+  wait "$rpid" 2>/dev/null
+  kill -TERM "$pid"
+  wait "$pid"
+  rc=$?
+  assert_eq "$rc" 143 "(TERM 종료코드)"
+  run=$(find "$DWK_SECURITY_DATA_DIR/reports" -mindepth 1 -maxdepth 1 -type d -name '*-web' | sort | tail -n 1)
+  [ -n "$run" ] || fail "실행 폴더 없음"
+  grep -q 'code=\[MASKED\]' "$run/raw/zap.log" || fail "zap.log 가 가려지지 않음: $(cat "$run/raw/zap.log")"
+  if grep -q 'SECRETQ1' "$run/raw/zap.log"; then fail "zap.log 에 질의값이 남음"; fi
+  assert_contains "$(cat "$run/run.log")" "ZAP 스택을 내리지 못했습니다"
   return 0
 }
 

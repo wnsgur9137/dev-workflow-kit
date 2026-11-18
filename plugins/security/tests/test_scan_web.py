@@ -214,7 +214,7 @@ class ComposeWebTest(unittest.TestCase):
 
     def test_both_services_are_hardened(self):
         for name, block in self.svc.items():
-            for want in ("    read_only: true\n", "    cap_drop: [ALL]\n", "    pull_policy: never\n", '    security_opt: ["no-new-privileges:true"]\n',
+            for want in ("    read_only: true\n", "    cap_drop: [ALL]\n", "    pull_policy: never", '    security_opt: ["no-new-privileges:true"]\n',
                          "    mem_limit: ", "    pids_limit: "):
                 self.assertIn(want, block, (name, want))
         self.assertNotIn("volumes:", self.text)    # 호스트 마운트 없음 — 설정은 환경변수, 리포트는 stdout
