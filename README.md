@@ -9,7 +9,7 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 | 플러그인 | 상태 | 커맨드 | 설명 |
 |---|---|---|---|
 | `workflow` | ✅ 사용 가능 | `/workflow:commit` `/workflow:create-pr` `/workflow:pr-review` `/workflow:apply-review` `/workflow:pipeline` | 커밋부터 병합까지 |
-| `security` | 🚧 구현 중 (P2 scan-app) | `/security:scan-code`, `/security:scan-app`, `/security:scan-web` (예정) | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
+| `security` | 🚧 구현 중 (P3 scan-web) | `/security:scan-code`, `/security:scan-app`, `/security:scan-web` | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
 
 ## 목차
 
@@ -117,7 +117,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 
 ## security 플러그인
 
-> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성)와 `/security:scan-app`(APK·AAB·IPA 정적 분석)을 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다(`/security:scan-web`은 아직 없음). 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
+> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성), `/security:scan-app`(APK·AAB·IPA 정적 분석), `/security:scan-web`(허용목록 웹 대상의 수동 점검)을 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다. 남은 단계는 P4 마무리(베이스라인 비교·보관 정리 등)입니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
 
 개인 앱·웹 프로젝트를 **Claude Code 안에서, 외부 전송 없이** 점검합니다. 모든 도구는 네트워크가 차단된 컨테이너에서 실행되고, Claude는 정규화된 요약 리포트만 읽습니다. 설계: [보안 툴킷](docs/security/보안%20툴킷.md)
 
@@ -186,7 +186,28 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 - AAB 는 툴킷이 universal APK 로 바꿔 분석합니다 (서명은 점검하지 않음). Flutter·React Native 는 산출물에서 판정해 `--dart-define`·JS 번들 안내와 스택별 수동 체크리스트를 붙입니다.
 - MobSF 리포트에 든 시크릿 원문·문자열 덤프는 리포트 폴더에 남기지 않습니다 (키 이름만). MobSF API 키는 실행마다 새로 만듭니다.
 
-모든 컨테이너는 `--network none`(MobSF 는 내부 전용 네트워크)·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.
+```
+/security:scan-web http://host.docker.internal:3000/
+/security:scan-web https://staging.my-app.example/
+```
+
+| 도구 | 점검 | 비고 |
+|---|---|---|
+| OWASP ZAP 2.17.0 (baseline) | 보안 헤더(CSP·HSTS·X-Frame-Options 등) 누락, 쿠키 속성(Secure·HttpOnly·SameSite), 서버 버전·오류 정보 노출 | **수동(passive) 규칙만** — 공격 요청을 보내지 않음(active·full scan 없음). 인증 없이 크롤링(스파이더 3분). 이미지 약 3.6GB, VM 메모리 6GB 권장 |
+| egress-proxy (tinyproxy 1.11) | ZAP 의 유일한 출구 | 이번 대상의 출처(scheme+host+port) 하나만 열고 나머지는 403 + 로그 → summary 의 "프록시가 막은 요청" |
+
+- **허용목록이 먼저 필요합니다.** `~/.config/dev-workflow-kit/security/targets.allowlist` 에 직접 소유·운영하는 대상을 **사용자가 직접** 한 줄에 하나씩 적습니다 (`scheme://host[:port]`, 경로·와일드카드 없음, `chmod 600`). 목록에 없거나 주석에 `prod` 가 붙은 대상은 컨테이너를 띄우기 전에 거부합니다. Claude 는 권한 설정으로 이 파일을 고칠 수 없습니다.
+
+  ```text
+  # 직접 운영하는 대상만
+  http://host.docker.internal:3000      # 로컬 개발 서버 (Colima 는 host.lima.internal 도 됨)
+  https://staging.my-app.example
+  ```
+
+- 호스트에서 띄운 개발 서버는 `localhost` 대신 `host.docker.internal` 로 지정합니다 (컨테이너 안의 `localhost` 는 컨테이너 자신).
+- 소스맵 공개·API 에러 스택트레이스·로그인 뒤 페이지처럼 baseline 이 확인하지 못하는 항목은 summary 의 수동 체크리스트로 붙습니다.
+
+모든 컨테이너는 `--network none`(MobSF 는 내부 전용 네트워크, ZAP 은 허용목록 프록시만 닿는 내부 네트워크)·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다.
 
 ### 권한 설정
 

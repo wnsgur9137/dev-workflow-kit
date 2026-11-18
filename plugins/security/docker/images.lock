@@ -22,3 +22,10 @@ osv-scanner  ghcr.io/google/osv-scanner  v2.7.0   sha256:4f3b7e2c64b9d38a5febc5a
 # --- P2 /security:scan-app (2026-11-15 고정, v4.6.4 는 2026-11-01 공개 — 7일 이상) ---
 # mobsf-client 도 같은 이미지를 쓴다 (docker/compose.yml). 이미지 2.5GB, 권장 VM 메모리 8GB
 mobsf        opensecurity/mobile-security-framework-mobsf  v4.6.4  sha256:cf1465a3cc0c95488b9a6cdb1c7799d4b576d391ee28232c221f6a196bf2f74c  linux/amd64,linux/arm64
+
+# --- P3 /security:scan-web (2026-11-17 고정) ---
+# ZAP 2.17.0 은 2026-11-03 공개(14일). 이미지 3.6GB. baseline(passive)만 쓴다 (ADR-005)
+zap           zaproxy/zap-stable  2.17.0  sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af  linux/amd64,linux/arm64
+# 허용목록 이그레스 프록시 (Q4 tinyproxy). 공식 이미지가 없어 비루트·최소 구성인 kalaksi/tinyproxy 를 쓴다
+# (1.7 = tinyproxy 1.11.3 · alpine 3.24.2, 2026-09-25 공개). 이미지의 기본 시작 스크립트는 쓰지 않고 compose-web.yml 이 설정을 넣는다
+egress-proxy  kalaksi/tinyproxy   1.7     sha256:5a65354cbb5f9c0fdcc8de3d3af8dd1c5ea072b3a1f52e5961a9a5cce6eba227  linux/amd64,linux/arm64

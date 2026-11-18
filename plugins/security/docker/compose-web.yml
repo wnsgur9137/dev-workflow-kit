@@ -1,0 +1,84 @@
+# /security:scan-web 의 ZAP baseline 스택 (네트워크 N2 — 허용목록 이그레스)
+#   docs/security/02 도구/OWASP ZAP.md · docs/security/04 보안/네트워크 격리.md
+#
+# scan-web.sh 만 이 파일을 쓴다. 실행마다 무작위 프로젝트 이름(-p)으로 띄우고 끝나면 down -v 로 컨테이너·네트워크를 지운다.
+# 값은 모두 scan-web.sh 가 환경변수로 넘긴다 (없으면 compose 가 오류로 멈춘다 — ${VAR:?}).
+#
+# - zap 은 web-internal(internal: true)에만 연결된다 → 프록시를 거치지 않고는 인터넷·호스트로 나갈 경로가 없다.
+# - egress-proxy(tinyproxy)만 web-internal 과 egress(bridge) 둘 다에 연결된다. 필터는 이번 대상의 출처 하나만 열고
+#   나머지는 모두 403 으로 막고 로그에 남긴다 (FilterDefaultDeny).
+# - 프록시 설정·필터는 마운트하지 않고 환경변수로 넘겨 tmpfs 에 쓴다 — Docker 런타임의 폴더 공유 범위와 상관없이 같은 설정이 들어간다.
+# - ports 를 두지 않는다 → 호스트에서 ZAP API·프록시에 접속할 수 없다.
+# - ZAP 은 -silent 로 업데이트 확인·애드온 설치·call-home 을 끈다 (끄지 않으면 zap-baseline.py 가 애드온 업데이트를 받으러 나간다).
+#   혹시 나가더라도 프록시 필터에 막혀 차단 목록에 드러난다.
+# - 리포트는 컨테이너 tmpfs(/zap/wrk)에 쓰고 stdout 으로만 내보낸다 (호스트 쓰기 마운트 없음).
+
+services:
+  egress-proxy:
+    image: ${DWK_PROXY_IMAGE:?}
+    networks: [web-internal, egress]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 256m
+    memswap_limit: 256m
+    environment:
+      DWK_PROXY_CONF: ${DWK_PROXY_CONF:?}
+      DWK_PROXY_FILTER: ${DWK_PROXY_FILTER:?}
+    tmpfs:
+      - /run/dwk:rw,size=1m,mode=0700,uid=57981,gid=57981
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'printf "%s\n" "$$DWK_PROXY_CONF" >/run/dwk/tinyproxy.conf && printf "%s\n" "$$DWK_PROXY_FILTER" >/run/dwk/filter && exec /usr/bin/tinyproxy -d -c /run/dwk/tinyproxy.conf'
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8888 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  zap:
+    image: ${DWK_ZAP_IMAGE:?}
+    profiles: [scan]
+    networks: [web-internal]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 1024
+    # 대상이 큰 사이트여도 VM 전체(다른 컨테이너 포함)를 멈추지 않게 메모리 상한을 둔다
+    mem_limit: 3g
+    memswap_limit: 3g
+    working_dir: /zap/wrk
+    environment:
+      DWK_TARGET_URL: ${DWK_TARGET_URL:?}
+      DWK_SPIDER_MIN: ${DWK_SPIDER_MIN:?}
+      DWK_PASSIVE_MIN: ${DWK_PASSIVE_MIN:?}
+      # ~/.docker/config.json 의 proxies 가 넣는 프록시 변수를 비운다 — ZAP 은 아래 -config 로만 egress-proxy 를 쓴다.
+      # scan-web.sh 의 격리 확인은 값이 남아 있으면 중단한다
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      FTP_PROXY: ""
+      ALL_PROXY: ""
+      NO_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      ftp_proxy: ""
+      all_proxy: ""
+      no_proxy: ""
+    # 이미지 사용자 zap(1000)으로 돈다 — Java 가 passwd 의 홈을 쓰므로 호스트 uid 로는 시작하지 못한다(2.17.0 실측)
+    tmpfs:
+      - /home/zap:rw,size=512m,uid=1000,gid=1000
+      - /zap/wrk:rw,size=256m,uid=1000,gid=1000
+      - /tmp:rw,size=512m,mode=1777
+    # baseline(passive)만 실행한다. 대상·시간은 환경변수로만 받고, 그 밖의 ZAP 인자는 받지 않는다 (ADR-005).
+    # 진행 로그는 stderr, 리포트 JSON 은 stdout. 종료코드는 zap-baseline.py 의 것을 그대로 낸다 (-I: 경고로는 실패하지 않음)
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'zap-baseline.py -t "$$DWK_TARGET_URL" -J zap.json -m "$$DWK_SPIDER_MIN" -T "$$DWK_PASSIVE_MIN" -I -s -z "-silent -config network.connection.httpProxy.enabled=true -config network.connection.httpProxy.host=egress-proxy -config network.connection.httpProxy.port=8888" >&2; rc=$$?; if [ -s zap.json ]; then cat zap.json; fi; exit $$rc'
+
+networks:
+  web-internal:
+    internal: true
+  egress: {}

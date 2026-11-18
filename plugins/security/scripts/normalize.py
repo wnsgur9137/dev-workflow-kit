@@ -4,7 +4,7 @@
 docs/security/01 개요/리포트 포맷.md 의 스키마를 따른다. 표준 라이브러리만 사용한다.
 
 사용:
-  normalize.py --run-dir DIR --kind code|app --target PATH
+  normalize.py --run-dir DIR --kind code|app|web --target PATH
                [--profiles-tsv FILE] [--meta-json FILE]
 
 입력 (DIR/raw/):
@@ -17,6 +17,9 @@ docs/security/01 개요/리포트 포맷.md 의 스키마를 따른다. 표준 �
   --kind app:
   mobsf-full.json      MobSF report_json 원본 — 시크릿 원문이 들어 있으므로 정제본 mobsf.json 을 쓰고 지운다
   gitleaks-artifact.json  Gitleaks dir 모드 (산출물 ZIP 내부, --redact)
+  --kind web:
+  zap.json             ZAP baseline -J 리포트 (passive 규칙만)
+  proxy-denied.json    egress-proxy 가 막은 요청 (scripts/lib/web_target.py denied)
 
 출력 (DIR/): findings.json, summary.md, meta.json (모두 권한 600)
 
@@ -41,6 +44,7 @@ sys.path.insert(0, os.path.join(HERE, "lib"))
 
 import mobsf_report as _mobsf  # noqa: E402
 import profiles as _profiles  # noqa: E402
+import web_target as _web  # noqa: E402
 
 SEVERITIES = ("critical", "high", "medium", "low", "info")
 EVIDENCE_MAX = 200
@@ -50,7 +54,8 @@ SUMMARY_TOP_OTHERS = 10     # Medium 이하 상위 N 개
 SECRET_EVIDENCE = "(시크릿 탐지 — 원문은 리포트에 남기지 않습니다. 위치만 참고하세요)"
 # 스캔 종류별로 status.tsv 에 반드시 있어야 하는 도구 (행이 없으면 도구가 기록 전에 비정상 종료한 것)
 EXPECTED_TOOLS = {"code": ("semgrep", "gitleaks-git", "gitleaks-dir", "osv-scanner", "checks"),
-                  "app": ("mobsf", "gitleaks-artifact")}
+                  "app": ("mobsf", "gitleaks-artifact"),
+                  "web": ("zap",)}
 OSV_STALE_DAYS = 7
 CONTAINER_PREFIXES = ("/src/", "/repo/")
 ARTIFACT_PREFIX = "/in/artifact.zip!"   # scan-app.sh 의 Gitleaks 마운트 — ZIP 안 경로 앞에 붙는다
@@ -624,6 +629,81 @@ def parse_mobsf(data, platform_profile, converted_aab=False):
     return out, warns
 
 
+# ZAP riskcode → severity (docs/security/02 도구/OWASP ZAP.md). confidence 0 은 ZAP 이 오탐으로 표시한 것이라 뺀다
+_ZAP_RISK = {"3": "high", "2": "medium", "1": "low", "0": "info"}
+ZAP_INSTANCES_MAX = 5
+
+
+def _strip_html(text) -> str:
+    t = re.sub(r"(?i)<br\s*/?>|</p>\s*<p>", "\n", str(text or ""))
+    t = re.sub(r"<[^>]{0,2000}>", "", t)
+    return t.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&#39;", "'").replace("&amp;", "&")
+
+
+def parse_zap(data):
+    """ZAP baseline JSON(-J) → findings. 알림(규칙) 하나를 한 건으로 묶고 처음 몇 곳의 URL·근거만 남긴다.
+    URL·근거·설명은 대상 웹이 보낸 응답에서 나온 신뢰하지 않는 데이터다 (질의 문자열 값은 토큰일 수 있어 가린다)."""
+    if not isinstance(data, dict) or not isinstance(data.get("site"), list):
+        raise ValueError("ZAP 리포트에 site 목록이 없습니다")
+    out = []
+    for site in data["site"]:
+        if not isinstance(site, dict):
+            continue
+        site_name = clean_ident(site.get("@name"), 300)
+        for a in site.get("alerts") or []:
+            if not isinstance(a, dict) or str(a.get("confidence")) == "0":
+                continue
+            ref = clean_ident(a.get("alertRef") or a.get("pluginid") or "?", 40)
+            insts = [i for i in (a.get("instances") or []) if isinstance(i, dict)]
+            urls = [clean_ident(_web._redact_url(str(i.get("uri") or "")), 300) for i in insts[:ZAP_INSTANCES_MAX]]
+            ev = []
+            for i in insts[:ZAP_INSTANCES_MAX]:
+                bits = [f"{i.get('method') or ''} {_web._redact_url(str(i.get('uri') or ''))}".strip()]
+                if i.get("param"):
+                    bits.append(f"param={i['param']}")
+                if i.get("evidence"):
+                    # 근거는 응답 조각이다 — 그 안의 URL 도 질의 문자열·조각을 가린다 (PR #34 리뷰 S1)
+                    bits.append("evidence=" + _web.redact_text(i["evidence"]))
+                ev.append(" · ".join(bits))
+            try:
+                count = int(a.get("count") or len(insts))
+            except (TypeError, ValueError):
+                count = len(insts)
+            if count > len(ev):
+                ev.append(f"(외 {count - len(ev)}곳)")
+            refs = []
+            try:
+                if int(a.get("cweid") or 0) > 0:
+                    refs.append(f"CWE-{int(a['cweid'])}")
+            except (TypeError, ValueError):
+                pass
+            refs += [clean_text(u, 120, True) for u in re.findall(r"https?://[^\s<>\"']+", str(a.get("reference") or ""))[:3]]
+            out.append({
+                "id": finding_id("zap", ref, site_name),
+                "tool": "zap",
+                "rule_id": f"zap.{ref}",
+                "severity": _ZAP_RISK.get(str(a.get("riskcode")), "info"),
+                "category": "web",
+                "profile": "web",
+                "title": clean_text(a.get("alert") or a.get("name") or ref, TITLE_MAX, True),
+                "location": {"file": None, "line": None, "url": urls[0] if urls else (site_name or None), "package": None},
+                "evidence": clean_text("\n".join(ev), EVIDENCE_MAX * 3),
+                "fix_hint": clean_text(_strip_html(a.get("solution")), 400),
+                "references": refs,
+            })
+    return out, []
+
+
+def load_web_checklist():
+    """scan-web 리포트에 붙이는 수동 확인 항목 — checklists/scan-web.md (툴킷 파일, 신뢰하는 입력)."""
+    path = os.path.join(CHECKLIST_DIR, "scan-web.md")
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        items = [ln.strip()[6:].strip() for ln in f if ln.strip().startswith("- [ ] ")]
+    return [("scan-web", items)] if items else None
+
+
 def app_warnings(report, labels):
     """산출물 점검에서 결과 해석에 필요한 안내 (디버그 서명, Flutter --dart-define, RN 번들)."""
     w = []
@@ -660,7 +740,8 @@ def load_checklists(detected, defs):
 # ---------------------------------------------------------------------------
 # 상태·경고
 # ---------------------------------------------------------------------------
-def read_status(path):
+def read_status(path, redact_urls=False):
+    """redact_urls: 메모 안의 URL 값을 가린다 — scan-web 의 실패 메모는 ZAP 진행 로그 꼬리라 대상 URL 이 들어 있다 (PR #34 2차 리뷰 W-A)."""
     rows = []
     if not os.path.exists(path):
         return rows
@@ -670,6 +751,8 @@ def read_status(path):
             if len(parts) < 3:
                 continue
             note = parts[3] if len(parts) > 3 else ""
+            if redact_urls:
+                note = _web.redact_text(note)
             rows.append({"tool": parts[0], "status": parts[1], "exit_code": parts[2],
                          "note": clean_text(note, 300, True)})
     return rows
@@ -760,7 +843,7 @@ def _loc(f) -> str:
     return s
 
 
-def render_summary(meta, findings, stats, status_rows, warnings, errors, checklists=None) -> str:
+def render_summary(meta, findings, stats, status_rows, warnings, errors, checklists=None, blocked=None) -> str:
     L = []
     L.append(f"# 보안 점검 요약 — {meta['kind']}")
     L.append("")
@@ -771,7 +854,10 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors, checkli
     L.append(f"- run-id: `{meta['run_id']}`")
     L.append(f"- 대상: {_code(meta['target'])}")
     L.append(f"- 시간: {meta.get('started_at', '?')} → {meta.get('finished_at', '?')}")
-    L.append(f"- 프로파일: {', '.join(_code(p) for p in meta['profiles']) if meta['profiles'] else '(감지 없음 — 공통 기반만 적용)'}")
+    if meta["kind"] == "web":
+        L.append("- 프로파일: (URL 점검 — 해당 없음)")
+    else:
+        L.append(f"- 프로파일: {', '.join(_code(p) for p in meta['profiles']) if meta['profiles'] else '(감지 없음 — 공통 기반만 적용)'}")
     if meta.get("docker_context"):
         L.append(f"- Docker 컨텍스트: {_code(meta['docker_context'])}")
     for t in meta.get("tools", []):
@@ -826,8 +912,21 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors, checkli
     # 경고에는 대상 저장소의 경로·파일 이름이 들어간다
     L.append(_fence("\n".join(f"- {clean_text(w, 300, True)}" for w in warnings)) if warnings else "없음")
     L.append("")
+    if blocked is not None:
+        L.append("## 프록시가 막은 요청")
+        L.append("egress-proxy 가 허용목록(이번 대상의 출처) 밖이라 막은 요청입니다. 대상 페이지가 외부 리소스를 부르거나, "
+                 "점검 도구가 예상 밖의 곳으로 나가려 한 흔적입니다. 질의 문자열·경로 매개변수 값과 조각은 가렸습니다.")
+        if not blocked.get("total"):
+            L.append("")
+            L.append("없음")
+        else:
+            L.append("")
+            L.append(f"총 {blocked['total']}건 · 서로 다른 URL {blocked['unique']}개"
+                     + (f" (처음 {len(blocked['urls'])}개만 표시)" if blocked["unique"] > len(blocked["urls"]) else "") + " (데이터):")
+            L.append(_fence("\n".join(f"- {clean_ident(u, 300)}" for u in blocked["urls"])))
+        L.append("")
     if checklists:
-        L.append("## 수동 확인 (스택별 체크리스트)")
+        L.append("## 수동 확인 (체크리스트)" if meta["kind"] == "web" else "## 수동 확인 (스택별 체크리스트)")
         L.append("도구로 확인할 수 없는 항목입니다. 릴리스 전에 사람이 확인하세요.")
         for name, items in checklists:
             L.append("")
@@ -904,7 +1003,7 @@ def main(argv=None) -> int:
         with open(args.meta_json, encoding="utf-8") as f:
             extra_meta = json.load(f)
 
-    status_rows = read_status(os.path.join(raw, "status.tsv"))
+    status_rows = read_status(os.path.join(raw, "status.tsv"), redact_urls=args.kind == "web")
     seen_tools = {r["tool"] for r in status_rows}
     for t in EXPECTED_TOOLS.get(args.kind, ()):
         if t not in seen_tools:
@@ -971,6 +1070,20 @@ def main(argv=None) -> int:
             os.unlink(full)
         run_parser("gitleaks-artifact.json", lambda d: (parse_gitleaks(d, "artifact"), []))
 
+    blocked = None
+    if args.kind == "web":
+        run_parser("zap.json", parse_zap)
+        data, err = _load_json(os.path.join(raw, "proxy-denied.json"))
+        if isinstance(data, dict) and isinstance(data.get("urls"), list):
+            try:
+                blocked = {"total": int(data.get("total") or 0), "unique": int(data.get("unique") or 0),
+                           "urls": [str(u) for u in data["urls"][:_web.DENIED_MAX]]}
+            except (TypeError, ValueError):
+                blocked = None
+        if blocked is None:
+            # 차단 목록을 못 읽으면 "없음"으로 보이지 않게 경고로 드러낸다
+            warnings.append("프록시 차단 기록을 읽지 못했습니다 — 막힌 요청이 있었는지 알 수 없습니다 (raw/proxy.log 확인)")
+
     # 중복 제거 (id 기준) 후 심각도·위치 순 정렬
     uniq = {}
     for f in findings:
@@ -993,6 +1106,8 @@ def main(argv=None) -> int:
     if args.kind == "app":
         warnings += app_warnings(mobsf_report, [n for n, _r, _e in detected])
         checklists = load_checklists(detected, defs)
+    if args.kind == "web":
+        checklists = load_web_checklist()
 
     run_id = os.path.basename(run_dir)
     meta = {
@@ -1017,7 +1132,7 @@ def main(argv=None) -> int:
     _write(os.path.join(run_dir, "findings.json"), json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     _write(os.path.join(run_dir, "meta.json"), json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
     _write(os.path.join(run_dir, "summary.md"),
-           render_summary(meta, findings, stats, status_rows, warnings, errors, checklists))
+           render_summary(meta, findings, stats, status_rows, warnings, errors, checklists, blocked))
     return 0
 
 
