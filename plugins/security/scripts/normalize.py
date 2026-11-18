@@ -223,7 +223,7 @@ def mask_literal_values(text: str, path: str = "") -> str:
 def clean_text(text, limit: int, single_line: bool = False) -> str:
     if text is None:
         return ""
-    text = str(text)
+    text = _percent_surrogates(str(text))      # 경고·제목에 든 잘못된 UTF-8 이름도 같은 표기로 (PR #44 리뷰 S2)
     text = _CONTROL.sub("", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     if single_line:
@@ -237,6 +237,11 @@ def clean_text(text, limit: int, single_line: bool = False) -> str:
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
+def _percent_surrogates(t: str) -> str:
+    """짝 없는 서로게이트 → UTF-8(surrogatepass) 퍼센트 표기 (mobsf_report.safe_ident 와 같은 표기, 이슈 #33)."""
+    return _SURROGATE.sub(lambda m: "".join(f"%{b:02X}" for b in m.group().encode("utf-8", "surrogatepass")), t)
+
+
 def clean_ident(text, limit: int, keep_surrogates: bool = False) -> str:
     """경로·패키지·규칙 ID 같은 식별자 — 제어문자 제거·한 줄·길이 제한, 그리고 접두사 토큰·URL 자격증명 재마스킹.
     키=값·고엔트로피 패턴은 쓰지 않는다: 40자 이상 이어진 경로(app/src/main/res/xml/network_security_config)가
@@ -248,7 +253,7 @@ def clean_ident(text, limit: int, keep_surrogates: bool = False) -> str:
     # UTF-8(surrogatepass) 퍼센트 표기로 바꾼다 — summary 에 '\udcff' 같은 날 표기가 나오지 않게 (이슈 #33, PR #32 7차 N2)
     # keep_surrogates: mobsf_report 는 이 결과에 safe_ident 를 다시 씌워 '%' 까지 인코딩하므로 원래 문자를 넘긴다(이중 인코딩 방지)
     if not keep_surrogates:
-        t = _SURROGATE.sub(lambda m: "".join(f"%{b:02X}" for b in m.group().encode("utf-8", "surrogatepass")), t)
+        t = _percent_surrogates(t)
     for rx, repl in _IDENT_SECRET_PATTERNS:     # 개인키·접두사 토큰·URL 자격증명·Bearer 만 가린다
         t = rx.sub(repl, t)
     return t if len(t) <= limit else t[: limit - 1] + "…"
@@ -610,7 +615,8 @@ def parse_checks(data):
     for r in data.get("results") or []:
         sev = r.get("severity") if r.get("severity") in SEVERITIES else "medium"
         cat = r.get("category") if r.get("category") in ("sast", "secret", "dependency", "config", "mobile", "web") else "config"
-        file = clean_ident(r.get("file"), 300)
+        # id·위치는 원래 값으로 계산한다 — 퍼센트 표기는 표시(_code)에서만. 실제 이름이 '%ED…' 인 파일과 합쳐지지 않게 (PR #44 리뷰 S1)
+        file = clean_ident(r.get("file"), 300, keep_surrogates=True)
         line = r.get("line") if isinstance(r.get("line"), int) else None
         pkg = clean_ident(r.get("package"), 120) or None
         rule = clean_ident(r.get("rule_id") or r.get("check"), 120)

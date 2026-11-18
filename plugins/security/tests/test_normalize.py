@@ -217,6 +217,15 @@ class ParserTest(unittest.TestCase):
         self.assertIn("b%ED%B3%BF.py", summary)
         self.assertNotIn("\\udcff", summary)
         self.assertNotIn("\udcff", summary)
+        # 자유 텍스트(경고)도 같은 표기 (PR #44 리뷰 S2)
+        self.assertEqual(normalize.clean_text("y\udcff.xml: XML 을 해석하지 못했습니다", 200, True), "y%ED%B3%BF.xml: XML 을 해석하지 못했습니다")
+
+    def test_toolkit_ids_use_original_names(self):
+        """PR #44 리뷰 S1: 잘못된 UTF-8 이름과 실제 이름이 '%ED%B3%BF' 인 파일은 다른 결과다 (id 는 표시용이 아닌 원래 값으로)."""
+        res = [{"rule": "web.x", "file": n, "line": 1, "severity": "high", "category": "config", "title": "t"}
+               for n in ("a\udcff.js", "a%ED%B3%BF.js")]
+        f, _ = normalize.parse_checks({"results": res, "errors": [], "warnings": []})
+        self.assertEqual(len({x["id"] for x in f}), 2)
 
     def test_profile_label_is_inline_code(self):
         """PR #19 W6: 프로파일 라벨에는 대상 하위 폴더 이름이 들어가므로 평문으로 두지 않는다"""

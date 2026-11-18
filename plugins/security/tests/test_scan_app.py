@@ -531,11 +531,16 @@ class AppIsoProbeTest(unittest.TestCase):
     def test_script_runs_standalone_and_fails_closed(self):
         import subprocess
         path = os.path.join(HERE, "..", "scripts", "lib", "app_iso_probe.py")
-        src = open(path, encoding="utf-8").read()
-        out = subprocess.run([sys.executable, "-I", "-c", src], capture_output=True, text=True, timeout=30,
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        # 실제 외부 DNS·TCP 접속을 하지 않게 소켓 함수를 먼저 막는다 — probe() 의 기본 인자는 정의할 때 묶이므로 소스 앞에서 (PR #44 리뷰 S3)
+        guard = "import socket\ndef _blocked(*a, **k):\n    raise OSError('blocked in test')\nsocket.getaddrinfo = socket.create_connection = _blocked\n"
+        out = subprocess.run([sys.executable, "-I", "-c", guard + src], capture_output=True, text=True, timeout=30,
                              env={"PATH": os.environ.get("PATH", ""), "HTTPS_PROXY": "http://p:1"})
-        self.assertTrue(out.stdout.strip().splitlines()[-1].startswith("LEAK "), out.stdout)
-        self.assertIn("proxy-env:HTTPS_PROXY", out.stdout)
+        self.assertEqual(out.stdout.strip().splitlines()[-1], "LEAK proxy-env:HTTPS_PROXY", out.stdout)
+        clean = subprocess.run([sys.executable, "-I", "-c", guard + src], capture_output=True, text=True, timeout=30,
+                               env={"PATH": os.environ.get("PATH", "")})
+        self.assertEqual(clean.stdout.strip().splitlines()[-1], "isolated", clean.stdout)
 
 
 class NormalizeAppTest(unittest.TestCase):
