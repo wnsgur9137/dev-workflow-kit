@@ -179,18 +179,47 @@ class RedactTest(unittest.TestCase):
             "Job spider error accessing URL http://h:1/cb?code=QS status code returned : 500":
                 "Job spider error accessing URL http://h:1/cb?code=[MASKED] status code returned : 500",
             "ratio 1/2 and /docs/page.html stay": "ratio 1/2 and /docs/page.html stay",
+            # 3차 리뷰 R3-S2: 스킴 상대·상대 경로의 경로 매개변수, 대문자 scheme 의 경로 매개변수, 그 밖의 상대 URL, 쿠키, 인코딩된 URL
+            "Location: HTTPS://h/a;jsessionid=SJ0": "Location: HTTPS://h/a;jsessionid=[MASKED]",
+            "Location: //h/cb;jsessionid=SJ1": "Location: //h/cb;jsessionid=[MASKED]",
+            "Location: /cb;jsessionid=SJ2": "Location: /cb;jsessionid=[MASKED]",
+            "Location: /cb;jsessionid=SJ3?x=1": "Location: /cb;jsessionid=[MASKED]?x=[MASKED]",
+            'href="cb?code=REL12"': 'href="cb?code=[MASKED]"',
+            "Location: ../cb?code=REL13": "Location: ../cb?code=[MASKED]",
+            "url=x/cb?code=REL14": "url=x/cb?code=[MASKED]",
+            "Cookie: sid=COOKIE7; b=C9": "Cookie: sid=[MASKED]; b=[MASKED]",
+            'Set-Cookie: sid="a COOKIE8"; Path=/': "Set-Cookie: sid=[MASKED]; Path=/",
+            "next=http%3A%2F%2Fh%2Fcb%3Fcode%3DENC11": "next=http://h/cb?code=[MASKED]",
+            "issue #12 a;b x=1 100%": "issue #12 a;b x=1 100%",
         }
         for src, want in cases.items():
             self.assertEqual(w.redact_text(src), want, src)
 
+    def test_long_url_tail_is_redacted(self):
+        """2000자 넘는 URL 의 꼬리·500자 넘는 상대 경로 뒤 질의도 가린다 — 가린 뒤에만 자른다 (3차 리뷰 R3-W2)."""
+        line = ("Job spider error accessing URL http://h:3000/sso?SAMLRequest=" + "A" * 2100 +
+                "&RelayState=RSLEAK1&code=QLEAK2 status code returned : 500")
+        got = w.redact_text(line)
+        self.assertNotIn("RSLEAK1", got)
+        self.assertNotIn("QLEAK2", got)
+        self.assertTrue(got.endswith("&RelayState=[MASKED]&code=[MASKED] status code returned : 500"), got[-120:])
+        got = w.redact_text("Location: /" + "p" * 501 + "?code=QLEAK3")
+        self.assertNotIn("QLEAK3", got)
+        self.assertTrue(got.endswith("…[TRUNCATED]"), got[-40:])
+        long_path = w._redact_url("http://h/" + "x" * 600 + "?code=QLEAK4")
+        self.assertNotIn("QLEAK4", long_path)
+        self.assertEqual(len(long_path), w.URL_SHOW_MAX + len("…[TRUNCATED]"))
+
     def test_redact_text_is_linear(self):
+        # 시작 위치마다 다시 훑는 입력('-/'·'?/')과 인코딩 풀기('%2')를 포함한다 (3차 리뷰 NITPICK)
         import time
-        def t(n):
-            s = time.perf_counter()
-            w.redact_text("/a" * n + " //" + "b" * n)
-            return time.perf_counter() - s
-        t(1000)
-        self.assertLess(t(40000), max(t(20000), 0.01) * 6)
+        for pat in ("-/", "/a", "?/", "%2", "//"):
+            def t(n):
+                s = time.perf_counter()
+                w.redact_text(pat * n + " //" + "b" * n)
+                return time.perf_counter() - s
+            t(1000)
+            self.assertLess(t(80000), max(t(40000), 0.01) * 6, pat)
 
     def test_prod_like_host(self):
         for h in ("api.prod.example.com", "production.example.com", "app-prod.example", "prod-api.example"):
@@ -271,6 +300,98 @@ class ReachTest(unittest.TestCase):
         def op(url, timeout=0):
             raise ConnectionRefusedError("refused")
         self.assertEqual(iso_probe.reach("http://h:1/", op), "ConnectionRefusedError")
+
+
+class ReachOpenerTest(unittest.TestCase):
+    """기본 opener 를 가짜 프록시로 돌린다 — 리다이렉트를 따라가지 않고, 사유를 구분한다 (3차 리뷰 R3-W1·S1·S3·S5)."""
+
+    def serve(self, reply, delay=0.0):
+        import socket
+        import threading
+        import time
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(8)
+        self.addCleanup(srv.close)
+        lines = []
+
+        def loop():
+            while True:
+                try:
+                    c, _ = srv.accept()
+                except OSError:
+                    return
+                with c:
+                    data = b""
+                    c.settimeout(2)
+                    try:
+                        while b"\r\n\r\n" not in data:
+                            chunk = c.recv(4096)
+                            if not chunk:
+                                break
+                            data += chunk
+                    except OSError:
+                        pass
+                    lines.append(data.split(b"\r\n", 1)[0].decode("latin-1"))
+                    time.sleep(delay)
+                    try:
+                        c.sendall(reply)
+                    except OSError:
+                        pass
+        threading.Thread(target=loop, daemon=True).start()
+        return "http://127.0.0.1:%d" % srv.getsockname()[1], lines
+
+    def ftp_listener(self):
+        import socket
+        lst = socket.socket()
+        lst.bind(("127.0.0.1", 0))
+        lst.listen(1)
+        lst.settimeout(0.5)
+        self.addCleanup(lst.close)
+        return lst
+
+    def assert_no_connection(self, lst):
+        import socket
+        try:
+            c, _ = lst.accept()
+            c.close()
+            self.fail("프록시를 거치지 않는 직접 접속이 있었습니다")
+        except socket.timeout:
+            pass
+
+    def test_redirects_are_not_followed(self):
+        lst = self.ftp_listener()
+        for loc in ("https://staging.example/", "https://login.idp.example/sso?x=1", "http://other.example/",
+                    "ftp://127.0.0.1:%d/x" % lst.getsockname()[1]):
+            reply = ("HTTP/1.1 302 Found\r\nLocation: %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" % loc).encode()
+            proxy, lines = self.serve(reply)
+            self.assertIsNone(iso_probe.reach("http://staging.example/", proxy=proxy, timeout=5), loc)
+            self.assertEqual(lines, ["GET http://staging.example/ HTTP/1.1"], loc)
+        self.assert_no_connection(lst)
+
+    def test_tinyproxy_error_and_target_error(self):
+        proxy, _ = self.serve(b"HTTP/1.1 500 Unable to connect\r\nServer: tinyproxy/1.11.3\r\nContent-Length: 0\r\n\r\n")
+        self.assertEqual(iso_probe.reach("http://h.example:3000/", proxy=proxy, timeout=5), "proxy-500")
+        proxy, _ = self.serve(b"HTTP/1.1 500 Oops\r\nServer: nginx\r\nContent-Length: 0\r\n\r\n")
+        self.assertIsNone(iso_probe.reach("http://h.example:3000/", proxy=proxy, timeout=5))
+
+    def test_non_http_reply_is_unreachable_not_leak(self):
+        proxy, _ = self.serve(b"SSH-2.0-OpenSSH_9\r\n\r\n")
+        self.assertEqual(iso_probe.reach("http://h.example:22/", proxy=proxy, timeout=5), "BadStatusLine")
+
+    def test_reasons_are_distinguished(self):
+        proxy, _ = self.serve(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", delay=1.5)
+        self.assertEqual(iso_probe.reach("http://h.example/", proxy=proxy, timeout=0.5), "timeout")
+        proxy, _ = self.serve(b"HTTP/1.1 403 Filtered\r\nServer: tinyproxy\r\nContent-Length: 0\r\n\r\n")
+        self.assertEqual(iso_probe.reach("https://h.example/", proxy=proxy, timeout=5), "tunnel-403")
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        self.assertEqual(iso_probe.reach("http://h.example/", proxy="http://127.0.0.1:%d" % port, timeout=5),
+                         "ConnectionRefusedError")
+        self.assertEqual(iso_probe.REACH_TIMEOUT, 60)
 
 
 class DeniedTest(unittest.TestCase):
