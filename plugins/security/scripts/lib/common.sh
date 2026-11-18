@@ -41,10 +41,12 @@ SEC_LOG_FILE=""
 _sec_emit() {
   local level=$1
   shift
-  printf '[security] %s%s\n' "$level" "$*" >&2
+  # 파일(run.log)에 먼저 쓴다 — stderr 가 닫혀 있으면 printf 의 SIGPIPE 로 여기서 끝나므로, 순서가 반대면
+  # "스택을 내리지 못했습니다" 같은 경고가 run.log 에도 남지 않는다 (이슈 #36, PR #34 8차 R8-N3)
   if [ -n "$SEC_LOG_FILE" ]; then
     printf '%s %s%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$level" "$*" >>"$SEC_LOG_FILE" 2>/dev/null || true
   fi
+  printf '[security] %s%s\n' "$level" "$*" >&2
 }
 sec_log() { _sec_emit "" "$@"; }
 sec_warn() { _sec_emit "경고: " "$@"; }
@@ -352,17 +354,35 @@ import hashlib, os, sys
 root, ref = sys.argv[1], sys.argv[2]
 if not os.path.isfile(os.path.join(root, "Dockerfile")):
     sys.exit(1)
+import stat
+# 숨김·편집기 임시 파일은 빼고(빌드 문맥의 .dockerignore 와 같은 규칙), 일반 파일이 아닌 항목(FIFO·링크·장치)은 실패,
+# 파일의 실행 비트도 넣는다 — COPY 가 모드를 보존한다 (이슈 #36, PR #37 2차 R2-N1)
+def ignored(name):
+    return name.startswith(".") or name.endswith("~") or name.endswith(".swp")
 h = hashlib.sha256()
 for d, dirs, files in os.walk(root):
-    dirs.sort()
+    dirs[:] = sorted(x for x in dirs if not ignored(x))
     for f in sorted(files):
+        if ignored(f):
+            continue
         p = os.path.join(d, f)
+        st = os.lstat(p)
+        if not stat.S_ISREG(st.st_mode):
+            sys.exit(1)
         rel = os.path.relpath(p, root).encode()
-        data = open(p, "rb").read()
-        h.update(b"F\0%d\0%s\0%d\0" % (len(rel), rel, len(data)) + data)
+        with open(p, "rb") as fh:
+            data = fh.read()
+        h.update(b"F\0%d\0%s\0%d\0%d\0" % (len(rel), rel, 1 if st.st_mode & 0o111 else 0, len(data)) + data)
 h.update(b"BASE\0" + ref.encode())
 print(h.hexdigest())
 PY
+}
+
+# sec_valid_image_id <값> — sha256:<64 hex> 인지 (빌드 기록·iidfile 이 같은 검사를 쓴다, 이슈 #36 R2-N3)
+sec_valid_image_id() {
+  case "$1" in sha256:*) ;; *) return 1 ;; esac
+  case "${1#sha256:}" in *[!0-9a-f]*) return 1 ;; esac
+  [ ${#1} -eq 71 ]
 }
 
 sec_built_record() { printf '%s\n' "$SEC_DATA/data/images/$1.built"; }
@@ -374,9 +394,7 @@ sec_built_id() {
   input=$(sec_build_input "$1") || return 3
   [ -f "$(sec_built_record "$1")" ] || return 1
   read -r rec_input rec_id <"$(sec_built_record "$1")" || return 4
-  case "$rec_id" in sha256:*) ;; *) return 4 ;; esac
-  case "${rec_id#sha256:}" in *[!0-9a-f]*) return 4 ;; esac
-  [ ${#rec_id} -eq 71 ] || return 4
+  sec_valid_image_id "$rec_id" || return 4
   [ "$rec_input" = "$input" ] || return 2
   printf '%s\n' "$rec_id"
 }
@@ -386,6 +404,7 @@ sec_built_id() {
 sec_built_verify() {
   local label
   label=$(docker image inspect --format '{{index .Config.Labels "dwk.security.build-input"}}' "$2" 2>/dev/null) || return 1
+  # 빈 값 검사: 입력 계산이 실패해 양쪽이 빈 문자열일 때 같다고 보지 않게 (지우지 말 것, R2-N3)
   [ -n "$label" ] && [ "$label" = "$(sec_build_input "$1")" ]
 }
 
