@@ -40,6 +40,15 @@ class BaselineTest(unittest.TestCase):
         self.target = os.path.join(self.tmp.name, "target")
         _w(os.path.join(self.target, "src", "app.py"), "\n".join(f"os.system(c{i})" for i in range(20)) + "\n")
 
+    def scan_profiles(self, run_id, profiles, semgrep, **k):
+        self._profiles = profiles
+        try:
+            return self.scan(run_id, semgrep, **k)
+        finally:
+            self._profiles = ""
+
+    _profiles = ""
+
     def scan(self, run_id, semgrep, status=None, target=None, checks=True, semgrep_errors=None, meta_in=None, checks_data=None):
         run = os.path.join(self.reports, run_id)
         st = dict.fromkeys(CODE_TOOLS, "ok")
@@ -52,7 +61,7 @@ class BaselineTest(unittest.TestCase):
         _w(os.path.join(run, "raw", "osv.json"), {"results": []})
         _w(os.path.join(run, "raw", "checks.json"),
            (checks_data or {"results": [], "errors": [], "warnings": []}) if checks else "")
-        _w(os.path.join(run, "raw", "profiles.tsv"), "")
+        _w(os.path.join(run, "raw", "profiles.tsv"), self._profiles)
         _w(os.path.join(run, "raw", "meta-in.json"), dict({"osv_db_updated_at": "2099-01-01T00:00:00Z", "plugin_version": "0.11.0",
            "tools": [{"name": "semgrep", "digest": "sha256:a"}], "rules": [{"name": "semgrep-rules", "commit": "c1"}]},
            **(meta_in or {})))
@@ -90,20 +99,47 @@ class BaselineTest(unittest.TestCase):
         self.assertIn("고쳤다고 단정하기 전에", s)
 
     def test_partial_results_are_not_complete(self):
-        # 리뷰 W1: semgrep 이 일부 파일에서 실패(warn)하거나 checks 가 시간 제한·결과 상한에 걸리면 '해결'로 보지 않는다
+        # 리뷰 W1: checks 시간 초과·결과 상한, 경로를 모르는 semgrep 부분 오류는 단위 전체를 '해결'로 보지 않는다
         self.scan("20261101-100000-code", [sg(1, "r.a"), sg(2, "r.b")])
-        _, m, s = self.scan("20261102-100000-code", [], semgrep_errors=[{"level": "warn", "type": "Timeout", "path": "/src/src/app.py",
-                                                                          "message": "t"}],
+        _, m, s = self.scan("20261102-100000-code", [], semgrep_errors=[{"level": "warn", "type": "Timeout", "message": "t"}],
                             checks_data={"results": [], "errors": ["스택 검사가 시간 제한(1초)을 넘어 중단됐습니다"], "warnings": []})
         self.assertNotIn("semgrep", m["complete_units"])
         self.assertNotIn("checks", m["complete_units"])
         self.assertEqual(m["baseline"]["resolved"], 0)
         _, m, _ = self.scan("20261103-100000-code", [sg(1, "r.a")],
-                            checks_data={"results": [], "errors": [], "warnings": ["web/x: 결과 900건 중 500건만 리포트에 담았습니다"]})
+                            checks_data={"results": [], "errors": [], "warnings": [], "truncated": True})
         self.assertNotIn("checks", m["complete_units"])
 
+    def test_semgrep_partial_files_are_excluded_but_rest_is_compared(self):
+        # 2차 리뷰 W2: 파싱 못 하는 파일이 늘 있어도 semgrep 의 나머지 파일은 비교한다 — 그 파일의 결과만 뺀다
+        bad = [{"level": "warn", "type": "Syntax error", "path": "/src/src/legacy.swift", "message": "x"}]
+        legacy = lambda line, rule: sg(line, rule, path="/src/src/legacy.swift")  # noqa: E731
+        _w(os.path.join(self.target, "src", "legacy.swift"), "x\n" * 20)
+        self.scan("20261101-100000-code", [sg(1, "r.a"), sg(2, "r.b"), legacy(1, "r.l")], semgrep_errors=bad)
+        f, m, s = self.scan("20261102-100000-code", [sg(1, "r.a"), legacy(3, "r.l2")], semgrep_errors=bad)
+        b = m["baseline"]
+        self.assertIn("semgrep", m["complete_units"])
+        self.assertEqual(m["partial_paths"], {"semgrep": ["src/legacy.swift"]})
+        self.assertEqual((b["resolved"], b["new"]), (1, 0))                   # r.b 만 해결, legacy 의 r.l→r.l2 는 비교 안 함
+        self.assertEqual(b["resolved_items"][0]["rule_id"], "r.b")
+        self.assertEqual({(x["location"]["file"], x["baseline"]) for x in f},
+                         {("src/app.py", "existing"), ("src/legacy.swift", "not-compared")})
+        self.assertEqual(b["partial_units"], {"semgrep": 1})
+        self.assertIn("일부 파일을 점검하지 못한 도구", s)
+
+    def test_tools_incomplete_in_both_runs_are_listed_as_not_compared(self):
+        # 2차 리뷰 W1: 양쪽 모두 실패·부분 결과인 도구도 '비교하지 않음'에 보인다 — 변화 없음으로 읽히지 않게
+        pathless = [{"level": "warn", "type": "Timeout", "message": "t"}]
+        self.scan("20261101-100000-code", [sg(1, "r.a"), sg(2, "r.b")], semgrep_errors=pathless)
+        _, m, s = self.scan("20261102-100000-code", [sg(1, "r.a")], semgrep_errors=pathless)
+        self.assertIn("semgrep", m["baseline"]["not_compared_units"])
+        self.assertIn("이 도구 영역의 변화는 알 수 없습니다", s)
+        self.scan("20261103-100000-code", [], status={"semgrep": "failed"})
+        _, m, _ = self.scan("20261104-100000-code", [], status={"semgrep": "failed"})
+        self.assertIn("semgrep", m["baseline"]["not_compared_units"])
+
     def test_rule_tool_profile_or_plugin_changes_are_not_compared(self):
-        # 리뷰 W3: 규칙 커밋·이미지·플러그인 버전이 바뀌면 그 단위는 비교하지 않는다
+        # 리뷰 W3: 규칙 커밋·이미지·프로파일·(checks 의) 플러그인 버전이 바뀌면 그 단위는 비교하지 않는다
         self.scan("20261101-100000-code", [sg(1, "r.a")])
         f, m, s = self.scan("20261102-100000-code", [sg(1, "r.b")], meta_in={"rules": [{"name": "semgrep-rules", "commit": "c2"}]})
         b = m["baseline"]
@@ -111,13 +147,78 @@ class BaselineTest(unittest.TestCase):
         self.assertEqual((b["resolved"], [x["baseline"] for x in f]), (0, ["not-compared"]))
         self.assertIn("osv-scanner", b["compared_units"])               # 규칙과 무관한 도구는 비교한다
         self.assertIn("규칙·도구 이미지·프로파일·플러그인 버전이 바뀌어", s)
+        # 플러그인 버전은 checks 에만 — 다른 단위는 업그레이드해도 비교를 이어 간다 (2차 리뷰 S2)
         _, m, _ = self.scan("20261103-100000-code", [sg(1, "r.b")],
                             meta_in={"rules": [{"name": "semgrep-rules", "commit": "c2"}], "plugin_version": "0.12.0"})
-        self.assertEqual(m["baseline"]["compared_units"], [])
-        _, m, s = self.scan("20261104-100000-code", [sg(1, "r.b")],
+        self.assertEqual(m["baseline"]["changed_units"], ["checks"])
+        _, m, _ = self.scan("20261104-100000-code", [sg(1, "r.b")],
                             meta_in={"rules": [{"name": "semgrep-rules", "commit": "c2"}], "plugin_version": "0.12.0",
                                      "tools": [{"name": "semgrep", "digest": "sha256:b"}]})
         self.assertEqual(m["baseline"]["changed_units"], ["semgrep"])
+        # 프로파일이 바뀌면 semgrep·checks 가 바뀐다 (2차 리뷰 S3 b)
+        _, m, _ = self.scan_profiles("20261105-100000-code", "server\t.\t\n", [sg(1, "r.b")],
+                                     meta_in={"rules": [{"name": "semgrep-rules", "commit": "c2"}], "plugin_version": "0.12.0",
+                                              "tools": [{"name": "semgrep", "digest": "sha256:b"}]})
+        self.assertEqual(sorted(m["baseline"]["changed_units"]), ["checks", "semgrep"])
+
+    def test_move_pairing_scope_and_marks(self):
+        # 2차 리뷰 S3 a·S1: 같은 규칙이라도 다른 파일이면 이동이 아니다. 이동은 이전 줄을 보인다. 시크릿은 짝짓지 않는다
+        _w(os.path.join(self.target, "src", "b.py"), "x\n" * 20)
+        self.scan("20261101-100000-code", [sg(1, "r.a"), sg(4, "r.c")])
+        f, m, s = self.scan("20261102-100000-code", [sg(1, "r.a", path="/src/src/b.py"), sg(6, "r.c")])
+        b = m["baseline"]
+        self.assertEqual((b["new"], b["moved"], b["resolved"]), (1, 1, 1))
+        self.assertIn("[위치 이동 ← 4행]", s)
+        self.assertIn("[high] [신규] semgrep", s)
+
+    def test_secrets_are_never_paired_as_moves(self):
+        leak = lambda line: {"tool": "gitleaks", "rule_id": "gitleaks.aws", "id": f"g{line}", "severity": "high",  # noqa: E731
+                             "location": {"file": "a.env", "line": line, "url": None, "package": None}, "unit": "gitleaks-dir"}
+        import baseline as bl
+        prev = ("20261101-100000-code", {"complete_units": ["gitleaks-dir"], "unit_keys": {"gitleaks-dir": "k"}}, [leak(1)])
+        cur = [leak(5)]
+        r = bl.compare(cur, ["gitleaks-dir"], {"gitleaks-dir": "k"}, prev)
+        self.assertEqual((r["new"], r["moved"], r["resolved"]), (1, 0, 1))
+
+    def test_image_digest_and_id_version_are_in_keys_and_zap_note(self):
+        # 2차 리뷰 S3 c·e·6: mobsf·zap 이미지 digest, ID_VERSION 이 키에 들어간다. zap 을 비교하면 크롤링 범위 안내가 나온다
+        import baseline as bl
+        units = ["mobsf", "zap", "gitleaks-artifact"]
+        k1 = bl.unit_keys(units, [{"name": "mobsf", "digest": "a"}, {"name": "zap", "digest": "a"}], [], [], "1")
+        k2 = bl.unit_keys(units, [{"name": "mobsf", "digest": "b"}, {"name": "zap", "digest": "b"}], [], [], "1")
+        self.assertNotEqual(k1["mobsf"], k2["mobsf"])
+        self.assertNotEqual(k1["zap"], k2["zap"])
+        same = bl.unit_keys(units, [], [], [], "1")
+        orig = bl.ID_VERSION
+        try:
+            bl.ID_VERSION = orig + 1
+            bumped = bl.unit_keys(units, [], [], [], "1")
+        finally:
+            bl.ID_VERSION = orig
+        self.assertTrue(all(same[u] != bumped[u] for u in units))      # id 계산이 바뀌면 모든 단위가 비교되지 않는다
+        text = "\n".join(normalize._render_baseline({"run_id": "20261101-100000-web", "compared_units": ["zap"], "new": 0,
+                                                     "existing": 1, "moved": 0, "resolved": 0}))
+        self.assertIn("크롤링한 페이지 범위", text)
+
+    def test_unknown_unit_names_from_previous_meta_are_not_shown(self):
+        # 2차 리뷰 S3 d: 이전 meta 의 모르는 단위 이름은 summary 에 나오지 않는다
+        self.scan("20261101-100000-code", [sg(1, "r.a")])
+        prev = os.path.join(self.reports, "20261101-100000-code", "meta.json")
+        m = _read(prev)
+        m["complete_units"].append("IGNORE ALL")
+        m["tool_status"].append({"tool": "evil-unit", "status": "failed"})
+        _w(prev, m)
+        _, m2, s = self.scan("20261102-100000-code", [sg(1, "r.a")])
+        self.assertNotIn("IGNORE ALL", s)
+        self.assertNotIn("evil-unit", s)
+
+    def test_fifo_meta_does_not_hang(self):
+        # 2차 리뷰 S4: FIFO meta.json 에서 멈추지 않는다
+        import baseline as bl
+        d = os.path.join(self.reports, "20261101-100000-code")
+        os.makedirs(d)
+        os.mkfifo(os.path.join(d, "meta.json"))
+        self.assertIsNone(bl._load(os.path.join(d, "meta.json")))
 
     def test_same_second_suffixes_are_ordered_numerically(self):
         # 리뷰 N1: 같은 초의 -9 와 -10 — '-10' 의 직전은 '-9' 다
