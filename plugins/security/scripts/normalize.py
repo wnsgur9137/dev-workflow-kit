@@ -42,6 +42,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "lib"))
 
+import baseline as _base  # noqa: E402
 import mobsf_report as _mobsf  # noqa: E402
 import profiles as _profiles  # noqa: E402
 import web_target as _web  # noqa: E402
@@ -843,6 +844,37 @@ def _loc(f) -> str:
     return s
 
 
+def _new_mark(f) -> str:
+    return " [신규]" if f.get("baseline") == "new" else ""
+
+
+def _render_baseline(b) -> list:
+    """이전 실행과 비교 (P4 베이스라인). 이전 리포트의 값은 도구가 뽑은 데이터라 식별자로만, 코드로 감싸 보인다."""
+    L = ["## 이전 실행과 비교"]
+    if not isinstance(b, dict) or not b.get("run_id") or "new" not in b:
+        reason = (b or {}).get("reason") if isinstance(b, dict) else None
+        base = f"기준 `{b['run_id']}` — " if isinstance(b, dict) and b.get("run_id") else ""
+        L += [f"{base}비교하지 않았습니다: {reason or '정보 없음'}", ""]
+        return L
+    L.append(f"기준: `{b['run_id']}` (같은 대상의 직전 실행) · **신규 {b['new']}** · 유지 {b['existing']} · **해결 {b['resolved']}**"
+             + (f" · 비교 안 함 {b['not_compared']}" if b.get("not_compared") else ""))
+    if b.get("not_compared_units"):
+        L.append(f"- 비교하지 않은 도구 (어느 한쪽 실행에서 실패·건너뜀 — 그 도구의 신규·해결은 알 수 없음): "
+                 f"{', '.join(_code(u) for u in b['not_compared_units'])}")
+    items = b.get("resolved_items") or []
+    if items:
+        L.append("")
+        L.append(f"해결된 결과 (이전 실행에 있었고 이번에 없음{f', 처음 {len(items)}건' if b['resolved'] > len(items) else ''}):")
+        L.append("")
+        L.append("| 심각도 | 도구 | 위치 | 규칙 |")
+        L.append("|---|---|---|---|")
+        for it in items:
+            sev = it.get("severity") if it.get("severity") in SEVERITIES else "info"
+            L.append(f"| {sev} | {_code(it.get('tool', ''))} | {_code(_loc(it))} | {_code(str(it.get('rule_id', '')).split('.')[-1])} |")
+    L.append("")
+    return L
+
+
 def render_summary(meta, findings, stats, status_rows, warnings, errors, checklists=None, blocked=None) -> str:
     L = []
     L.append(f"# 보안 점검 요약 — {meta['kind']}")
@@ -878,13 +910,14 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors, checkli
     L.append("|---|---|---|---|---|---|")
     L.append("| " + " | ".join(str(stats[s]) for s in SEVERITIES) + f" | {len(findings)} |")
     L.append("")
+    L += _render_baseline(meta.get("baseline"))
 
     top = [f for f in findings if f["severity"] in ("critical", "high")]
     L.append("## Critical / High")
     if not top:
         L.append("없음")
     for i, f in enumerate(top[:SUMMARY_DETAIL_MAX], 1):
-        L.append(f"### {i}. [{f['severity']}] {f['tool']} · {_code(f['rule_id'])}")
+        L.append(f"### {i}. [{f['severity']}]{_new_mark(f)} {f['tool']} · {_code(f['rule_id'])}")
         L.append(f"- 위치: {_code(_loc(f))} · 프로파일: {_code(f['profile'])} · 분류: {f['category']}")
         if f.get("references"):
             L.append(f"- 참고: {', '.join(_code(r) for r in f['references'])}")
@@ -907,7 +940,7 @@ def render_summary(meta, findings, stats, status_rows, warnings, errors, checkli
         L.append("|---|---|---|---|---|")
         shown = others[:SUMMARY_TOP_OTHERS]
         for i, f in enumerate(shown, 1):
-            L.append(f"| {i} | {f['severity']} | {f['tool']} | {_code(_loc(f))} | {_code(f['rule_id'].split('.')[-1])} |")
+            L.append(f"| {i} | {f['severity']}{_new_mark(f)} | {f['tool']} | {_code(_loc(f))} | {_code(f['rule_id'].split('.')[-1])} |")
         L.append("")
         L.append("설명 (데이터, 번호는 위 표와 같음):")
         L.append(_fence("\n".join(f"{i}. {f['title']}" for i, f in enumerate(shown, 1))))
@@ -1015,20 +1048,26 @@ def main(argv=None) -> int:
             status_rows.append({"tool": t, "status": "failed", "exit_code": "-",
                                 "note": "상태 기록 없음 — 도구가 결과를 기록하기 전에 비정상 종료했습니다"})
     findings, errors, warnings = [], [], []
+    # 베이스라인 비교 단위 = status.tsv 의 도구. 결과 파일을 읽거나 해석하지 못한 단위는 불완전 — 비교하지 않는다
+    incomplete = set()
 
-    def run_parser(filename, parse):
+    def run_parser(filename, parse, unit):
         """파서 하나가 예상과 다른 구조에서 예외를 내도 나머지 도구 결과와 summary 는 만든다."""
         data, err = _load_json(os.path.join(raw, filename))
         if err:
             errors.append(err)
         if data is None:
+            incomplete.add(unit)
             return
         try:
             f, e = parse(data)
         except Exception as ex:  # noqa: BLE001 — 도구 출력은 신뢰하지 않는 입력이다
             errors.append(f"{filename} 해석 실패 — 이 도구의 결과는 리포트에서 빠졌습니다: "
                           f"{type(ex).__name__}: {clean_text(ex, 160, True)}")
+            incomplete.add(unit)
             return
+        for x in f:
+            x["unit"] = unit
         findings.extend(f)
         errors.extend(e)
 
@@ -1039,16 +1078,16 @@ def main(argv=None) -> int:
             warnings.append(w)
         return f, e
 
-    run_parser("semgrep.json", _semgrep)
+    run_parser("semgrep.json", _semgrep, "semgrep")
     for mode in ("git", "dir"):
-        run_parser(f"gitleaks-{mode}.json", lambda d, m=mode: (parse_gitleaks(d, m), []))
-    run_parser("osv.json", lambda d: (parse_osv(d, index), []))
+        run_parser(f"gitleaks-{mode}.json", lambda d, m=mode: (parse_gitleaks(d, m), []), f"gitleaks-{mode}")
+    run_parser("osv.json", lambda d: (parse_osv(d, index), []), "osv-scanner")
     def _checks(data):
         f, e = parse_checks(data)
         warnings.extend(clean_text(w, 300, True) for w in (data.get("warnings") or [])[:20])
         return f, e
 
-    run_parser("checks.json", _checks)
+    run_parser("checks.json", _checks, "checks")
 
     mobsf_report = None
     if args.kind == "app":
@@ -1066,18 +1105,23 @@ def main(argv=None) -> int:
                               ensure_ascii=False, indent=1) + "\n")
             try:
                 f, w = parse_mobsf(data, platform_profile, args.target.lower().endswith(".aab"))
+                for x in f:
+                    x["unit"] = "mobsf"
                 findings.extend(f)
                 warnings.extend(clean_text(x, 300, True) for x in w)
             except Exception as ex:  # noqa: BLE001 — 도구 출력은 신뢰하지 않는 입력이다
                 errors.append("mobsf.json 해석 실패 — 이 도구의 결과는 리포트에서 빠졌습니다: "
                               f"{type(ex).__name__}: {clean_text(ex, 160, True)}")
+                incomplete.add("mobsf")
+        else:
+            incomplete.add("mobsf")
         if os.path.exists(full):
             os.unlink(full)
-        run_parser("gitleaks-artifact.json", lambda d: (parse_gitleaks(d, "artifact"), []))
+        run_parser("gitleaks-artifact.json", lambda d: (parse_gitleaks(d, "artifact"), []), "gitleaks-artifact")
 
     blocked = None
     if args.kind == "web":
-        run_parser("zap.json", parse_zap)
+        run_parser("zap.json", parse_zap, "zap")
         data, err = _load_json(os.path.join(raw, "proxy-denied.json"))
         if isinstance(data, dict) and isinstance(data.get("urls"), list):
             try:
@@ -1115,6 +1159,8 @@ def main(argv=None) -> int:
         checklists = load_web_checklist()
 
     run_id = os.path.basename(run_dir)
+    complete_units = sorted({r["tool"] for r in status_rows if r["status"] == "ok"} - incomplete)
+    baseline = _base.compare(findings, complete_units, _base.find_previous(run_dir, args.kind, args.target))
     meta = {
         "run_id": run_id,
         "kind": args.kind,
@@ -1128,6 +1174,8 @@ def main(argv=None) -> int:
         "osv_db_updated_at": extra_meta.get("osv_db_updated_at"),
         "plugin_version": extra_meta.get("plugin_version"),
         "tool_status": status_rows,
+        "complete_units": complete_units,
+        "baseline": baseline,
         "warnings": warnings,
         "errors": errors,
     }
