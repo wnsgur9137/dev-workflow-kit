@@ -65,26 +65,46 @@ sec_init_dirs() {
   chmod 700 "$SEC_DATA" "$SEC_DATA/data" "$SEC_DATA/reports" "$SEC_CONF" || return 1
 }
 
+# sec_cleanup_run [cleanup_reports.py 인자…] — 정리를 실행하고 결과를 나눠 둔다 (남는 임시 파일 없이 한 흐름, 이슈 #39)
+#   SEC_CLEAN_RC 종료코드 · SEC_CLEAN_DAYS 보관 기간 · SEC_CLEANED 지운(지울) run-id 줄들 · SEC_CLEAN_WARN 경고·실패 줄들
+#   stderr(인자 오류·예상 못 한 예외)도 같은 흐름으로 받아 경고로 다룬다
+# shellcheck disable=SC2120  # 인자는 cleanup.sh 가 넘긴다 (자동 정리는 인자 없이)
+sec_cleanup_run() {
+  local out line nl=$'\n'
+  out=$(python3 -I "$SEC_PLUGIN/scripts/lib/cleanup_reports.py" "$SEC_DATA/reports" "$@" 2>&1)
+  SEC_CLEAN_RC=$?
+  SEC_CLEAN_DAYS="" SEC_CLEANED="" SEC_CLEAN_WARN=""
+  while IFS= read -r line; do
+    case "$line" in
+      '') ;;
+      days=*) SEC_CLEAN_DAYS=${line#days=} ;;
+      '!warn '*) SEC_CLEAN_WARN="$SEC_CLEAN_WARN${SEC_CLEAN_WARN:+$nl}${line#!warn }" ;;
+      # 실패는 접두사로 구분해 run.log 에서 "지우지 못한 리포트"만 찾을 수 있게 (PR #47 리뷰 N8)
+      '!fail '*) SEC_CLEAN_WARN="$SEC_CLEAN_WARN${SEC_CLEAN_WARN:+$nl}실패: ${line#!fail }" ;;
+      *' '*) SEC_CLEAN_WARN="$SEC_CLEAN_WARN${SEC_CLEAN_WARN:+$nl}$line" ;;   # 공백이 든 줄은 run-id 가 아니다 (N3)
+      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-*) SEC_CLEANED="$SEC_CLEANED${SEC_CLEANED:+$nl}$line" ;;
+      *) SEC_CLEAN_WARN="$SEC_CLEAN_WARN${SEC_CLEAN_WARN:+$nl}$line" ;;
+    esac
+  done <<EOF_CLEAN
+$out
+EOF_CLEAN
+}
+
 # sec_cleanup_reports — 보관 기간(기본 30일, DWK_SECURITY_RETENTION_DAYS)이 지난 리포트를 지운다
-#   스캔마다 자동, scripts/cleanup.sh 와 같은 규칙(scripts/lib/cleanup_reports.py). 실패해도 스캔은 계속한다 — 경고만 낸다.
-#   지운 run-id 는 SEC_CLEANED 에 남겨 sec_new_run 이 새 run.log 에 적는다 (PR #38 리뷰 N1)
+#   스캔마다 자동, scripts/cleanup.sh 와 같은 규칙. 실패해도 스캔은 계속한다 — 경고만 낸다.
+#   지운 run-id 와 경고·실패는 sec_new_run 이 새 run.log 에 적는다 (PR #38 리뷰 N1, 이슈 #39)
 sec_cleanup_reports() {
-  local out err rc days names n
-  SEC_CLEANED=""
-  err=$(mktemp "${TMPDIR:-/tmp}/dwk-cleanup.XXXXXX") || { sec_warn "오래된 리포트를 정리하지 못했습니다 (임시 파일)"; return 0; }
-  # stdout(지운 이름)과 stderr(실패·경고)를 따로 받는다 — 섞으면 실패 원인 대신 지운 이름이 보인다 (리뷰 W1)
-  out=$(python3 -I "$SEC_PLUGIN/scripts/lib/cleanup_reports.py" "$SEC_DATA/reports" 2>"$err")
-  rc=$?
-  days=$(printf '%s\n' "$out" | sed -n '1s/^days=//p')
-  names=$(printf '%s\n' "$out" | sed '1{/^days=/d;}')
-  n=$(printf '%s' "$names" | grep -c .)
-  SEC_CLEANED=$names
-  [ "$n" -gt 0 ] && sec_log "보관 기간(${days:-?}일)이 지난 리포트 ${n}개를 지웠습니다"
-  if [ "$rc" -ne 0 ] || [ -s "$err" ]; then
-    while IFS= read -r line; do [ -n "$line" ] && sec_warn "리포트 정리: $line"; done <"$err"
-    [ "$rc" -ne 0 ] && sec_warn "오래된 리포트를 다 정리하지 못했습니다 — $SEC_PLUGIN/scripts/cleanup.sh --dry-run 으로 확인하세요"
+  local n line
+  # shellcheck disable=SC2119  # 자동 정리는 기본값(보관 기간 설정)으로 — 스크립트 인자를 넘기지 않는다
+  sec_cleanup_run
+  n=$(printf '%s' "$SEC_CLEANED" | grep -c .)
+  [ "$n" -gt 0 ] && sec_log "보관 기간(${SEC_CLEAN_DAYS:-?}일)이 지난 리포트 ${n}개를 지웠습니다"
+  if [ -n "$SEC_CLEAN_WARN" ]; then
+    while IFS= read -r line; do [ -n "$line" ] && sec_warn "리포트 정리: $line"; done <<EOF_WARN
+$SEC_CLEAN_WARN
+EOF_WARN
   fi
-  rm -f "$err"
+  [ "$SEC_CLEAN_RC" -ne 0 ] && sec_warn "오래된 리포트를 다 정리하지 못했습니다 — $SEC_PLUGIN/scripts/cleanup.sh --dry-run 으로 확인하세요"
   return 0
 }
 
@@ -116,6 +136,9 @@ sec_new_run() {
   chmod 600 "$SEC_LOG_FILE"
   if [ -n "${SEC_CLEANED:-}" ]; then
     printf '%s\n' "$SEC_CLEANED" | sed 's/^/보관 기간이 지나 지운 리포트: /' >>"$SEC_LOG_FILE"
+  fi
+  if [ -n "${SEC_CLEAN_WARN:-}" ]; then      # 정리 실패·경고도 남긴다 — 지우지 못한(시크릿이 남은) 리포트를 나중에 추적할 수 있게 (이슈 #39)
+    printf '%s\n' "$SEC_CLEAN_WARN" | sed 's/^/리포트 정리 경고: /' >>"$SEC_LOG_FILE"
   fi
   export SEC_RUN_ID SEC_RUN_DIR
 }

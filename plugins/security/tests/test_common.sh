@@ -495,6 +495,8 @@ test_new_run_continues_when_cleanup_fails() {
   PATH="$SEC_TMP/fakepy:$PATH" sec_new_run code 2>"$SEC_TMP/err" || fail "정리 실패로 스캔이 멈춤"
   [ -d "$SEC_RUN_DIR/raw" ] || fail "실행 폴더가 없음"
   assert_contains "$(cat "$SEC_TMP/err")" "리포트 정리: boom"
+  # 예상 못 한 출력(예외)도 run.log 에 남는다 (PR #47 리뷰 S4)
+  assert_contains "$(cat "$SEC_LOG_FILE")" "리포트 정리 경고: boom"
   assert_contains "$(cat "$SEC_TMP/err")" "오래된 리포트를 다 정리하지 못했습니다"
 }
 
@@ -511,11 +513,13 @@ test_new_run_reports_partial_cleanup_failure_precisely() {
   chmod 500 "$SEC_DATA/reports/$bad/raw/sub"
   sec_new_run code 2>"$SEC_TMP/err" || fail "sec_new_run 실패"
   chmod 700 "$SEC_DATA/reports/$bad/raw/sub"
-  assert_contains "$(cat "$SEC_TMP/err")" "리포트 정리: 지우지 못했습니다: $bad"
+  assert_contains "$(cat "$SEC_TMP/err")" "리포트 정리: 실패: 지우지 못했습니다: $bad"
   assert_contains "$(cat "$SEC_TMP/err")" "1개를 지웠습니다"
   [ ! -e "$SEC_DATA/reports/$good" ] || fail "다른 만료 리포트를 지우지 않음"
   assert_contains "$(cat "$SEC_LOG_FILE")" "보관 기간이 지나 지운 리포트: $good"
-  assert_not_contains "$(cat "$SEC_LOG_FILE")" "$bad"
+  # 지우지 못한 리포트도 run.log 에 남는다 — 나중에 추적할 수 있게 (이슈 #39)
+  assert_contains "$(cat "$SEC_LOG_FILE")" "리포트 정리 경고: 실패: 지우지 못했습니다: $bad"
+  assert_not_contains "$(cat "$SEC_LOG_FILE")" "보관 기간이 지나 지운 리포트: $bad"
 }
 
 # 리뷰 W4: reports 가 링크면(외장 디스크 등) 스캔이 쓰는 그 실제 폴더를 정리한다
@@ -555,7 +559,9 @@ test_cleanup_script_dry_run_days_and_bad_args() {
   # 인자 오류는 '없습니다'를 덧붙이지 않는다 (리뷰 S4)
   assert_status 2 "$PLUGIN_DIR/scripts/cleanup.sh" --days 0
   assert_not_contains "$OUT" "없습니다"
+  assert_contains "$OUT" "1~3650"            # 인자 오류 메시지가 사용자에게 보인다 (PR #47 리뷰 S3)
   assert_status 2 "$PLUGIN_DIR/scripts/cleanup.sh" --all
+  assert_contains "$OUT" "알 수 없는 인자"
   assert_status 2 "$PLUGIN_DIR/scripts/cleanup.sh" extra
   assert_not_contains "$OUT" "없습니다"
 }
@@ -572,6 +578,6 @@ test_cleanup_script_partial_failure_is_an_error() {
   assert_status 1 "$PLUGIN_DIR/scripts/cleanup.sh"
   chmod 700 "$SEC_DATA/reports/$bad/raw/sub"
   assert_contains "$OUT" "지우지 못했습니다: $bad"
-  assert_contains "$OUT" "일부 리포트를 지우지 못했습니다"
+  assert_contains "$OUT" "정리하지 못한 항목이 있습니다"
   assert_not_contains "$OUT" "없습니다"
 }
