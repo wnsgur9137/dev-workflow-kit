@@ -181,12 +181,16 @@ stack_down() {
   compose --profile scan down -v --remove-orphans --timeout 10 >/dev/null 2>&1 && STACK_UP=0
 }
 cleanup() {
-  # 정리 중 두 번째 Ctrl-C·TERM 으로 스택 내리기·진행 로그 가림을 건너뛰지 않게 막는다 (5차 리뷰 R5-S3)
+  # 정리 중 두 번째 Ctrl-C·TERM 으로 스택 내리기·진행 로그 가림을 건너뛰지 않게 막는다 (5차 리뷰 R5-S3).
+  # 무시는 자식(docker compose down)에도 물려진다 — 정리 중에는 Ctrl-C 가 듣지 않으므로 한 줄 알린다 (6차 리뷰 R6-N2)
   trap '' INT TERM
   [ -n "$pid_watchdog" ] && kill "$pid_watchdog" 2>/dev/null
   # 백그라운드 compose run CLI 는 down 으로 컨테이너가 사라지면 함께 끝난다
   [ -n "$pid_scan" ] && kill "$pid_scan" 2>/dev/null
-  [ $STACK_UP -eq 1 ] && stack_down
+  if [ $STACK_UP -eq 1 ]; then
+    sec_log "ZAP 스택 정리 중 (최대 수십 초, 이 동안 Ctrl-C 는 듣지 않습니다)..."
+    stack_down
+  fi
   # 스캔 도중 중단(INT·TERM)돼도 진행 로그의 URL 값을 가려 둔다 — 정상 경로는 run_zap 이 가린다 (3차 리뷰 R3-S4).
   # 스택을 내린 뒤에 가린다 — 죽어 가는 compose CLI 가 zap.log 에 마지막 줄을 쓰는 중에 다시 쓰지 않게 (4차 리뷰 R4-S3)
   if [ "$ZAP_LOG_REDACTED" -eq 0 ] && [ -f "$RAW/zap.log" ]; then
