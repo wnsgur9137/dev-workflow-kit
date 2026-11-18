@@ -171,11 +171,20 @@ class BaselineTest(unittest.TestCase):
     def test_partial_count_display_is_capped_and_mentions_previous_run(self):
         # 이슈 #41 (R3-N1·N2)
         import baseline as bl
-        text = "\n".join(normalize._render_baseline({"run_id": "r", "compared_units": ["semgrep"], "new": 0, "existing": 0,
-                                                     "moved": 0, "resolved": 0,
-                                                     "partial_units": {"semgrep": bl.PARTIAL_PATHS_MAX * 2}}))
-        self.assertIn(f"{bl.PARTIAL_PATHS_MAX}개 넘는 파일", text)
+        cap = bl.PARTIAL_PATHS_MAX
+
+        def render(n):
+            return "\n".join(normalize._render_baseline({"run_id": "r", "compared_units": ["semgrep"], "new": 0, "existing": 0,
+                                                         "moved": 0, "resolved": 0, "partial_units": {"semgrep": n}}))
+        # 경계값 — 상한까지는 실제 개수, 넘으면 상한 표시 (PR #48 리뷰 S1)
+        self.assertIn("`semgrep` 3개 파일", render(3))
+        self.assertIn(f"`semgrep` {cap}개 파일", render(cap))
+        self.assertIn(f"`semgrep` {cap}개가 넘는 파일", render(cap + 1))
+        self.assertIn(f"`semgrep` {cap}개가 넘는 파일", render(cap * 2))
+        self.assertNotIn("True개", render(True))     # bool 은 개수가 아니다 (N5)
+        text = render(cap * 2)
         self.assertIn("이번이나 직전 실행에서", text)
+        self.assertIn("이번 실행의 파일은 경고 절 참조", text)   # N2
 
     def test_units_only_in_previous_status_are_listed(self):
         # 3차 리뷰 S2 b: 이전 실행에만 있던 도구(도구 목록 변경)도 '비교하지 않음'에 보인다
@@ -308,7 +317,7 @@ class BaselineTest(unittest.TestCase):
         code = ("import sys; sys.path.insert(0, sys.argv[1]); import baseline as bl; "
                 "print(bl._load(sys.argv[2]))")
         try:
-            out = subprocess.run([sys.executable, "-I", "-c", code, os.path.join(HERE, "..", "scripts", "lib"),
+            out = subprocess.run([sys.executable, "-I", "-B", "-c", code, os.path.join(HERE, "..", "scripts", "lib"),
                                   os.path.join(d, "meta.json")], capture_output=True, text=True, timeout=10)
         except subprocess.TimeoutExpired:
             self.fail("FIFO meta.json 에서 멈춤")
