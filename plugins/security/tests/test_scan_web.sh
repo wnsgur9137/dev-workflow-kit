@@ -21,7 +21,26 @@ setup_web_fake() {
   export FAKE_LOG="$SEC_TMP/docker.log"
   : >"$FAKE_LOG"
   FAKE_IMAGES=$(awk '!/^[[:space:]]*(#|$)/ { printf "%s@%s ", $2, $4 }' "$PLUGIN_DIR/docker/images.lock")
-  export FAKE_IMAGES
+  # egress-proxy 는 update.sh 가 로컬에서 빌드한다 (이슈 #35) — 지금 Dockerfile·베이스와 맞는 빌드 기록과 그 ID 의 이미지를 둔다
+  FAKE_PROXY_ID="sha256:$(printf 'e%.0s' $(seq 64))"
+  web_fake_built_proxy "$FAKE_PROXY_ID"
+  FAKE_IMAGES="$FAKE_IMAGES$FAKE_PROXY_ID"
+  export FAKE_IMAGES FAKE_PROXY_ID
+}
+
+# web_fake_built_proxy <이미지 ID> [입력] — $DWK_SECURITY_DATA_DIR 에 egress-proxy 빌드 기록을 쓴다 (입력 기본값: 지금 Dockerfile·베이스)
+web_fake_built_proxy() {
+  local input=${2:-}
+  # shellcheck disable=SC1091
+  [ -n "$input" ] || input=$(. "$PLUGIN_DIR/scripts/lib/common.sh" && sec_build_input egress-proxy) || fail "빌드 입력 계산 실패"
+  mkdir -p "$DWK_SECURITY_DATA_DIR/data/images"
+  printf '%s %s\n' "$input" "$1" >"$DWK_SECURITY_DATA_DIR/data/images/egress-proxy.built"
+}
+
+# 실제 Docker 테스트가 데이터 폴더를 임시 폴더로 바꿀 때, 사용자가 update.sh 로 만든 빌드 기록을 옮겨 온다
+web_copy_built_records() {
+  mkdir -p "$DWK_SECURITY_DATA_DIR/data/images"
+  cp "$REAL_SEC_DATA/data/images/"*.built "$DWK_SECURITY_DATA_DIR/data/images/" || fail "빌드 기록을 옮기지 못함"
 }
 
 no_docker_called() {
@@ -79,6 +98,24 @@ test_web_d6_missing_zap_image_points_to_update() {
   if grep -q '^docker run\|^docker compose .* up\|^docker compose .* run' "$FAKE_LOG"; then fail "컨테이너가 기동됨"; fi
 }
 
+# 이슈 #35: egress-proxy 빌드 기록이 없거나·지금 Dockerfile·베이스와 다르거나·그 ID 의 이미지가 없으면 스캔하지 않고 update.sh 를 안내한다
+test_web_d6_proxy_build_record_missing_stale_or_gone() {
+  setup_web_fake
+  rm -f "$DWK_SECURITY_DATA_DIR/data/images/egress-proxy.built"
+  assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
+  assert_contains "$OUT" "egress-proxy — 로컬 빌드 기록이 없습니다"
+  assert_contains "$OUT" "update.sh"
+  web_fake_built_proxy "$FAKE_PROXY_ID" "$(printf '0%.0s' $(seq 64))"
+  assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
+  assert_contains "$OUT" "Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다"
+  web_fake_built_proxy "$FAKE_PROXY_ID"
+  FAKE_IMAGES=${FAKE_IMAGES% *} assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
+  assert_contains "$OUT" "빌드한 이미지($FAKE_PROXY_ID)가 없습니다"
+  if grep -q '^docker build\|^docker pull\|^docker compose .* up\|^docker compose .* run' "$FAKE_LOG"; then
+    fail "스캔이 빌드·다운로드하거나 컨테이너를 띄움"
+  fi
+}
+
 _web_scan() {
   local summary
   summary=$("$SCAN_WEB" "${1:-http://host.docker.internal:3000/}" 2>"$SEC_TMP/scan.err" | tail -n 1)
@@ -132,7 +169,9 @@ EOF
   assert_contains "$s" "http://cdn.example/a.js?token=[MASKED]"
   assert_not_contains "$s" "abc123"
   assert_not_contains "$s" "dwk-isolation-probe"
-  assert_contains "$s" "egress-proxy: 1.7"
+  assert_contains "$s" "egress-proxy: 1.11.3-r0+alpine3.24.2"
+  # 리포트 메타의 프록시 이미지는 빌드 기록의 이미지 ID 다 (태그는 다른 빌드가 덮어쓸 수 있어 쓰지 않는다)
+  assert_contains "$(cat "$WEB_RUN/meta.json")" "\"digest\": \"$FAKE_PROXY_ID\""
   # 프록시 설정·필터는 실행마다 환경변수로 넘긴다 — 이번 대상의 출처 하나만 연다
   grep -q '^docker compose -p dwk-sec-web-[0-9a-f]\{12\} -f .*/docker/compose-web.yml up -d --wait' "$FAKE_LOG" ||
     fail "egress-proxy up 이 호출되지 않음"
@@ -335,6 +374,7 @@ _web_ready() {
   fi
   # shellcheck disable=SC1091
   . "$PLUGIN_DIR/scripts/lib/common.sh"
+  REAL_SEC_DATA=$SEC_DATA
   local n
   for n in zap egress-proxy; do
     docker image inspect "$(sec_image_ref "$n")" >/dev/null 2>&1 || { echo "(이미지 없음: $n — update.sh 실행 필요)"; return 1; }
@@ -424,6 +464,7 @@ test_real_scan_web_baseline() {
   _web_ready || return 77
   _web_target_up
   export DWK_SECURITY_DATA_DIR="$SEC_TMP/data" DWK_SECURITY_CONF_DIR="$SEC_TMP/conf"
+  web_copy_built_records
   mkdir -p "$DWK_SECURITY_CONF_DIR"
   printf 'http://host.docker.internal:%s\n' "$WEB_PORT" >"$DWK_SECURITY_CONF_DIR/targets.allowlist"
   chmod 600 "$DWK_SECURITY_CONF_DIR/targets.allowlist"
@@ -455,6 +496,7 @@ test_real_scan_web_baseline() {
 test_real_scan_web_unreachable_target_fails() {
   _web_ready || return 77
   export DWK_SECURITY_DATA_DIR="$SEC_TMP/data" DWK_SECURITY_CONF_DIR="$SEC_TMP/conf"
+  web_copy_built_records
   mkdir -p "$DWK_SECURITY_CONF_DIR"
   local port summary run
   port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')

@@ -265,6 +265,43 @@ test_preflight_d6_missing_image_points_to_update_and_never_pulls() {
   assert_contains "$OUT" "images.lock 에 'unknown-tool'"
 }
 
+# 이슈 #35: 로컬 빌드 이미지(egress-proxy)는 빌드 기록이 지금 Dockerfile·베이스와 맞을 때만 그 이미지 ID 를 쓴다
+test_built_image_ref_and_d6_follow_the_build_record() {
+  load_common
+  use_fake_docker
+  local d id rec
+  d=$(printf 'a%.0s' $(seq 64))
+  id="sha256:$(printf 'c%.0s' $(seq 64))"
+  export SEC_IMAGES_LOCK="$SEC_TMP/images.lock" FAKE_LOG="$SEC_TMP/docker.log"
+  printf 'egress-proxy-base alpine 3.24.2 sha256:%s linux/arm64\n' "$d" >"$SEC_IMAGES_LOCK"
+  rec="$SEC_DATA/data/images/egress-proxy.built"
+  assert_status 1 sec_image_ref egress-proxy
+  assert_status 1 sec_preflight web egress-proxy
+  assert_contains "$OUT" "egress-proxy — 로컬 빌드 기록이 없습니다"
+  assert_contains "$OUT" "update.sh"
+  mkdir -p "${rec%/*}"
+  printf '%s %s\n' "$(sec_build_input egress-proxy)" "$id" >"$rec"
+  assert_eq "$(sec_image_ref egress-proxy)" "$id"
+  assert_status 1 sec_preflight web egress-proxy
+  assert_contains "$OUT" "빌드한 이미지($id)가 없습니다"
+  FAKE_IMAGES="$id" assert_status 0 sec_preflight web egress-proxy
+  # 베이스 digest 가 바뀌면(관리자가 images.lock 을 올림) 입력이 달라져 다시 빌드해야 한다 — 옛 이미지를 쓰지 않는다
+  printf 'egress-proxy-base alpine 3.24.3 sha256:%s linux/arm64\n' "$(printf 'f%.0s' $(seq 64))" >"$SEC_IMAGES_LOCK"
+  assert_status 2 sec_built_id egress-proxy
+  FAKE_IMAGES="$id" assert_status 1 sec_preflight web egress-proxy
+  assert_contains "$OUT" "Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다"
+  # 기록의 ID 형식이 틀리면 쓰지 않는다
+  printf '%s latest\n' "$(sec_build_input egress-proxy)" >"$rec"
+  assert_status 1 sec_image_ref egress-proxy
+  # 입력은 Dockerfile 내용에도 묶인다
+  local other="$SEC_TMP/plugin"
+  mkdir -p "$other/docker/egress-proxy"
+  printf 'FROM x\n' >"$other/docker/egress-proxy/Dockerfile"
+  [ "$(SEC_PLUGIN=$other sec_build_input egress-proxy)" != "$(sec_build_input egress-proxy)" ] || fail "Dockerfile 이 바뀌어도 입력이 같음"
+  assert_not_contains "$(cat "$FAKE_LOG")" "build"
+  assert_not_contains "$(cat "$FAKE_LOG")" "pull"
+}
+
 test_preflight_real_docker_runtime() {
   [ "${SEC_TEST_DOCKER:-1}" = 0 ] && { echo "(SEC_TEST_DOCKER=0)"; exit 77; }
   if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
