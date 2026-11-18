@@ -178,16 +178,48 @@ def proxy_filters(scheme: str, host: str, port: int):
     return [f"^http://{h}{p}(/|$)"]
 
 
-# 텍스트 안의 URL — 절대(대소문자 무관)·스킴 상대·질의나 조각이 붙은 상대 경로. 괄호는 URL 끝으로 본다 (2차 리뷰 S-A)
-_URL_IN_TEXT = re.compile(r"(?i)(?:https?:)?//[^\s\"'<>()]{1,2000}|(?<![\w/.:])/[^\s\"'<>()?#]{0,500}[?#][^\s\"'<>()]{1,2000}")
-_SET_COOKIE = re.compile(r"(?i)\b(set-cookie:\s*[^=;\s]{1,200})=[^;\s]*")
+# 텍스트 안의 URL — 따옴표·꺾쇠·괄호·공백으로 나눈 토큰마다 본다 (정규식 되돌림 없이 길이에 선형, 길이 상한 없음).
+# 상한을 두면 2000자 넘는 URL 의 꼬리(뒤쪽 질의값)가 URL 로 다시 잡히지 않고 남는다 (PR #34 3차 리뷰 R3-W2)
+_TOKEN = re.compile(r"[^\s\"'<>()]+")
+_URL_START = re.compile(r"(?i)(?:https?:)?//")
+# 쿠키 헤더 — 값은 줄 끝까지 받아 파이썬에서 나눈다 (3차 리뷰 R3-S2: Cookie·따옴표 값)
+_COOKIE_HDR = re.compile(r"(?i)\b(set-cookie|cookie):([^\r\n]*)")
+
+
+def _redact_token(tok: str, decoded: bool = False) -> str:
+    if not decoded and "%" in tok:
+        # 인코딩된 중첩 URL('http%3A%2F%2Fh%2Fcb%3Fcode%3D…') — 한 번 풀어 가릴 것이 있으면 푼 모양으로 가린다 (3차 리뷰 R3-S2)
+        d = urllib.parse.unquote(tok)
+        if d != tok:
+            r = _redact_token(d, True)
+            if r != d:
+                return r
+    m = _URL_START.search(tok)
+    if m:   # 절대·스킴 상대 URL — 앞부분(예: 'url=')은 그대로 둔다
+        return tok[:m.start()] + _redact_url(tok[m.start():])
+    # 상대 URL: 질의가 있거나, 경로에 조각·경로 매개변수가 붙었다 ('cb?code=…', '../cb?…', '/cb;jsessionid=…')
+    if "?" in tok or ("/" in tok and ("#" in tok or ";" in tok)):
+        return _redact_url(tok)
+    return tok
+
+
+def _mask_cookie(m) -> str:
+    name, value = m.group(1), m.group(2)
+    pairs = value.split(";")
+    # Set-Cookie 는 첫 쌍만 값이고 뒤는 속성(Path=/ 등), Cookie 는 모든 쌍이 값이다. 따옴표 값은 통째로 가린다
+    n = 1 if name.lower() == "set-cookie" else len(pairs)
+    for i in range(min(n, len(pairs))):
+        k, eq, _v = pairs[i].partition("=")
+        if eq:
+            pairs[i] = k + "=[MASKED]"
+    return name + ":" + ";".join(pairs)
 
 
 def redact_text(text: str) -> str:
-    """로그·근거 같은 자유 텍스트 안의 URL 값과 Set-Cookie 값을 가린다 (JSON 이스케이프 '\\/' 도 풀어서 본다)."""
+    """로그·근거 같은 자유 텍스트 안의 URL 값과 쿠키 값을 가린다 (JSON 이스케이프 '\\/' 도 풀어서 본다)."""
     t = str(text).replace("\\/", "/")
-    t = _URL_IN_TEXT.sub(lambda m: _redact_url(m.group(0)), t)
-    return _SET_COOKIE.sub(r"\1=[MASKED]", t)
+    t = _TOKEN.sub(lambda m: _redact_token(m.group(0)), t)
+    return _COOKIE_HDR.sub(_mask_cookie, t)
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +229,7 @@ _REFUSED_RE = re.compile(r'Proxying refused on filtered url "([^"\n]{0,4000})"')
 # scan-web.sh 의 격리 확인이 일부러 보내는 요청 — 차단 목록에서 뺀다
 ISOLATION_PROBE_HOST = "dwk-isolation-probe.invalid"
 DENIED_MAX = 50
+URL_SHOW_MAX = 500
 
 
 def _mask_params(text: str, sep: str) -> str:
@@ -206,20 +239,17 @@ def _mask_params(text: str, sep: str) -> str:
 def _redact_url(u: str) -> str:
     """URL 에서 토큰일 수 있는 부분을 가린다 — 사용자 정보, 질의 문자열 값, 조각(#…) 전체, 경로 매개변수(;jsessionid=…) 값.
     출처와 경로·매개변수 이름만 남긴다 (PR #34 리뷰 S2: 조각 뒤 '?' 를 질의로 오인하지 않게 조각을 먼저 자른다).
-    스킴 상대(//host/…)·상대 경로(/cb?code=…)도 받는다."""
-    u = re.sub(r"[\x00-\x1f\x7f]", "", u)[:500]
+    스킴 상대(//host/…)·상대 경로(/cb?code=…, cb;jsessionid=…)도 받는다. 길이는 **가린 뒤** 표시용으로만 자른다 (3차 리뷰 R3-W2)."""
+    u = re.sub(r"[\x00-\x1f\x7f]", "", u)
     # 사용자 정보는 출처 부분(첫 '/' 전)의 마지막 '@' 까지 가린다 — 인코딩 안 된 '@' 가 든 비밀번호도 (2차 리뷰 NITPICK)
     u = re.sub(r"(?:(?<=://)|(?<=^//))[^/\s]*@", "[MASKED]@", u)
     u, h, _frag = u.partition("#")
     base, q, query = u.partition("?")
-    head, sl, path = base.partition("://")
-    if sl:
-        auth, slash, rest = path.partition("/")
-        path = auth + slash + "/".join(_mask_params(seg, ";") if ";" in seg else seg for seg in rest.split("/"))
-        base = head + sl + path
-    if q:
-        base += "?" + _mask_params(query, "&")
-    return base + ("#[MASKED]" if h else "")
+    # '/' 로 나눈 조각마다 경로 매개변수 값을 가린다 — 절대·스킴 상대·상대 경로 모두 같은 규칙 (3차 리뷰 R3-S2: '//h/a;jsessionid=…').
+    # 호스트 조각에는 ';' 가 들어갈 수 없으므로 출처는 그대로 남는다
+    path = "/".join(_mask_params(seg, ";") if ";" in seg else seg for seg in base.split("/"))
+    out = path + ("?" + _mask_params(query, "&") if q else "") + ("#[MASKED]" if h else "")
+    return out if len(out) <= URL_SHOW_MAX else out[:URL_SHOW_MAX] + "…[TRUNCATED]"
 
 
 def denied_requests(log_text: str):
