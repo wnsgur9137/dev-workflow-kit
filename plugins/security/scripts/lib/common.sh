@@ -314,27 +314,52 @@ sec_built_base() {
   return 1
 }
 
-# sec_build_input <name> — 빌드 입력의 sha256 (Dockerfile 내용 + 베이스 <image>@<digest>). 둘 중 하나가 바뀌면 다시 빌드해야 한다
+# sec_build_input <name> — 빌드 입력의 sha256: 빌드 문맥 폴더($SEC_PLUGIN/docker/<이름>/)의 모든 파일(상대 경로·내용, 이름순)
+#   + 베이스 <image>@<digest>. 하나라도 바뀌면 다시 빌드해야 한다 (Dockerfile 이 COPY 할 파일도 덮는다, PR #37 리뷰 S3)
 sec_build_input() {
   local base ref
   base=$(sec_built_base "$1") || return 1
   ref=$(sec_image_ref "$base") || return 1
-  python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read() + b"\0BASE=" + sys.argv[2].encode()).hexdigest())' \
-    "$SEC_PLUGIN/docker/$1/Dockerfile" "$ref" 2>/dev/null
+  python3 -I - "$SEC_PLUGIN/docker/$1" "$ref" 2>/dev/null <<'PY'
+import hashlib, os, sys
+root, ref = sys.argv[1], sys.argv[2]
+if not os.path.isfile(os.path.join(root, "Dockerfile")):
+    sys.exit(1)
+h = hashlib.sha256()
+for d, dirs, files in os.walk(root):
+    dirs.sort()
+    for f in sorted(files):
+        p = os.path.join(d, f)
+        rel = os.path.relpath(p, root).encode()
+        data = open(p, "rb").read()
+        h.update(b"F\0%d\0%s\0%d\0" % (len(rel), rel, len(data)) + data)
+h.update(b"BASE\0" + ref.encode())
+print(h.hexdigest())
+PY
 }
 
 sec_built_record() { printf '%s\n' "$SEC_DATA/data/images/$1.built"; }
 
-# sec_built_id <name> — 기록이 지금 입력과 맞으면 기록한 이미지 ID(sha256:<64hex>)를 출력. 기록 없음 1 · 입력 불일치 2
+# sec_built_id <name> — 기록이 지금 입력과 맞으면 기록한 이미지 ID(sha256:<64 hex>)를 출력.
+#   1 기록 없음 · 2 입력 불일치(다시 빌드) · 3 입력 계산 불가(images.lock 베이스·Dockerfile) · 4 기록 손상 (리뷰 N3·N4)
 sec_built_id() {
   local input rec_input rec_id
-  input=$(sec_build_input "$1") || return 1
+  input=$(sec_build_input "$1") || return 3
   [ -f "$(sec_built_record "$1")" ] || return 1
-  read -r rec_input rec_id <"$(sec_built_record "$1")" || return 1
+  read -r rec_input rec_id <"$(sec_built_record "$1")" || return 4
+  case "$rec_id" in sha256:*) ;; *) return 4 ;; esac
+  case "${rec_id#sha256:}" in *[!0-9a-f]*) return 4 ;; esac
+  [ ${#rec_id} -eq 71 ] || return 4
   [ "$rec_input" = "$input" ] || return 2
-  case "$rec_id" in sha256:*) ;; *) return 1 ;; esac
-  [ ${#rec_id} -eq 71 ] || return 1
   printf '%s\n' "$rec_id"
+}
+
+# sec_built_verify <name> <이미지 ID> — 그 이미지가 있고 지금 입력으로 빌드된 것(라벨 dwk.security.build-input)인지.
+#   기록 파일만 바꿔 다른 로컬 이미지(예: 옛 kalaksi/tinyproxy)를 프록시로 쓰게 할 수 없게 한다 (PR #37 리뷰 W1)
+sec_built_verify() {
+  local label
+  label=$(docker image inspect --format '{{index .Config.Labels "dwk.security.build-input"}}' "$2" 2>/dev/null) || return 1
+  [ -n "$label" ] && [ "$label" = "$(sec_build_input "$1")" ]
 }
 
 # sec_image_ref <name> — docker run 에 쓸 <image>@<digest>. 로컬 빌드 이미지는 기록한 이미지 ID (바뀌지 않는 참조)
@@ -498,8 +523,16 @@ sec_preflight() {
     if sec_built_base "$name" >/dev/null; then
       ref=$(sec_built_id "$name")
       case $? in
-        0) docker image inspect "$ref" >/dev/null 2>&1 || missing="$missing$NL$name — 빌드한 이미지($ref)가 없습니다" ;;
+        0)
+          if ! docker image inspect "$ref" >/dev/null 2>&1; then
+            missing="$missing$NL$name — 빌드한 이미지($ref)가 없습니다"
+          elif ! sec_built_verify "$name" "$ref"; then
+            missing="$missing$NL$name — 빌드 기록이 가리키는 이미지($ref)가 지금 빌드 입력으로 만든 것이 아닙니다"
+          fi
+          ;;
         2) missing="$missing$NL$name — Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다" ;;
+        3) missing="$missing$NL$name — 빌드 입력을 계산할 수 없습니다 (images.lock 의 베이스 항목·$SEC_PLUGIN/docker/$name/Dockerfile 확인)" ;;
+        4) missing="$missing$NL$name — 빌드 기록이 손상됐습니다" ;;
         *) missing="$missing$NL$name — 로컬 빌드 기록이 없습니다" ;;
       esac
       continue
@@ -513,10 +546,11 @@ sec_preflight() {
     fi
   done
   if [ -n "$missing" ]; then
-    sec_err "[D6] 고정된 digest 의 이미지가 로컬에 없습니다:"
+    sec_err "[D6] 필요한 이미지가 준비되지 않았습니다:"
     printf '%s\n' "${missing#"$NL"}" | while IFS= read -r ref; do sec_log "    $ref"; done
     sec_log "  사용자가 직접 실행하세요 (스캔 스크립트는 다운로드·빌드하지 않습니다):"
-    sec_log "    $SEC_PLUGIN/scripts/update.sh"
+    # D6 는 이미지만 본다 — --images 로 충분하다 (인자 없이 돌리면 OSV DB 까지 받는다, PR #37 리뷰 N2)
+    sec_log "    $SEC_PLUGIN/scripts/update.sh --images"
     return 1
   fi
   return 0
