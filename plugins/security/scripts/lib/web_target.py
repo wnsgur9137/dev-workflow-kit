@@ -180,44 +180,50 @@ def proxy_filters(scheme: str, host: str, port: int):
 
 # 텍스트 안의 URL — 따옴표·꺾쇠·괄호·공백으로 나눈 토큰마다 본다 (정규식 되돌림 없이 길이에 선형, 길이 상한 없음).
 # 상한을 두면 2000자 넘는 URL 의 꼬리(뒤쪽 질의값)가 URL 로 다시 잡히지 않고 남는다 (PR #34 3차 리뷰 R3-W2)
-_TOKEN = re.compile(r"[^\s\"'<>()]+")
+_TOKEN = re.compile(r"[^\s\"'<>()`]+")
 _URL_START = re.compile(r"(?i)(?:https?:)?//")
-# 쿠키 헤더 — 값은 줄 끝까지 받아 파이썬에서 나눈다 (3차 리뷰 R3-S2: Cookie·따옴표 값)
-_COOKIE_HDR = re.compile(r"(?i)\b(set-cookie|cookie):([^\r\n]*)")
+# '/' 없는 상대 URL 의 경로 매개변수·조각 값('cb;jsessionid=…', 'cb#access_token=…', 4차 리뷰 R4-S4) — 문자 클래스가 구분자를 빼서 선형
+_PARAM_HINT = re.compile(r";[^=;]*=|#[^#]*=")
+# 쿠키 헤더와 그 뒤의 'name=value' 쌍들 — 값은 따옴표 통째·또는 ';'·공백·'\' 앞까지. 쌍 문법이 끝나면 멈춰 줄 나머지를 남긴다.
+# 'Set-Cookie' 안의 'Cookie' 나 단어 중간은 잡지 않되, 이스케이프된 줄바꿈('\r\nSet-Cookie:') 뒤는 잡는다 (4차 리뷰 R4-S1)
+_COOKIE_HDR = re.compile(r'(?i)(?:(?<![\w-])|(?<=\\[rn]))(set-cookie|cookie):((?:[ \t]*[^=;\s\\]+=(?:"[^"]*"|[^;\s\\]*);?)*)')
+_COOKIE_PAIR = re.compile(r'([ \t]*[^=;\s\\]+)=(?:"[^"]*"|[^;\s\\]*)')
+# JSON 의 ASCII 유니코드 이스케이프('\u002f'·'\u0026'·'\u003d', R4-S4) — '\/' 와 같이 미리 푼다
+_JSON_U = re.compile(r"\\u00([0-7][0-9a-fA-F])")
+DECODE_MAX = 2   # 인코딩 풀기 단계 — 두 번 인코딩된 중첩 URL 까지 (R4-S4)
 
 
-def _redact_token(tok: str, decoded: bool = False) -> str:
-    if not decoded and "%" in tok:
-        # 인코딩된 중첩 URL('http%3A%2F%2Fh%2Fcb%3Fcode%3D…') — 한 번 풀어 가릴 것이 있으면 푼 모양으로 가린다 (3차 리뷰 R3-S2)
+def _redact_token(tok: str, depth: int = 0) -> str:
+    if depth < DECODE_MAX and "%" in tok:
+        # 인코딩된 중첩 URL('http%3A%2F%2Fh%2Fcb%3Fcode%3D…') — 풀어서 가릴 것이 있으면 푼 모양으로 가린다 (3차 리뷰 R3-S2)
         d = urllib.parse.unquote(tok)
         if d != tok:
-            r = _redact_token(d, True)
+            r = _redact_token(d, depth + 1)
             if r != d:
                 return r
     m = _URL_START.search(tok)
-    if m:   # 절대·스킴 상대 URL — 앞부분(예: 'url=')은 그대로 둔다
-        return tok[:m.start()] + _redact_url(tok[m.start():])
-    # 상대 URL: 질의가 있거나, 경로에 조각·경로 매개변수가 붙었다 ('cb?code=…', '../cb?…', '/cb;jsessionid=…')
-    if "?" in tok or ("/" in tok and ("#" in tok or ";" in tok)):
+    if m:
+        pre = tok[:m.start()]
+        # 앞부분이 상대 URL 이면('/authorize?code=…&redirect_uri=https://…') 뒤의 절대 URL 은 그 질의값이다 — 토큰 전체를 URL 로 본다
+        # (4차 리뷰 R4-W1). 그렇지 않으면 앞부분(예: 'url=')은 그대로 둔다
+        if "?" in pre or "#" in pre or ";" in pre:
+            return _redact_url(tok)
+        return pre + _redact_url(tok[m.start():])
+    # 상대 URL: 질의가 있거나, 경로에 조각·경로 매개변수가 붙었다 ('cb?code=…', '../cb?…', '/cb;jsessionid=…', 'cb;jsessionid=…')
+    if "?" in tok or ("/" in tok and ("#" in tok or ";" in tok)) or _PARAM_HINT.search(tok):
         return _redact_url(tok)
     return tok
 
 
 def _mask_cookie(m) -> str:
-    name, value = m.group(1), m.group(2)
-    pairs = value.split(";")
     # Set-Cookie 는 첫 쌍만 값이고 뒤는 속성(Path=/ 등), Cookie 는 모든 쌍이 값이다. 따옴표 값은 통째로 가린다
-    n = 1 if name.lower() == "set-cookie" else len(pairs)
-    for i in range(min(n, len(pairs))):
-        k, eq, _v = pairs[i].partition("=")
-        if eq:
-            pairs[i] = k + "=[MASKED]"
-    return name + ":" + ";".join(pairs)
+    n = 1 if m.group(1).lower() == "set-cookie" else -1
+    return m.group(1) + ":" + _COOKIE_PAIR.sub(r"\1=[MASKED]", m.group(2), count=max(n, 0))
 
 
 def redact_text(text: str) -> str:
     """로그·근거 같은 자유 텍스트 안의 URL 값과 쿠키 값을 가린다 (JSON 이스케이프 '\\/' 도 풀어서 본다)."""
-    t = str(text).replace("\\/", "/")
+    t = _JSON_U.sub(lambda m: chr(int(m.group(1), 16)), str(text).replace("\\/", "/"))
     t = _TOKEN.sub(lambda m: _redact_token(m.group(0)), t)
     return _COOKIE_HDR.sub(_mask_cookie, t)
 
