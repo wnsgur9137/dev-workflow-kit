@@ -30,7 +30,7 @@ def run(argv, now=NOW, environ=None):
     lines = out.getvalue().splitlines()
     names = [x for x in lines[1:] if not x.startswith("!")]
     # 경고·실패는 stdout 의 '!warn '·'!fail ' 줄과 stderr 를 합쳐 돌려준다 (이슈 #39)
-    msgs = "\n".join(x for x in lines if x.startswith("!")) + err.getvalue()
+    msgs = "\n".join(x for x in lines if x.startswith("!")) + "\n" + err.getvalue()
     return rc, names, lines[0] if lines else "", msgs
 
 
@@ -109,6 +109,24 @@ class CleanupTest(unittest.TestCase):
             self.assertEqual(run([self.d])[:2], (0, [os.path.basename(old)]))
         self.assertFalse(os.path.exists(old))
         self.assertEqual(os.getcwd(), cwd)
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root 는 권한 거부를 재현할 수 없다")
+    def test_pre311_path_works_from_an_unreadable_working_folder(self):
+        # PR #47 리뷰 S1: 실행 권한만 있는 작업 폴더에서도 지운다 (작업 폴더를 열 수 없으면 경로로 돌아온다)
+        from unittest import mock
+        old = self.mk(rid(45))
+        noread = tempfile.mkdtemp()
+        self.addCleanup(os.chmod, noread, 0o700)
+        cwd = os.getcwd()
+        os.chdir(noread)
+        os.chmod(noread, 0o311)
+        try:
+            with mock.patch.object(c.sys, "version_info", (3, 9, 0)):
+                self.assertEqual(run([self.d])[:2], (0, [os.path.basename(old)]))
+        finally:
+            os.chmod(noread, 0o700)
+            os.chdir(cwd)
+        self.assertFalse(os.path.exists(old))
 
     def test_pre311_path_survives_a_swapped_root(self):
         # 이슈 #39: 고른 뒤 reports 경로가 다른 폴더로 바뀌어도(이름 바꾸기 + 같은 이름의 미끼) 연 폴더 안의 것만 지운다

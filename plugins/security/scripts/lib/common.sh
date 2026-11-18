@@ -65,7 +65,7 @@ sec_init_dirs() {
   chmod 700 "$SEC_DATA" "$SEC_DATA/data" "$SEC_DATA/reports" "$SEC_CONF" || return 1
 }
 
-# sec_cleanup_run [cleanup_reports.py 인자…] — 정리를 실행하고 결과를 나눠 둔다 (임시 파일 없이 한 흐름, 이슈 #39)
+# sec_cleanup_run [cleanup_reports.py 인자…] — 정리를 실행하고 결과를 나눠 둔다 (남는 임시 파일 없이 한 흐름, 이슈 #39)
 #   SEC_CLEAN_RC 종료코드 · SEC_CLEAN_DAYS 보관 기간 · SEC_CLEANED 지운(지울) run-id 줄들 · SEC_CLEAN_WARN 경고·실패 줄들
 #   stderr(인자 오류·예상 못 한 예외)도 같은 흐름으로 받아 경고로 다룬다
 # shellcheck disable=SC2120  # 인자는 cleanup.sh 가 넘긴다 (자동 정리는 인자 없이)
@@ -78,7 +78,10 @@ sec_cleanup_run() {
     case "$line" in
       '') ;;
       days=*) SEC_CLEAN_DAYS=${line#days=} ;;
-      '!warn '* | '!fail '*) SEC_CLEAN_WARN="$SEC_CLEAN_WARN${SEC_CLEAN_WARN:+$nl}${line#!* }" ;;
+      '!warn '*) SEC_CLEAN_WARN="$SEC_CLEAN_WARN${SEC_CLEAN_WARN:+$nl}${line#!warn }" ;;
+      # 실패는 접두사로 구분해 run.log 에서 "지우지 못한 리포트"만 찾을 수 있게 (PR #47 리뷰 N8)
+      '!fail '*) SEC_CLEAN_WARN="$SEC_CLEAN_WARN${SEC_CLEAN_WARN:+$nl}실패: ${line#!fail }" ;;
+      *' '*) SEC_CLEAN_WARN="$SEC_CLEAN_WARN${SEC_CLEAN_WARN:+$nl}$line" ;;   # 공백이 든 줄은 run-id 가 아니다 (N3)
       [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-*) SEC_CLEANED="$SEC_CLEANED${SEC_CLEANED:+$nl}$line" ;;
       *) SEC_CLEAN_WARN="$SEC_CLEAN_WARN${SEC_CLEAN_WARN:+$nl}$line" ;;
     esac

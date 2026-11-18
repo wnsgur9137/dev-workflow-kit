@@ -8,7 +8,7 @@ reports 자체가 링크면 그 실제 폴더를 정리한다 — 스캔도 그 
   python3 -I cleanup_reports.py <reports 폴더> [--days N] [--dry-run]
   보관 기간: --days N > 환경변수 DWK_SECURITY_RETENTION_DAYS > 30 (1~3650)
   stdout: 첫 줄 "days=<N>", 이어서 지운(--dry-run 이면 지울) run-id 한 줄씩. 경고는 "!warn <내용>", 실패는 "!fail <내용>"
-          (run-id 는 '!' 로 시작할 수 없어 섞이지 않는다 — 호출하는 쪽이 임시 파일 없이 한 흐름으로 읽는다, 이슈 #39)
+          (run-id 는 '!' 로 시작할 수 없어 섞이지 않는다 — 호출하는 쪽이 남는 임시 파일 없이 한 흐름으로 읽는다, 이슈 #39)
   stderr: 인자 오류·예상 못 한 예외만
   종료코드 0 정상 · 1 일부 실패 · 2 인자 오류
 """
@@ -72,7 +72,7 @@ def _gone_ok(func, path, exc_info):
     raise e
 
 
-def _remove(fd, root, name):
+def _remove(fd, name):
     if sys.version_info >= (3, 12):
         shutil.rmtree(name, dir_fd=fd, onexc=_gone_ok)
         return
@@ -81,13 +81,26 @@ def _remove(fd, root, name):
         return
     # 3.8~3.10: dir_fd 를 받지 못한다 — 연 폴더(fd)로 들어가 상대 경로로 지운다. 경로를 다시 해석하지 않으므로
     # 그 사이 root 가 바뀌어도 다른 곳을 지우지 않는다 (이슈 #39, PR #38 2차 R2-S2). 끝나면 원래 폴더로 돌아온다
-    here = os.open(".", os.O_RDONLY)
+    # 원래 폴더 기억: 작업 폴더를 읽을 수 없으면(실행 권한만 있는 폴더) fd 대신 경로로 돌아간다 — 그래야 삭제 자체가
+    # 작업 폴더 권한 때문에 실패하지 않는다 (PR #47 리뷰 S1)
+    try:
+        here, saved = os.open(".", os.O_RDONLY), None
+    except OSError:
+        here, saved = None, os.getcwd()
     try:
         os.fchdir(fd)
         shutil.rmtree(name, onerror=_gone_ok)
     finally:
-        os.fchdir(here)
-        os.close(here)
+        try:
+            if here is not None:
+                os.fchdir(here)
+            else:
+                os.chdir(saved)
+        except OSError:
+            pass
+        finally:
+            if here is not None:
+                os.close(here)
 
 
 def main(argv, now=None, environ=None):
@@ -111,17 +124,15 @@ def main(argv, now=None, environ=None):
     if len(args) != 1:
         print("사용: cleanup_reports.py <reports 폴더> [--days N] [--dry-run]", file=sys.stderr)
         return 2
+    bad_env = None
     if days is None:
         env = environ.get(ENV_DAYS)
         days = parse_days(env) if env is not None else DEFAULT_DAYS
         if days is None:
-            days = DEFAULT_DAYS
-            print(f"days={days}")
-            print(f"!warn {ENV_DAYS} 값이 잘못됐습니다(1~{MAX_DAYS} 정수): {env!r} — 기본 {DEFAULT_DAYS}일로 정리합니다")
-        else:
-            print(f"days={days}")
-    else:
-        print(f"days={days}")
+            bad_env, days = env, DEFAULT_DAYS
+    print(f"days={days}")
+    if bad_env is not None:
+        print(f"!warn {ENV_DAYS} 값이 잘못됐습니다(1~{MAX_DAYS} 정수): {bad_env!r} — 기본 {DEFAULT_DAYS}일로 정리합니다")
     if not os.path.lexists(args[0]):
         return 0          # 아직 스캔한 적 없음
     root = os.path.realpath(args[0])
@@ -141,7 +152,7 @@ def main(argv, now=None, environ=None):
         for name in expired(os.listdir(fd), is_dir, days, now, warn):
             if not dry:
                 try:
-                    _remove(fd, root, name)
+                    _remove(fd, name)
                 except OSError as e:
                     print(f"!fail 지우지 못했습니다: {name} ({e.__class__.__name__}: {e.strerror or e})")
                     rc = 1

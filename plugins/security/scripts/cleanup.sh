@@ -35,7 +35,7 @@ if [ -n "$SEC_CLEAN_WARN" ]; then
   printf '%s\n' "$SEC_CLEAN_WARN" | while IFS= read -r line; do sec_warn "$line"; done
 fi
 if [ "$SEC_CLEAN_RC" -ne 0 ]; then
-  sec_err "정리하지 못한 항목이 있습니다 — 위 메시지를 확인하세요"
+  sec_err "정리하지 못한 항목이 있습니다 (종료코드 $SEC_CLEAN_RC) — 위 메시지를 확인하세요"
 elif [ -z "$SEC_CLEANED" ]; then
   sec_log "${SEC_CLEAN_DAYS}일보다 오래된 리포트가 없습니다 ($SEC_DATA/reports)"
 fi
