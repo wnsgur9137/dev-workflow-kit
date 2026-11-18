@@ -434,3 +434,52 @@ test_new_run_is_atomic_under_concurrency() {
   assert_eq "$(wc -l <"$SEC_TMP/ids" | tr -d ' ')" 6
   assert_eq "$(sort -u "$SEC_TMP/ids" | wc -l | tr -d ' ')" 6 "(run-id 중복)"
 }
+
+# --- 리포트 보관 (Q10: 30일, P4) -------------------------------------------------
+_run_id_days_ago() {
+  python3 -c 'import datetime as d,sys; print((d.datetime.now()-d.timedelta(days=int(sys.argv[1]))).strftime("%Y%m%d-%H%M%S")+"-"+sys.argv[2])' "$1" "$2"
+}
+
+test_new_run_removes_reports_past_retention() {
+  load_common
+  sec_init_dirs
+  local old keep
+  old=$(_run_id_days_ago 31 code)
+  keep=$(_run_id_days_ago 29 web)
+  mkdir -p "$SEC_DATA/reports/$old/raw" "$SEC_DATA/reports/$keep/raw" "$SEC_DATA/reports/my-notes"
+  sec_new_run app 2>"$SEC_TMP/err" || fail "sec_new_run 실패"
+  [ ! -e "$SEC_DATA/reports/$old" ] || fail "30일 지난 리포트가 남음"
+  [ -d "$SEC_DATA/reports/$keep" ] || fail "30일 안의 리포트를 지움"
+  [ -d "$SEC_DATA/reports/my-notes" ] || fail "형식이 다른 폴더를 지움"
+  [ -d "$SEC_RUN_DIR" ] || fail "새 실행 폴더가 없음"
+  assert_contains "$(cat "$SEC_TMP/err")" "보관 기간(30일)이 지난 리포트 1개를 지웠습니다"
+}
+
+test_new_run_continues_when_cleanup_fails() {
+  load_common
+  sec_init_dirs
+  # 정리 스크립트가 실패해도 스캔 폴더는 만든다 (경고만)
+  SEC_PLUGIN="$SEC_TMP/broken" sec_cleanup_reports 2>"$SEC_TMP/err"
+  assert_contains "$(cat "$SEC_TMP/err")" "오래된 리포트를 정리하지 못했습니다"
+  sec_new_run code 2>/dev/null || fail "정리 실패로 스캔이 멈춤"
+}
+
+test_cleanup_script_dry_run_days_and_bad_args() {
+  load_common
+  sec_init_dirs
+  local a b
+  a=$(_run_id_days_ago 10 code)
+  b=$(_run_id_days_ago 40 app)
+  mkdir -p "$SEC_DATA/reports/$a" "$SEC_DATA/reports/$b"
+  assert_status 0 "$PLUGIN_DIR/scripts/cleanup.sh" --dry-run
+  assert_contains "$OUT" "지울 대상: 1개"
+  assert_contains "$OUT" "$b"
+  [ -d "$SEC_DATA/reports/$b" ] || fail "--dry-run 이 지움"
+  assert_status 0 "$PLUGIN_DIR/scripts/cleanup.sh" --days 7
+  assert_contains "$OUT" "지움: 2개"
+  if [ -e "$SEC_DATA/reports/$a" ] || [ -e "$SEC_DATA/reports/$b" ]; then fail "--days 7 로 지우지 않음"; fi
+  assert_status 0 "$PLUGIN_DIR/scripts/cleanup.sh"
+  assert_contains "$OUT" "보관 기간이 지난 리포트가 없습니다"
+  assert_status 2 "$PLUGIN_DIR/scripts/cleanup.sh" --days 0
+  assert_status 2 "$PLUGIN_DIR/scripts/cleanup.sh" --all
+}
