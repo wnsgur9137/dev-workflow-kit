@@ -207,7 +207,12 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 - 호스트에서 띄운 개발 서버는 `localhost` 대신 `host.docker.internal` 로 지정합니다 (컨테이너 안의 `localhost` 는 컨테이너 자신).
 - 소스맵 공개·API 에러 스택트레이스·로그인 뒤 페이지처럼 baseline 이 확인하지 못하는 항목은 summary 의 수동 체크리스트로 붙습니다.
 
-모든 컨테이너는 `--network none`(MobSF 는 내부 전용 네트워크, ZAP 은 허용목록 프록시만 닿는 내부 네트워크)·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다. 리포트는 **30일** 보관합니다 — 스캔할 때마다 그보다 오래된 `reports/<run-id>/` 를 지우고, `scripts/cleanup.sh [--days N] [--dry-run]` 으로 직접 정리할 수도 있습니다(폴더 이름의 시각으로 판정, 다른 이름·링크는 건드리지 않음).
+모든 컨테이너는 `--network none`(MobSF 는 내부 전용 네트워크, ZAP 은 허용목록 프록시만 닿는 내부 네트워크)·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다. 리포트는 **30일** 보관합니다. 스캔할 때마다 그보다 오래된 `reports/<run-id>/` 를 지우고, 지운 이름을 새 실행의 `run.log` 에 남깁니다.
+
+> [!warning] 0.10.0 으로 올린 뒤 **첫 스캔에서** 30일 지난 리포트가 바로 지워집니다 (되돌릴 수 없음)
+> - 먼저 확인: `~/.claude/plugins/cache/dev-workflow-kit/security/<버전>/scripts/cleanup.sh --dry-run`
+> - 남기려면: 다른 곳에 복사하거나, 폴더 이름을 바꾸세요(`<run-id>` 형식이 아니면 건드리지 않습니다). 또는 보관 기간을 늘리세요 — 셸에서 `export DWK_SECURITY_RETENTION_DAYS=90`(1~3650)
+> - 직접 정리: `cleanup.sh [--days N] [--dry-run]`. 나이는 폴더 이름의 시각으로 판정하고, 다른 이름·링크는 건드리지 않습니다. 자동 정리는 `DWK_SECURITY_RETENTION_DAYS` 를 따르므로 `--days` 로 길게 잡아도 다음 스캔에서 그 기간으로 다시 정리됩니다
 
 ### 권한 설정
 
