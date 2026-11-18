@@ -194,7 +194,11 @@ _NAME_END = re.compile(r"[=; \t\r\n\\]")
 _NOT_BLANK = re.compile(r"[^ \t]")
 # JSON 의 ASCII 유니코드 이스케이프('\u002f'·'\u0026'·'\u003d', R4-S4) — '\/' 와 같이 미리 푼다
 _JSON_U = re.compile(r"\\u00([2-7][0-9a-fA-F])")   # 인쇄 가능한 ASCII 만 — 제어문자는 풀지 않는다 (R5 NITPICK)
-DECODE_MAX = 2   # 인코딩 풀기 단계 — 두 번 인코딩된 중첩 URL 까지 (R4-S4)
+DECODE_MAX = 3   # 인코딩 풀기 단계 — 세 번 인코딩된 중첩 URL 까지 (R4-S4, 이슈 #36)
+# Set-Cookie 속성 이름 — 접힌 Set-Cookie('…; Path=/, sid=…')에서 ',' 뒤가 속성이 아니면 새 쿠키로 본다 (이슈 #36)
+_SET_COOKIE_ATTRS = {"expires", "max-age", "domain", "path", "secure", "httponly", "samesite", "priority", "partitioned"}
+# 헤더 한 줄의 끝 — 실제 줄바꿈 또는 이스케이프된 줄바꿈('\r'·'\n')
+_LINE_END = re.compile(r"[\r\n]|\\[rn]")
 
 
 def _redact_token(tok: str, depth: int = 0) -> str:
@@ -247,8 +251,13 @@ def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool):
         return j
     while True:
         j = skip(i)
-        k = not_blank(name_end(j))   # 이름 끝 뒤 공백까지 건너뛴 곳
+        ne = name_end(j)
+        k = not_blank(ne)            # 이름 끝 뒤 공백까지 건너뛴 곳
         if k >= n or t[k] != "=":
+            # Cookie 의 값 없는 토큰('x;'·'x,')은 건너뛰고 다음 쌍을 본다 — 그 뒤의 'sid=…' 가 남지 않게 (이슈 #36)
+            if not first_only and ne > j and (t[ne - 1] == "," or (k < n and t[k] in ";,")):
+                i = k + 1 if k < n and t[k] in ";," else k
+                continue
             return spans, i
         v = skip(k + 1)
         if t.startswith('"', v) or t.startswith('\\"', v):
@@ -268,17 +277,49 @@ def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool):
             return spans, e
 
 
+def _folded_cookies(t: str, name_end, not_blank, line_end, next_hdr, i: int):
+    """접힌 Set-Cookie('a=1; Path=/, sid=…') — 같은 헤더 줄에서 ',' 뒤의 'name=' 이 속성이 아니면 새 쿠키의 값으로 가린다.
+    Expires 값 안의 ','('Wed, 21 Oct …')는 뒤가 'name=' 이 아니라 건너뛴다 (이슈 #36, PR #34 7차 R7-N3)."""
+    # 다음 쿠키 헤더 앞에서 멈춘다 — 한 줄에 헤더가 반복돼도 각 헤더가 자기 구간만 훑어 선형이다
+    end, spans = min(line_end(i), next_hdr(i)), []
+    while True:
+        c = t.find(",", i, end)
+        if c < 0:
+            return spans
+        j = c + 1
+        while j < end and t[j] in " \t":
+            j += 1
+        ne = name_end(j)
+        if ne > j and ne < end and t[ne] == "=" and t[j:ne].strip().lower() not in _SET_COOKIE_ATTRS:
+            got, e = _cookie_pairs(t, name_end, not_blank, j, True)
+            spans += [s for s in got if s[1] <= end or s[0] < end]
+            i = max(e, c + 1)
+        else:
+            i = c + 1
+
+
 def _mask_cookies(t: str) -> str:
-    """Cookie 는 모든 쌍, Set-Cookie 는 첫 쌍(뒤는 Path=/ 같은 속성)의 값을 가린다. 쌍 문법이 끝나면 멈춰 줄 나머지를 남긴다."""
+    """Cookie 는 모든 쌍, Set-Cookie 는 첫 쌍(뒤는 Path=/ 같은 속성)과 접힌 새 쿠키의 값을 가린다.
+    쌍 문법이 끝나면 멈춰 줄 나머지를 남긴다."""
     m = _COOKIE_HDR.search(t)
     if not m:
         return t
-    name_end, not_blank = _NextFinder(t, _NAME_END), _NextFinder(t, _NOT_BLANK)
+    name_end, not_blank, line_end = _NextFinder(t, _NAME_END), _NextFinder(t, _NOT_BLANK), _NextFinder(t, _LINE_END)
+    next_hdr = _NextFinder(t, _COOKIE_HDR)
     out, last, pos = [], 0, 0
     while m:
-        spans, pos = _cookie_pairs(t, name_end, not_blank, m.end(), m.group(1).lower() == "set-cookie")
+        is_set = m.group(1).lower() == "set-cookie"
+        spans, pos = _cookie_pairs(t, name_end, not_blank, m.end(), is_set)
+        if is_set and spans:
+            spans += _folded_cookies(t, name_end, not_blank, line_end, next_hdr, spans[0][1])
+        # 다음 헤더는 첫 값의 시작부터 찾는다 — 값에 공백 없이 붙은 헤더('a=Set-Cookie: sid=…')를 건너뛰지 않게 (이슈 #36 R8-S1)
+        # (Set-Cookie 만 — 첫 쌍만 읽으므로 다시 훑는 구간이 짧다. Cookie 는 뒤의 쌍을 모두 읽어 다시 훑으면 이차가 된다)
+        pos = spans[0][0] if (is_set and spans) else max(pos, m.end())
         pos = max(pos, m.end())
-        for v, e in spans:
+        for v, e in sorted(spans):
+            v = max(v, last)              # 앞 헤더가 이미 가린 구간과 겹치면 겹친 부분은 건너뛴다
+            if e <= v:
+                continue
             out.append(t[last:v] + "[MASKED]")
             last = e
         m = _COOKIE_HDR.search(t, pos)
