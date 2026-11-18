@@ -18,6 +18,8 @@
 #                       FAKE_COMPOSE_RUN_FILE=<파일> run 의 stdout · FAKE_COMPOSE_RUN_RC=<n> run 종료코드
 #                       run·logs 는 stderr 에 실제 MobSF 처럼 API 키를 찍는다 (마스킹 확인용)
 #                       FAKE_COMPOSE_RUN_SLEEP=<초> run 이 그만큼 머문다 (중단 신호 확인용)
+#   FAKE_VERSION_LABEL=<값>  빌드한 이미지의 dwk.security.version 라벨을 이 값으로 (탭·줄바꿈 정리 확인용)
+#   compose: FAKE_COMPOSE_DOWN_RC=<n> down 종료코드 (스택을 내리지 못한 경우)
 #   compose (scan-web): run --entrypoint python3 (격리 확인)은 FAKE_COMPOSE_ISO_OUTPUT(기본 isolated)를 낸다
 #                       FAKE_COMPOSE_LOGS_FILE=<파일> logs 출력 (프록시 로그) · FAKE_COMPOSE_LOGS_RC=<n> logs 종료코드
 #                       FAKE_COMPOSE_RUN_STDERR_FILE=<파일> run(스캔)의 stderr (ZAP 진행 로그)
@@ -68,7 +70,8 @@ case "$1" in
           echo "REST API Key: ${DWK_MOBSF_API_KEY:-} secret=${DWK_MOBSF_SECRET:-}"; fi
         exit "${FAKE_COMPOSE_LOGS_RC:-0}"
         ;;
-      down | ps) exit 0 ;;
+      down) exit "${FAKE_COMPOSE_DOWN_RC:-0}" ;;
+      ps) exit 0 ;;
       *) echo "${FAKE_COMPOSE-2.29.0}" ;;
     esac
     ;;
@@ -82,7 +85,7 @@ case "$1" in
           case "$*" in
             *'{{.Id}}'*) echo "$i" ;;
             *build-input*) echo "$l" ;;
-            *dwk.security.version*) echo "$v" ;;
+            *dwk.security.version*) printf '%s\n' "${FAKE_VERSION_LABEL-$v}" ;;
             *'{{.Size}}'*) echo 9000000 ;;
           esac
           exit 0

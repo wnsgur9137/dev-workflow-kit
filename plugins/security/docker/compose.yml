@@ -15,6 +15,7 @@
 services:
   mobsf:
     image: ${DWK_MOBSF_IMAGE:?}
+    pull_policy: never   # 스캔은 받지 않는다 (이슈 #36, PR #37 1차 S5)
     networks: [scan-internal]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -48,6 +49,7 @@ services:
   # 별도 이미지를 들이지 않으려고 MobSF 이미지를 그대로 쓴다 (python3·java·bundletool·aapt2 포함).
   mobsf-client:
     image: ${DWK_MOBSF_IMAGE:?}
+    pull_policy: never   # 스캔은 받지 않는다 (이슈 #36, PR #37 1차 S5)
     profiles: [client]
     networks: [scan-internal]
     user: ${DWK_UID_GID:?}

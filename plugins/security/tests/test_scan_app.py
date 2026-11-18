@@ -499,6 +499,12 @@ class ComposeProxyTest(unittest.TestCase):
                 for k in (var, var.upper()):
                     self.assertEqual(env.get(k), '""', f"{name}: {k}")
 
+    def test_both_services_never_pull(self):
+        """이슈 #36 (PR #37 1차 S5): 스캔은 이미지를 받지 않는다 — 사전 점검(D6)과 기동 사이에 이미지가 사라져도 pull 하지 않게."""
+        with open(os.path.join(HERE, "..", "docker", "compose.yml"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertEqual(len(re.findall(r"(?m)^    pull_policy: never\b", text)), 2)
+
     def test_env_reader_is_not_fooled(self):
         """6차 N2 의 거짓 양성: environment 안 빈 줄·4칸 주석, 최상위 같은 이름 키, 끝 줄바꿈 없음."""
         text = ("services:\n  mobsf:\n    environment:\n      A: \"1\"\n\n    # 주석\n      B: \"\"\n    image: x\n"

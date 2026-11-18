@@ -41,10 +41,12 @@ SEC_LOG_FILE=""
 _sec_emit() {
   local level=$1
   shift
-  printf '[security] %s%s\n' "$level" "$*" >&2
+  # 파일(run.log)에 먼저 쓴다 — stderr 가 닫혀 있으면 printf 의 SIGPIPE 로 여기서 끝나므로, 순서가 반대면
+  # "스택을 내리지 못했습니다" 같은 경고가 run.log 에도 남지 않는다 (이슈 #36, PR #34 8차 R8-N3)
   if [ -n "$SEC_LOG_FILE" ]; then
     printf '%s %s%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$level" "$*" >>"$SEC_LOG_FILE" 2>/dev/null || true
   fi
+  printf '[security] %s%s\n' "$level" "$*" >&2
 }
 sec_log() { _sec_emit "" "$@"; }
 sec_warn() { _sec_emit "경고: " "$@"; }
@@ -341,8 +343,8 @@ sec_built_base() {
   return 1
 }
 
-# sec_build_input <name> — 빌드 입력의 sha256: 빌드 문맥 폴더($SEC_PLUGIN/docker/<이름>/)의 모든 파일(상대 경로·내용, 이름순)
-#   + 베이스 <image>@<digest>. 하나라도 바뀌면 다시 빌드해야 한다 (Dockerfile 이 COPY 할 파일도 덮는다, PR #37 리뷰 S3)
+# sec_build_input <name> — 빌드 입력의 sha256: 빌드 문맥 폴더($SEC_PLUGIN/docker/<이름>/)의 파일(상대 경로·실행 비트·내용, 이름순 —
+#   숨김·편집기 임시 파일은 .dockerignore 와 같이 뺀다) + 베이스 <image>@<digest>. 하나라도 바뀌면 다시 빌드해야 한다 (Dockerfile 이 COPY 할 파일도 덮는다, PR #37 리뷰 S3)
 sec_build_input() {
   local base ref
   base=$(sec_built_base "$1") || return 1
@@ -352,17 +354,39 @@ import hashlib, os, sys
 root, ref = sys.argv[1], sys.argv[2]
 if not os.path.isfile(os.path.join(root, "Dockerfile")):
     sys.exit(1)
+import stat
+# 숨김·편집기 임시 파일은 빼고(빌드 문맥의 .dockerignore 와 같은 규칙), 일반 파일이 아닌 항목(FIFO·링크·장치)은 실패,
+# 파일의 실행 비트도 넣는다 — COPY 가 모드를 보존한다. 다른 권한 비트는 빌드 결과에 의미가 없어 넣지 않는다 (이슈 #36, PR #37 2차 R2-N1)
+# 이 규칙은 docker/<이름>/.dockerignore 와 같아야 한다 (tests/test_common.sh 가 고정)
+def ignored(name):
+    return name.startswith(".") or name.endswith("~") or name.endswith(".swp")
 h = hashlib.sha256()
 for d, dirs, files in os.walk(root):
-    dirs.sort()
+    for x in dirs:
+        if not ignored(x) and os.path.islink(os.path.join(d, x)):
+            sys.exit(1)          # 폴더로 가는 링크도 일반 파일이 아니다 — 조용히 빼지 않는다 (PR #45 리뷰 S2)
+    dirs[:] = sorted(x for x in dirs if not ignored(x))
     for f in sorted(files):
+        if ignored(f):
+            continue
         p = os.path.join(d, f)
+        st = os.lstat(p)
+        if not stat.S_ISREG(st.st_mode):
+            sys.exit(1)
         rel = os.path.relpath(p, root).encode()
-        data = open(p, "rb").read()
-        h.update(b"F\0%d\0%s\0%d\0" % (len(rel), rel, len(data)) + data)
+        with open(p, "rb") as fh:
+            data = fh.read()
+        h.update(b"F\0%d\0%s\0%d\0%d\0" % (len(rel), rel, 1 if st.st_mode & 0o111 else 0, len(data)) + data)
 h.update(b"BASE\0" + ref.encode())
 print(h.hexdigest())
 PY
+}
+
+# sec_valid_image_id <값> — sha256:<64 hex> 인지 (빌드 기록·iidfile 이 같은 검사를 쓴다, 이슈 #36 R2-N3)
+sec_valid_image_id() {
+  case "$1" in sha256:*) ;; *) return 1 ;; esac
+  case "${1#sha256:}" in *[!0-9a-f]*) return 1 ;; esac
+  [ ${#1} -eq 71 ]
 }
 
 sec_built_record() { printf '%s\n' "$SEC_DATA/data/images/$1.built"; }
@@ -374,9 +398,7 @@ sec_built_id() {
   input=$(sec_build_input "$1") || return 3
   [ -f "$(sec_built_record "$1")" ] || return 1
   read -r rec_input rec_id <"$(sec_built_record "$1")" || return 4
-  case "$rec_id" in sha256:*) ;; *) return 4 ;; esac
-  case "${rec_id#sha256:}" in *[!0-9a-f]*) return 4 ;; esac
-  [ ${#rec_id} -eq 71 ] || return 4
+  sec_valid_image_id "$rec_id" || return 4
   [ "$rec_input" = "$input" ] || return 2
   printf '%s\n' "$rec_id"
 }
@@ -386,6 +408,7 @@ sec_built_id() {
 sec_built_verify() {
   local label
   label=$(docker image inspect --format '{{index .Config.Labels "dwk.security.build-input"}}' "$2" 2>/dev/null) || return 1
+  # 빈 값 검사: 입력 계산이 실패해 양쪽이 빈 문자열일 때 같다고 보지 않게 (지우지 말 것, R2-N3)
   [ -n "$label" ] && [ "$label" = "$(sec_build_input "$1")" ]
 }
 
@@ -557,8 +580,8 @@ sec_preflight() {
             missing="$missing$NL$name — 빌드 기록이 가리키는 이미지($ref)가 지금 빌드 입력으로 만든 것이 아닙니다"
           fi
           ;;
-        2) missing="$missing$NL$name — Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다" ;;
-        3) missing="$missing$NL$name — 빌드 입력을 계산할 수 없습니다 (images.lock 의 베이스 항목·$SEC_PLUGIN/docker/$name/Dockerfile 확인)" ;;
+        2) missing="$missing$NL$name — 빌드 입력(Dockerfile·빌드 문맥·베이스, 또는 플러그인 업데이트로 바뀐 계산 방식)이 바뀌어 다시 빌드해야 합니다" ;;
+        3) missing="$missing$NL$name — 빌드 입력을 계산할 수 없습니다 (images.lock 의 베이스 항목, $SEC_PLUGIN/docker/$name/ 의 Dockerfile·일반 파일이 아닌 항목(FIFO·링크) 확인)" ;;
         4) missing="$missing$NL$name — 빌드 기록이 손상됐습니다" ;;
         *) missing="$missing$NL$name — 로컬 빌드 기록이 없습니다" ;;
       esac

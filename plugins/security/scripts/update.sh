@@ -144,12 +144,11 @@ build_images() {
       continue
     fi
     id=$(cat "$TMP_ROOT/iid-$name" 2>/dev/null)
-    case "$id" in sha256:*) ;; *)
+    if ! sec_valid_image_id "$id"; then
       sec_err "빌드한 이미지의 ID 를 읽지 못했습니다: $tag"
       failed=1
       continue
-      ;;
-    esac
+    fi
     # 빌드 결과는 태그가 아니라 이미지 ID 로 기록하고 쓴다 — 같은 태그를 다른 빌드가 덮어써도 스캔이 그 이미지를 쓰지 않는다
     if ! sec_built_verify "$name" "$id"; then
       sec_err "빌드한 이미지($id)가 이번 빌드 입력과 다릅니다 — 중단합니다."

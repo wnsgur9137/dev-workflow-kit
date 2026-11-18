@@ -37,7 +37,8 @@ for f in "${files[@]}"; do
       cd "$TESTS_DIR" || exit 1
       SEC_TMP=$(mktemp -d "${TMPDIR:-/tmp}/sec-test.XXXXXX")
       export SEC_TMP
-      trap 'chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
+      # 테스트 파일이 sec_test_cleanup 을 정의하면 먼저 부른다 — 테스트가 EXIT trap 을 덮어써 SEC_TMP 가 남지 않게 (PR #45 리뷰 W1)
+      trap 'declare -F sec_test_cleanup >/dev/null && sec_test_cleanup; chmod -R u+w "$SEC_TMP" 2>/dev/null; rm -rf "$SEC_TMP"' EXIT
       # shellcheck disable=SC1091
       . "$TESTS_DIR/lib/assert.sh"
       # shellcheck disable=SC1090

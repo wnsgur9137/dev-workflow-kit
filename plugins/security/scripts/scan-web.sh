@@ -320,7 +320,7 @@ META_IN="$RAW/meta-in.json"
 # 로컬 빌드 이미지(egress-proxy)는 images.lock 에 없다 — 이름·버전(이미지 라벨)·이미지 ID·빌드 입력·베이스를 넘긴다.
 #   이미지 ID 는 기기마다 다르므로 재현성 추적에는 빌드 입력 해시와 베이스 digest 를 함께 남긴다 (PR #37 리뷰 S4)
 PROXY_TOOL=$(printf '%s\t%s\t%s\t%s\t%s\t%s' egress-proxy dwk-security/egress-proxy \
-  "$(docker image inspect --format '{{index .Config.Labels "dwk.security.version"}}' "$IMG_PROXY" 2>/dev/null)" \
+  "$(docker image inspect --format '{{index .Config.Labels "dwk.security.version"}}' "$IMG_PROXY" 2>/dev/null | tr -d '\t\r\n')" \
   "$IMG_PROXY" "$(sec_build_input egress-proxy)" "$(sec_image_ref egress-proxy-base)")
 # shellcheck disable=SC2086
 python3 - "$META_IN" "$STARTED_AT" "$SEC_DOCKER_CONTEXT" "$SEC_IMAGES_LOCK" \
