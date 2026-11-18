@@ -121,13 +121,14 @@ COMPOSE_PROJECT="dwk-sec-web-$PROJECT_SUFFIX"
 # 스파이더 3분 + 수동 규칙 대기 최대 10분 (docs/security/02 도구/OWASP ZAP.md). 전체는 SCAN_TIMEOUT 초에서 끊는다
 DWK_SPIDER_MIN=3
 DWK_PASSIVE_MIN=10
-SCAN_TIMEOUT=1800
+SCAN_TIMEOUT_DEFAULT=1800
+SCAN_TIMEOUT=$SCAN_TIMEOUT_DEFAULT
 # 테스트 전용: 시간 초과 경로를 확인하려고 상한을 **줄이기만** 할 수 있다 (늘릴 수는 없다)
 case "${DWK_SEC_TEST_SCAN_TIMEOUT:-}" in
   '' | *[!0-9]*) ;;
   *) [ "$DWK_SEC_TEST_SCAN_TIMEOUT" -lt "$SCAN_TIMEOUT" ] && SCAN_TIMEOUT=$DWK_SEC_TEST_SCAN_TIMEOUT ;;
 esac
-if [ "$SCAN_TIMEOUT" -lt 1800 ]; then
+if [ "$SCAN_TIMEOUT" -lt "$SCAN_TIMEOUT_DEFAULT" ]; then
   printf '%s\n' "테스트 전용 시간 상한(${SCAN_TIMEOUT}초, DWK_SEC_TEST_SCAN_TIMEOUT)이 적용됐습니다 — 의도한 것이 아니면 셸에서 이 변수를 지우세요" >>"$WARNINGS_FILE"
 fi
 DWK_ZAP_IMAGE=$IMG_ZAP
@@ -175,6 +176,7 @@ cleanup_stale() {
 STACK_UP=0
 pid_scan=""
 pid_watchdog=""
+ZAP_LOG_REDACTED=0
 stack_down() {
   compose --profile scan down -v --remove-orphans --timeout 10 >/dev/null 2>&1 && STACK_UP=0
 }
@@ -182,6 +184,10 @@ cleanup() {
   [ -n "$pid_watchdog" ] && kill "$pid_watchdog" 2>/dev/null
   # 백그라운드 compose run CLI 는 down 으로 컨테이너가 사라지면 함께 끝난다
   [ -n "$pid_scan" ] && kill "$pid_scan" 2>/dev/null
+  # 스캔 도중 중단(INT·TERM)돼도 진행 로그의 URL 값을 가려 둔다 — 정상 경로는 run_zap 이 가린다 (3차 리뷰 R3-S4)
+  if [ "$ZAP_LOG_REDACTED" -eq 0 ] && [ -f "$RAW/zap.log" ]; then
+    python3 -I "$SEC_PLUGIN/scripts/lib/web_target.py" redact-file "$RAW/zap.log" 2>/dev/null || : >"$RAW/zap.log"
+  fi
   [ $STACK_UP -eq 1 ] && stack_down
   if [ $STACK_UP -eq 1 ]; then
     sec_warn "ZAP 스택을 내리지 못했습니다 — docker compose -p $COMPOSE_PROJECT -f $COMPOSE_FILE_PATH --profile scan down -v 로 직접 지우세요."
@@ -221,6 +227,13 @@ run_zap() {
   iso=$(compose --profile scan run --rm --no-deps -T --entrypoint python3 zap -I -c "$(cat "$SEC_PLUGIN/scripts/lib/iso_probe.py")" \
     "$ORIGIN_HOST" "$ORIGIN_PORT" "$TARGET_URL" 2>&1 | tail -n 1)
   case "$iso" in
+    "UNREACHABLE timeout")
+      # 서버는 떠 있을 수 있다 — 개발 서버 첫 요청 컴파일·콜드 스타트 (3차 리뷰 R3-S3)
+      record zap failed - "대상이 60초 안에 응답하지 않았습니다 — 점검하지 않았습니다. 개발 서버라면 브라우저로 한 번 열어 첫 컴파일을 끝낸 뒤 다시 실행하세요 ($ORIGIN)"
+      save_proxy_log
+      stack_down
+      return
+      ;;
     "UNREACHABLE "*)
       # 격리는 정상 — 대상에 닿지 않을 뿐이다. 그대로 스캔하면 ZAP 이 프록시의 500 오류 페이지를 점검해 거짓 결과를 낸다 (2차 리뷰 W-B)
       record zap failed - "대상에 접속하지 못했습니다(${iso#UNREACHABLE }) — 점검하지 않았습니다. 서버가 떠 있는지, 허용목록의 포트·주소($ORIGIN)가 맞는지 확인하세요 (호스트의 개발 서버는 host.docker.internal 로 지정)"
@@ -266,6 +279,7 @@ run_zap() {
   save_proxy_log
   # 진행 로그에는 크롤링한 URL(질의값 포함)이 찍힌다 — 실패 메모가 이 꼬리에서 만들어지므로 먼저 가린다 (2차 리뷰 W-A·S-B)
   python3 -I "$SEC_PLUGIN/scripts/lib/web_target.py" redact-file "$RAW/zap.log" 2>/dev/null || : >"$RAW/zap.log"
+  ZAP_LOG_REDACTED=1
   # 스캔 도중 대상 접속이 끊긴 요청 — 결과가 일부 페이지만 반영됐을 수 있다
   local lost
   lost=$(grep -c "Could not establish a connection to $ORIGIN_HOST:$ORIGIN_PORT\$" "$RAW/proxy.log" 2>/dev/null)

@@ -4,6 +4,7 @@ scan-web.sh 가 이 파일 내용을 `python3 -I -c "<내용>" <대상 host> <�
 표준 라이브러리만 쓰고, 마지막 줄에 결과 하나를 쓴다:
   LEAK <항목…>          격리가 깨졌다 — 대상에 요청하지 않는다
   UNREACHABLE <사유>    격리는 정상인데 프록시를 거쳐 시작 URL 에 닿지 않는다 — 스캔하지 않는다
+                        사유: proxy-<5xx>·timeout·tunnel-<코드>·<예외 이름>·probe-error:<이름>
                         (서버가 안 떠 있거나 포트가 틀리면 ZAP 이 프록시의 500 오류 페이지를 대상으로 점검해 거짓 결과를 낸다,
                          PR #34 2차 리뷰 W-B)
   isolated              격리 정상 · 대상 도달
@@ -16,7 +17,9 @@ scan-web.sh 가 이 파일 내용을 `python3 -I -c "<내용>" <대상 host> <�
                     egress-proxy 가 허용목록 밖(.invalid)을 403 으로 막지 않는다 — 필터가 적용되지 않았다
 """
 
+import http.client
 import os
+import re
 import socket
 import sys
 import urllib.error
@@ -26,6 +29,8 @@ PROXY = "http://egress-proxy:8888"
 PROBE_URL = "http://dwk-isolation-probe.invalid/"   # web_target.ISOLATION_PROBE_HOST — 차단 목록에서는 뺀다
 INTERNET_NAMES = ("example.com", "www.zaproxy.org")
 INTERNET_IP = ("1.1.1.1", 443)
+# 개발 서버 첫 요청 컴파일·콜드 스타트를 기다린다 — egress-proxy 의 Timeout 과 같다 (R3-S3)
+REACH_TIMEOUT = 60
 
 
 def probe(target_host, target_port, resolve=socket.getaddrinfo, connect=socket.create_connection,
@@ -47,7 +52,7 @@ def probe(target_host, target_port, resolve=socket.getaddrinfo, connect=socket.c
     leaks += ["proxy-env:" + k for k, v in environ.items()
               if k.lower() in ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy") and v.strip()]
     if proxy_open is None:
-        proxy_open = urllib.request.build_opener(urllib.request.ProxyHandler({"http": PROXY})).open
+        proxy_open = _opener(urllib.request.ProxyHandler({"http": PROXY})).open
     try:
         resp = proxy_open(PROBE_URL, timeout=6)
         leaks.append("proxy-allows-outside")
@@ -62,17 +67,42 @@ def probe(target_host, target_port, resolve=socket.getaddrinfo, connect=socket.c
     return leaks
 
 
-def reach(url, proxy_open=None):
-    """프록시를 거쳐 시작 URL 에 GET 한 번. 대상이 보낸 응답이면(상태 코드 무관) None, 닿지 않으면 사유.
+def _opener(*handlers):
+    """필요한 핸들러만 넣는다 — 리다이렉트·ftp·file 핸들러가 없다 (PR #34 3차 리뷰 R3-W1·R3-S1).
+    대상이 보낸 3xx 는 따라가지 않고 HTTPError 로 올라온다. 리다이렉트를 따라가면 https·IdP·ftp 로 새 연결을 열어
+    정상 대상을 '닿지 않음'으로 오진하거나 프록시를 거치지 않는 접속을 시도한다."""
+    od = urllib.request.OpenerDirector()
+    for h in handlers + (urllib.request.HTTPHandler(), urllib.request.HTTPDefaultErrorHandler(),
+                         urllib.request.HTTPErrorProcessor()):
+        od.add_handler(h)
+    return od
+
+
+def _reason(e):
+    """닿지 않은 사유 — urllib 은 연결 거부·이름 풀이·터널 실패·TLS·시간 초과를 모두 URLError 로 감싸므로 안쪽 원인을 본다 (R3-S3)."""
+    r = getattr(e, "reason", e)
+    if isinstance(r, (TimeoutError, socket.timeout)) or "timed out" in str(r):
+        return "timeout"
+    m = re.search(r"Tunnel connection failed: (\d{3})", str(r))
+    if m:
+        return "tunnel-" + m.group(1)
+    return type(r).__name__ if isinstance(r, BaseException) else type(e).__name__
+
+
+def reach(url, proxy_open=None, proxy=PROXY, timeout=REACH_TIMEOUT):
+    """프록시를 거쳐 시작 URL 에 GET 한 번 — 리다이렉트는 따라가지 않고 첫 응답만 본다.
+    대상이 보낸 응답이면(3xx 포함 상태 코드 무관) None, 닿지 않으면 사유.
     tinyproxy 는 대상에 접속하지 못하면 'Server: tinyproxy' 인 5xx 를 돌려준다 (1.11.3 실측: 500 Unable to connect)."""
     if proxy_open is None:
         # 도달 여부만 본다 — 스테이징의 자체 서명 인증서로 거짓 실패하지 않게 검증하지 않는다 (ZAP 도 인증서 오류를 무시하고 점검한다)
         import ssl
-        proxy_open = urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": PROXY, "https": PROXY}),
-            urllib.request.HTTPSHandler(context=ssl._create_unverified_context())).open
+        proxy_open = _opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
+                             urllib.request.HTTPSHandler(context=ssl._create_unverified_context())).open
     try:
-        proxy_open(url, timeout=15).close()
+        resp = proxy_open(url, timeout=timeout)
+        if resp is None:   # 처리할 핸들러가 없는 스킴 — 여기까지 오지 않는다(web_target 이 http·https 만 받는다)
+            return "unsupported-scheme"
+        resp.close()
         return None
     except urllib.error.HTTPError as e:
         server = (e.headers.get("Server") if e.headers else "") or ""
@@ -80,8 +110,9 @@ def reach(url, proxy_open=None):
         if e.code >= 500 and server.strip().lower().startswith("tinyproxy"):
             return "proxy-%d" % e.code
         return None
-    except OSError as e:
-        return type(e).__name__
+    except (OSError, http.client.HTTPException) as e:
+        # HTTPException: 대상이 HTTP 가 아닌 응답(BadStatusLine·LineTooLong)을 보냄 — 격리 문제가 아니다 (R3-S5)
+        return _reason(e)
 
 
 if __name__ == "__main__":
@@ -90,5 +121,8 @@ if __name__ == "__main__":
     if found:
         print("LEAK " + " ".join(found))
     else:
-        why = reach(sys.argv[3]) if len(sys.argv) > 3 else None
+        try:
+            why = reach(sys.argv[3]) if len(sys.argv) > 3 else None
+        except Exception as e:  # 예상 못 한 오류도 '격리 확인 실패'가 아니라 '닿지 않음'으로 (R3-S5)
+            why = "probe-error:" + type(e).__name__
         print("isolated" if why is None else "UNREACHABLE " + why)
