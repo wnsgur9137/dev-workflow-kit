@@ -886,7 +886,8 @@ def _render_baseline(b) -> list:
                  f" · **해결 {b['resolved']}**" + (f" · 비교 안 함 {b['not_compared']}" if b.get("not_compared") else ""))
         L.append("- 해결은 \"직전 실행에 있던 결과가 이번에 보이지 않음\"이라는 뜻입니다. 고쳤다고 단정하기 전에 위치를 확인하세요. "
                  "같은 규칙·파일에 남은 신규와 해결은 개수만큼 짝지어 '위치 이동'으로 셌습니다(같은 파일에서 하나를 고치고 하나가 "
-                 "새로 생겨도 이동으로 보일 수 있음 — `[위치 이동 ← N행]` 표시를 확인하세요. 시크릿은 짝짓지 않습니다)")
+                 "새로 생겨도 이동으로 보일 수 있음 — `[위치 이동 ← N행]` 표시를 확인하세요). 시크릿 결과(gitleaks·시크릿 분류)는 짝짓지 않으므로 "
+                 "줄만 바뀌어도 신규와 해결에 함께 나올 수 있습니다 — 해결 표의 표시를 확인하세요")
         if "zap" in units("compared_units"):
             L.append("- 웹 점검(zap)은 크롤링한 페이지 범위에 따라 결과가 달라질 수 있습니다")
     partial = {u: n for u, n in (b.get("partial_units") or {}).items() if u in known and isinstance(n, int)}
@@ -907,7 +908,8 @@ def _render_baseline(b) -> list:
         L.append("|---|---|---|---|")
         for it in items:
             sev = it.get("severity") if it.get("severity") in SEVERITIES else "info"
-            L.append(f"| {sev} | {_code(it.get('tool', ''))} | {_code(_loc(it))} | {_code(str(it.get('rule_id', '')).split('.')[-1])} |")
+            note = " (같은 파일에 같은 규칙의 신규 있음 — 위치만 바뀌었을 수 있음)" if it.get("maybe_moved") is True else ""
+            L.append(f"| {sev} | {_code(it.get('tool', ''))} | {_code(_loc(it))}{note} | {_code(str(it.get('rule_id', '')).split('.')[-1])} |")
     L.append("")
     return L
 
@@ -1211,8 +1213,13 @@ def main(argv=None) -> int:
     unit_keys = _base.unit_keys(complete_units, extra_meta.get("tools", []), extra_meta.get("rules", []),
                                 index.labels(), extra_meta.get("plugin_version"))
     partial_paths = {u: p for u, p in partial_paths.items() if u in complete_units}
-    baseline = _base.compare(findings, complete_units, unit_keys, _base.find_previous(run_dir, args.kind, args.target),
-                             all_units={r["tool"] for r in status_rows}, partial_paths=partial_paths)
+    try:
+        baseline = _base.compare(findings, complete_units, unit_keys, _base.find_previous(run_dir, args.kind, args.target),
+                                 all_units={r["tool"] for r in status_rows}, partial_paths=partial_paths)
+    except Exception as ex:  # noqa: BLE001 — 이전 리포트는 신뢰하지 않는 입력이다. 비교만 포기하고 이번 결과는 낸다 (3차 리뷰 S3)
+        for f in findings:
+            f["baseline"] = "not-compared"
+        baseline = {"run_id": None, "reason": f"이전 실행 정보를 해석하지 못했습니다 ({type(ex).__name__})"}
     meta = {
         "run_id": run_id,
         "kind": args.kind,

@@ -111,6 +111,19 @@ def find_previous(run_dir, kind, target):
     return None
 
 
+def _strs(v, limit=None):
+    """이전 meta 의 목록 값 — 리스트의 문자열 원소만 받는다 (형식이 다르면 빈 목록, 3차 리뷰 S3)."""
+    if not isinstance(v, list):
+        return []
+    out = [x for x in v if isinstance(x, str)]
+    return out if limit is None else out[:limit + 1]
+
+
+def _no_move(f):
+    """짝짓지 않는 결과 — gitleaks 단위와, 다른 도구(semgrep 의 시크릿 규칙 등)의 시크릿 분류 (3차 리뷰 S1)."""
+    return f.get("unit") in NO_MOVE or f.get("category") == "secret"
+
+
 def _brief(f):
     loc = f.get("location") if isinstance(f.get("location"), dict) else {}
     sev = f.get("severity") if f.get("severity") in SEVERITIES else "info"
@@ -139,13 +152,18 @@ def compare(findings, complete_units, keys, prev, all_units=(), partial_paths=No
     name, meta, prev_findings = prev
     if prev_findings is None:
         return none(name, "이전 실행이 비교 정보가 없는 이전 버전 리포트이거나 읽을 수 없습니다")
-    prev_complete = {u for u in meta["complete_units"] if u in UNIT_TOOL}
+    prev_complete = {u for u in _strs(meta["complete_units"]) if u in UNIT_TOOL}
     both = set(complete_units) & prev_complete
     changed = {u for u in both if meta["unit_keys"].get(u) != keys.get(u)}
     comparable = both - changed
     prev_partial = meta.get("partial_paths") if isinstance(meta.get("partial_paths"), dict) else {}
-    skip = {u: set(map(str, (partial_paths or {}).get(u) or [])) | set(map(str, prev_partial.get(u) or []))
-            for u in comparable}
+    skip = {}
+    for u in sorted(comparable):
+        old = _strs(prev_partial.get(u), PARTIAL_PATHS_MAX)
+        if len(old) > PARTIAL_PATHS_MAX:       # 이전 기록이 비정상적으로 크면 그 단위는 비교하지 않는다
+            comparable.discard(u)
+            continue
+        skip[u] = set(_strs((partial_paths or {}).get(u))) | set(old)
 
     def file_of(f):
         loc = f.get("location") if isinstance(f.get("location"), dict) else {}
@@ -153,7 +171,7 @@ def compare(findings, complete_units, keys, prev, all_units=(), partial_paths=No
 
     def in_scope(f):
         u = f.get("unit")
-        return u in comparable and file_of(f) not in skip.get(u, ())
+        return isinstance(u, str) and u in comparable and file_of(f) not in skip.get(u, ())
 
     prev_ids = {}
     for f in prev_findings:
@@ -174,11 +192,11 @@ def compare(findings, complete_units, keys, prev, all_units=(), partial_paths=No
     # 위치만 바뀐 결과 — 같은 (단위, 규칙, 파일, 패키지)에 남은 신규와 해결을 개수만큼 짝짓는다 (리뷰 W2). 시크릿은 짝짓지 않는다
     pool = {}
     for f in gone:
-        if f.get("unit") not in NO_MOVE:
+        if not _no_move(f):
             pool.setdefault(_move_key(f), []).append(f)
     moved_away = set()
     for f in new:
-        bucket = pool.get(_move_key(f))
+        bucket = None if _no_move(f) else pool.get(_move_key(f))
         if bucket:
             old = bucket.pop()
             moved_away.add(id(old))
@@ -189,8 +207,17 @@ def compare(findings, complete_units, keys, prev, all_units=(), partial_paths=No
     gone = [f for f in gone if id(f) not in moved_away]
     counts = {k: sum(1 for f in findings if f["baseline"] == k) for k in ("new", "existing", "moved", "not-compared")}
     order = {s: i for i, s in enumerate(SEVERITIES)}
-    resolved = sorted((_brief(f) for f in gone), key=lambda b: (order[b["severity"]], b["tool"], b["location"].get("file") or ""))
-    prev_status = {r.get("tool") for r in meta.get("tool_status") or [] if isinstance(r, dict)}
+    # 짝짓지 않은 시크릿은 줄만 바뀌어도 신규+해결로 남는다 — 같은 (단위, 규칙, 파일)에 신규가 있으면 해결 쪽에 표시한다 (3차 리뷰 S4)
+    new_keys = {_move_key(f) for f in findings if f["baseline"] == "new"}
+    briefs = []
+    for f in gone:
+        b = _brief(f)
+        if _move_key(f) in new_keys:
+            b["maybe_moved"] = True
+        briefs.append(b)
+    resolved = sorted(briefs, key=lambda b: (order[b["severity"]], b["tool"], b["location"].get("file") or ""))
+    status_rows = meta.get("tool_status") if isinstance(meta.get("tool_status"), list) else []
+    prev_status = {r.get("tool") for r in status_rows if isinstance(r, dict) and isinstance(r.get("tool"), str)}
     units = ({u for u in all_units if u in UNIT_TOOL} | {u for u in prev_status if u in UNIT_TOOL}
              | set(complete_units) | prev_complete)
     return {"run_id": name, "compared_units": sorted(comparable), "changed_units": sorted(changed),
