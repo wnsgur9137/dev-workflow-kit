@@ -199,6 +199,10 @@ DECODE_MAX = 3   # 인코딩 풀기 단계 — 세 번 인코딩된 중첩 URL �
 _SET_COOKIE_ATTRS = {"expires", "max-age", "domain", "path", "secure", "httponly", "samesite", "priority", "partitioned"}
 # 헤더 한 줄의 끝 — 실제 줄바꿈 또는 이스케이프된 줄바꿈('\r'·'\n')
 _LINE_END = re.compile(r"[\r\n]|\\[rn]")
+# 쿠키 값이 끝나는 곳(따옴표 없는 값) — 구분자 또는 이스케이프된 줄바꿈·따옴표. _cookie_pairs 의 글자 단위 조건과 같다
+_VALUE_END = re.compile(r'[; \t\r\n]|\\[rn"]')
+_DQ = re.compile('"')
+_ESC_DQ = re.compile(r'\\"')
 
 
 def _redact_token(tok: str, depth: int = 0) -> str:
@@ -238,7 +242,7 @@ class _NextFinder:
         return self.hi
 
 
-def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool, next_hdr=None):
+def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool, finders=None):
     """t[i:] 의 'name=value; name=value' 를 읽어 가릴 값의 (시작, 끝) 목록과 읽은 끝 위치를 돌려준다.
     공백은 이름·'='·';' 앞뒤에 허용, 쌍 구분은 ';'·공백(과 그 사이 ',', 빈 쌍 ';;' 은 건너뜀) — 다음 'name=' 이 아니면 거기서 멈춘다
     (6차 R6-W1: 'a=1 b=…'·'a=1, b=…'). 값은 따옴표(또는 JSON 이스케이프 '\\"') 통째, 아니면 구분자·이스케이프 줄바꿈·'\\"' 앞까지
@@ -260,17 +264,23 @@ def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool, next_hd
                 continue
             return spans, i
         v = skip(k + 1)
-        # 값은 다음 쿠키 헤더 앞에서 끝난다 — 읽기 전에 한계를 정해 각 값이 자기 구간만 읽는다. 공백 없이 붙은 헤더
-        # ('a=Set-Cookie: sid=…')를 값으로 삼키지 않고, 'Set-Cookie:a=' 반복에서도 선형이다 (PR #46 리뷰 W1)
-        lim = next_hdr(v) if next_hdr is not None else n
+        # 값 끝은 캐시한 찾기로 구한다 — 같은 긴 값 안에서 시작하는 헤더 여럿이 같은 끝을 다시 한 글자씩 읽지 않아 선형이다.
+        # 값을 다음 헤더 앞에서 끊지 않는다 — 값에 'cookie:' 글자가 정당하게 들어가면 꼬리와 뒤 쌍이 노출된다 (PR #46 2차 리뷰 R2-W1)
+        val_end, dq_end, edq_end = finders if finders else (None, None, None)
         if t.startswith('"', v) or t.startswith('\\"', v):
             q = '"' if t[v] == '"' else '\\"'
-            e = t.find(q, v + len(q), lim)
-            e = lim if e < 0 else e + len(q)
+            if finders:
+                e = (dq_end if q == '"' else edq_end)(v + len(q))
+                e = n if e >= n else e + len(q)
+            else:
+                e = t.find(q, v + len(q))
+                e = n if e < 0 else e + len(q)
+        elif finders:
+            e = val_end(v)
         else:
             e = v
             # ',' 는 값에 남긴다 — 값 안 ','(비표준)에서 끊으면 뒤쪽이 이름 후보로 밀려 노출된다. 'a=1, b=…' 은 공백 구분으로 잡힌다
-            while e < lim and t[e] not in "; \t\r\n" and not (t[e] == "\\" and t[e + 1:e + 2] in ("r", "n", '"')):
+            while e < n and t[e] not in "; \t\r\n" and not (t[e] == "\\" and t[e + 1:e + 2] in ("r", "n", '"')):
                 e += 1
         spans.append((v, e))
         if first_only:
@@ -280,22 +290,23 @@ def _cookie_pairs(t: str, name_end, not_blank, i: int, first_only: bool, next_hd
             return spans, e
 
 
-def _folded_cookies(t: str, name_end, not_blank, line_end, next_hdr, i: int):
+def _folded_cookies(t: str, name_end, not_blank, line_end, next_hdr, i: int, finders=None):
     """접힌 Set-Cookie('a=1; Path=/, sid=…') — 같은 헤더 줄에서 ',' 뒤의 'name=' 이 속성이 아니면 새 쿠키의 값으로 가린다.
-    Expires 값 안의 ','('Wed, 21 Oct …')는 뒤가 'name=' 이 아니라 건너뛴다 (이슈 #36, PR #34 7차 R7-N3)."""
+    Expires 값 안의 ','('Wed, 21 Oct …')는 뒤가 'name=' 이 아니라 건너뛴다 (이슈 #36, PR #34 7차 R7-N3).
+    가릴 구간 목록과 훑은 끝을 돌려준다."""
     # 다음 쿠키 헤더 앞에서 멈춘다 — 한 줄에 헤더가 반복돼도 각 헤더가 자기 구간만 훑어 선형이다
     end, spans = min(line_end(i), next_hdr(i)), []
     while True:
         c = t.find(",", i, end)
         if c < 0:
-            return spans
+            return spans, end
         j = c + 1
         while j < end and t[j] in " \t":
             j += 1
         ne = name_end(j)
         if ne > j and ne < end and t[ne] == "=" and t[j:ne].strip().lower() not in _SET_COOKIE_ATTRS:
-            got, e = _cookie_pairs(t, name_end, not_blank, j, True, next_hdr)
-            spans += [s for s in got if s[0] < end]   # 다음 헤더 이름을 값으로 가리지 않게 (구간은 이미 next_hdr 앞에서 끝남)
+            got, e = _cookie_pairs(t, name_end, not_blank, j, True, finders)
+            spans += [s for s in got if s[0] < end]   # 다음 헤더 이름에서 시작하는 값은 그 헤더가 처리한다
             i = max(e, c + 1)
         else:
             i = c + 1
@@ -309,28 +320,42 @@ def _mask_cookies(t: str) -> str:
         return t
     name_end, not_blank, line_end = _NextFinder(t, _NAME_END), _NextFinder(t, _NOT_BLANK), _NextFinder(t, _LINE_END)
     next_hdr = _NextFinder(t, _COOKIE_HDR)
+    finders = (_NextFinder(t, _VALUE_END), _NextFinder(t, _DQ), _NextFinder(t, _ESC_DQ))
     found, pos = [], 0
+    fold_lo = fold_hi = -1     # 접힌 쿠키를 이미 훑은 구간 [fold_lo, fold_hi)
     while m:
         is_set = m.group(1).lower() == "set-cookie"
-        spans, pos = _cookie_pairs(t, name_end, not_blank, m.end(), is_set, next_hdr)
+        spans, pos = _cookie_pairs(t, name_end, not_blank, m.end(), is_set, finders)
         if is_set and spans:
             # 첫 값의 시작부터 본다 — 'a=1, sid=…' 처럼 ',' 가 첫 값에 들어가도 접힌 쿠키를 찾게 (PR #46 리뷰 S2)
-            spans += _folded_cookies(t, name_end, not_blank, line_end, next_hdr, spans[0][0])
-        # 값이 다음 헤더 앞에서 끝나므로, 읽은 끝부터 다음 헤더를 찾아도 붙은 헤더를 건너뛰지 않는다 (이슈 #36 R8-S1)
+            # 공백 없이 이어진 헤더('Set-Cookie:a=Set-Cookie:a=…')는 첫 값이 모두 같은 곳에서 끝나 같은 꼬리를 다시 훑게 된다 —
+            # 이미 훑은 구간 안에서 시작하면 그 끝부터 본다. 그 구간 안에서는 줄 끝·다음 헤더가 같아 같은 답이다 (선형)
+            i = spans[0][0]
+            if fold_lo <= i < fold_hi:
+                i = fold_hi
+            else:
+                fold_lo = i
+            got, fold_hi = _folded_cookies(t, name_end, not_blank, line_end, next_hdr, i, finders)
+            spans += got
+        # Set-Cookie 는 다음 헤더를 첫 값의 시작부터 찾는다 — 값에 공백 없이 붙은 헤더('a=Set-Cookie: sid=…')를 건너뛰지 않게
+        # (이슈 #36 R8-S1). 값 끝을 캐시하므로 다시 훑어도 선형이다. Cookie 는 뒤 쌍을 모두 읽으므로 읽은 끝부터 찾는다
+        pos = spans[0][0] if (is_set and spans) else pos
         pos = max(pos, m.end())
         found += [s for s in spans if s[1] > s[0]]
         m = _COOKIE_HDR.search(t, pos)
     # 모든 헤더의 구간을 모아 정렬·병합한 뒤 한 번에 낸다 — 헤더마다 바로 내면 나중 헤더의 구간이 이미 낸 틈에 놓일 때
     # 버려지거나 텍스트가 중복된다 (PR #46 리뷰 S1)
-    out, last = [], 0
+    # 첫 값 안의 접힘 구간·따옴표 접힘 값·재검색으로 찾은 안쪽 헤더의 구간은 겹치거나 순서가 섞인다 — 정렬해 합친 뒤 낸다
+    # (PR #46 2차 리뷰 S1: 합치지 않으면 '[MASKED][MASKED]' 가 되거나 텍스트가 중복될 수 있다)
+    merged = []
     for v, e in sorted(found):
-        if e <= last:
-            continue
-        if v < last:
-            v = last
+        if merged and v <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
         else:
-            out.append(t[last:v])
-        out.append("[MASKED]")
+            merged.append([v, e])
+    out, last = [], 0
+    for v, e in merged:
+        out.append(t[last:v] + "[MASKED]")
         last = e
     out.append(t[last:])
     return "".join(out)
