@@ -234,13 +234,21 @@ def clean_text(text, limit: int, single_line: bool = False) -> str:
     return text
 
 
-def clean_ident(text, limit: int) -> str:
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def clean_ident(text, limit: int, keep_surrogates: bool = False) -> str:
     """경로·패키지·규칙 ID 같은 식별자 — 제어문자 제거·한 줄·길이 제한, 그리고 접두사 토큰·URL 자격증명 재마스킹.
     키=값·고엔트로피 패턴은 쓰지 않는다: 40자 이상 이어진 경로(app/src/main/res/xml/network_security_config)가
     고엔트로피 토큰 패턴에 걸려 [MASKED-TOKEN] 으로 바뀌던 문제 (다른 도구의 location 도 마스킹하지 않는다)."""
     if text is None:
         return ""
     t = re.sub(r"\s+", " ", _CONTROL.sub("", str(text))).strip()
+    # 잘못된 UTF-8 이름이 surrogateescape 로 남긴 짝 없는 서로게이트는 app 경로(mobsf_report.safe_ident)와 같은
+    # UTF-8(surrogatepass) 퍼센트 표기로 바꾼다 — summary 에 '\udcff' 같은 날 표기가 나오지 않게 (이슈 #33, PR #32 7차 N2)
+    # keep_surrogates: mobsf_report 는 이 결과에 safe_ident 를 다시 씌워 '%' 까지 인코딩하므로 원래 문자를 넘긴다(이중 인코딩 방지)
+    if not keep_surrogates:
+        t = _SURROGATE.sub(lambda m: "".join(f"%{b:02X}" for b in m.group().encode("utf-8", "surrogatepass")), t)
     for rx, repl in _IDENT_SECRET_PATTERNS:     # 개인키·접두사 토큰·URL 자격증명·Bearer 만 가린다
         t = rx.sub(repl, t)
     return t if len(t) <= limit else t[: limit - 1] + "…"
@@ -502,7 +510,7 @@ def parse_gitleaks(data, mode: str):
         if mode == "artifact":
             # ZIP 항목 이름은 앱(공격자)이 정한다 — summary 의 인라인 코드에 놓이므로 식별자 문자 밖은 퍼센트 인코딩 (PR #32 리뷰 W1).
             # id 는 인코딩 전 이름으로 계산한다 (2차 리뷰 NW2)
-            file = _mobsf.safe_ident(clean_ident(file, 2000), 300) or "?"   # 접두사 토큰도 가린다 (3차 NT3)
+            file = _mobsf.safe_ident(clean_ident(file, 2000, keep_surrogates=True), 300) or "?"   # 접두사 토큰도 가린다 (3차 NT3)
         line = r.get("StartLine")
         commit = (r.get("Commit") or "")[:12]
         source = (f"git 히스토리 커밋 {commit[:7]}" if mode == "git" and commit
@@ -624,7 +632,7 @@ def parse_checks(data):
 
 def parse_mobsf(data, platform_profile, converted_aab=False):
     """MobSF report_json → findings. 문자열은 앱에서 나온 신뢰하지 않는 데이터다 (scripts/lib/mobsf_report.py)."""
-    raw, warns = _mobsf.parse(data, clean_text, clean_ident, TITLE_MAX, EVIDENCE_MAX, SECRET_EVIDENCE, platform_profile,
+    raw, warns = _mobsf.parse(data, clean_text, lambda t, n: clean_ident(t, n, keep_surrogates=True), TITLE_MAX, EVIDENCE_MAX, SECRET_EVIDENCE, platform_profile,
                               converted_aab)
     out = []
     for r in raw:
@@ -1151,7 +1159,7 @@ def main(argv=None) -> int:
             mobsf_report = data
             # raw 보관본은 시크릿·문자열 덤프를 뺀 정제본만 남긴다
             _write(os.path.join(raw, "mobsf.json"),
-                   json.dumps(_mobsf.sanitize(data, lambda t: clean_text(t, 4000), lambda t: clean_ident(t, 4000)),
+                   json.dumps(_mobsf.sanitize(data, lambda t: clean_text(t, 4000), lambda t: clean_ident(t, 4000, keep_surrogates=True)),
                               ensure_ascii=False, indent=1) + "\n")
             try:
                 f, w = parse_mobsf(data, platform_profile, args.target.lower().endswith(".aab"))
