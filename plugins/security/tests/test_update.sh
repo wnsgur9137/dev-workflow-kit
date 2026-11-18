@@ -180,7 +180,7 @@ test_update_builds_egress_proxy_records_id_and_skips_when_current() {
   local id input
   id="sha256:$(printf 'd%.0s' $(seq 64))"
   FAKE_BUILD_ID=$id assert_status 0 "$UPDATE" --images
-  grep -q "^docker build -q --build-arg BASE=alpine@sha256:$BASE_D --label dwk.security.build-input=[0-9a-f]\{64\} -t dwk-security/egress-proxy:[0-9a-f]\{12\} .*/docker/egress-proxy\$" "$FAKE_LOG" ||
+  grep -q "^docker build -q --iidfile .*/iid-egress-proxy --build-arg BASE=alpine@sha256:$BASE_D --label dwk.security.build-input=[0-9a-f]\{64\} --label dwk.security.version=1.11.3-r0+alpine3.24.2 -t dwk-security/egress-proxy:[0-9a-f]\{12\} .*/docker/egress-proxy\$" "$FAKE_LOG" ||
     fail "빌드 인자가 다름: $(grep '^docker build' "$FAKE_LOG")"
   # shellcheck disable=SC1091,SC2031
   input=$(. "$PLUGIN_DIR/scripts/lib/common.sh" && sec_build_input egress-proxy)
@@ -200,6 +200,26 @@ test_update_builds_egress_proxy_records_id_and_skips_when_current() {
   assert_contains "$(cat "$REC")" "sha256:$(printf '9%.0s' $(seq 64))"
 }
 
+# 리뷰 S1: 기록은 최신인데 이미지가 사라지면(docker image prune -a·컨텍스트 전환) 다시 빌드한다 — D6 안내대로 update.sh 를 돌리면 풀려야 한다
+# 리뷰 W1: 기록이 가리키는 이미지가 지금 입력으로 빌드된 것이 아니면(라벨 다름) 넘어가지 않고 다시 빌드한다
+test_update_rebuilds_when_recorded_image_is_gone_or_not_ours() {
+  setup_update_build
+  FAKE_BUILD_ID="sha256:$(printf 'd%.0s' $(seq 64))" assert_status 0 "$UPDATE" --images
+  : >"$FAKE_BUILD_STATE"
+  : >"$FAKE_LOG"
+  FAKE_BUILD_ID="sha256:$(printf '8%.0s' $(seq 64))" assert_status 0 "$UPDATE" --images
+  grep -q '^docker build' "$FAKE_LOG" || fail "이미지가 사라졌는데 다시 빌드하지 않음"
+  assert_contains "$(cat "$REC")" "sha256:$(printf '8%.0s' $(seq 64))"
+  # 기록의 ID 가 라벨이 다른 이미지를 가리킴
+  echo "x sha256:$(printf '8%.0s' $(seq 64)) other v" >"$FAKE_BUILD_STATE"
+  : >"$FAKE_LOG"
+  FAKE_BUILD_ID="sha256:$(printf '7%.0s' $(seq 64))" assert_status 0 "$UPDATE" --images
+  grep -q '^docker build' "$FAKE_LOG" || fail "라벨이 다른 이미지인데 넘어감"
+  assert_contains "$(cat "$REC")" "sha256:$(printf '7%.0s' $(seq 64))"
+  # 기록 임시 파일이 남지 않는다
+  assert_eq "$(find "${REC%/*}" -name 'egress-proxy.built.*' | wc -l | tr -d ' ')" 0
+}
+
 test_update_build_failure_or_label_mismatch_keeps_no_record() {
   setup_update_build
   FAKE_BUILD_RC=1 assert_status 1 "$UPDATE" --images
@@ -209,8 +229,13 @@ test_update_build_failure_or_label_mismatch_keeps_no_record() {
   # 태그가 가리키는 이미지의 입력 라벨이 이번 빌드와 다르면(다른 빌드가 덮어씀) 기록하지 않고 멈춘다
   rm -f "$FAKE_BUILD_STATE"
   FAKE_BUILD_LABEL=other assert_status 1 "$UPDATE" --images
-  assert_contains "$OUT" "이번 빌드 결과와 다릅니다"
+  assert_contains "$OUT" "이번 빌드 입력과 다릅니다"
   [ ! -e "$REC" ] || fail "라벨이 다른데 기록이 생김"
+  # 빌드 결과 ID 를 받지 못하면(iidfile 없음) 태그를 다시 읽어 추측하지 않고 실패한다 (리뷰 S2)
+  rm -f "$FAKE_BUILD_STATE"
+  FAKE_BUILD_NO_IIDFILE=1 assert_status 1 "$UPDATE" --images
+  assert_contains "$OUT" "빌드한 이미지의 ID 를 읽지 못했습니다"
+  [ ! -e "$REC" ] || fail "ID 없이 기록이 생김"
 }
 
 test_update_build_needs_the_pinned_base() {

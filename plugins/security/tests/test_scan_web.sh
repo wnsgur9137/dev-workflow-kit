@@ -23,18 +23,21 @@ setup_web_fake() {
   FAKE_IMAGES=$(awk '!/^[[:space:]]*(#|$)/ { printf "%s@%s ", $2, $4 }' "$PLUGIN_DIR/docker/images.lock")
   # egress-proxy 는 update.sh 가 로컬에서 빌드한다 (이슈 #35) — 지금 Dockerfile·베이스와 맞는 빌드 기록과 그 ID 의 이미지를 둔다
   FAKE_PROXY_ID="sha256:$(printf 'e%.0s' $(seq 64))"
+  export FAKE_BUILD_STATE="$SEC_TMP/build.state"
   web_fake_built_proxy "$FAKE_PROXY_ID"
-  FAKE_IMAGES="$FAKE_IMAGES$FAKE_PROXY_ID"
   export FAKE_IMAGES FAKE_PROXY_ID
 }
 
-# web_fake_built_proxy <이미지 ID> [입력] — $DWK_SECURITY_DATA_DIR 에 egress-proxy 빌드 기록을 쓴다 (입력 기본값: 지금 Dockerfile·베이스)
+# web_fake_built_proxy <이미지 ID> [입력] — $DWK_SECURITY_DATA_DIR 에 egress-proxy 빌드 기록을 쓰고, 가짜 docker 에 그 ID 의 이미지를
+# 지금 입력 라벨로 둔다 (입력 기본값: 지금 빌드 문맥·베이스)
 web_fake_built_proxy() {
-  local input=${2:-}
+  local input=${2:-} current
   # shellcheck disable=SC1091
-  [ -n "$input" ] || input=$(. "$PLUGIN_DIR/scripts/lib/common.sh" && sec_build_input egress-proxy) || fail "빌드 입력 계산 실패"
+  current=$(. "$PLUGIN_DIR/scripts/lib/common.sh" && sec_build_input egress-proxy) || fail "빌드 입력 계산 실패"
   mkdir -p "$DWK_SECURITY_DATA_DIR/data/images"
-  printf '%s %s\n' "$input" "$1" >"$DWK_SECURITY_DATA_DIR/data/images/egress-proxy.built"
+  # shellcheck disable=SC2031  # input 은 이 함수의 인자다
+  printf '%s %s\n' "${input:-$current}" "$1" >"$DWK_SECURITY_DATA_DIR/data/images/egress-proxy.built"
+  echo "dwk-security/egress-proxy:${current:0:12} $1 $current 1.11.3-r0+alpine3.24.2" >"$FAKE_BUILD_STATE"
 }
 
 # 실제 Docker 테스트가 데이터 폴더를 임시 폴더로 바꿀 때, 사용자가 update.sh 로 만든 빌드 기록을 옮겨 온다
@@ -109,8 +112,13 @@ test_web_d6_proxy_build_record_missing_stale_or_gone() {
   assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
   assert_contains "$OUT" "Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다"
   web_fake_built_proxy "$FAKE_PROXY_ID"
-  FAKE_IMAGES=${FAKE_IMAGES% *} assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
+  : >"$FAKE_BUILD_STATE"
+  assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
   assert_contains "$OUT" "빌드한 이미지($FAKE_PROXY_ID)가 없습니다"
+  # PR #37 리뷰 W1: 기록이 다른 로컬 이미지(예: 남은 kalaksi/tinyproxy)를 가리키면 라벨이 달라 쓰지 않는다
+  FAKE_IMAGES="$FAKE_IMAGES $FAKE_PROXY_ID" assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
+  assert_contains "$OUT" "지금 빌드 입력으로 만든 것이 아닙니다"
+  assert_contains "$OUT" "update.sh --images"
   if grep -q '^docker build\|^docker pull\|^docker compose .* up\|^docker compose .* run' "$FAKE_LOG"; then
     fail "스캔이 빌드·다운로드하거나 컨테이너를 띄움"
   fi
@@ -169,7 +177,9 @@ EOF
   assert_contains "$s" "http://cdn.example/a.js?token=[MASKED]"
   assert_not_contains "$s" "abc123"
   assert_not_contains "$s" "dwk-isolation-probe"
-  assert_contains "$s" "egress-proxy: 1.11.3-r0+alpine3.24.2"
+  assert_contains "$s" "egress-proxy: \`1.11.3-r0+alpine3.24.2\` (로컬 빌드 \`sha256:eeeeeeeeeeee"
+  assert_contains "$(cat "$WEB_RUN/meta.json")" '"source": "local-build"'
+  assert_contains "$(cat "$WEB_RUN/meta.json")" '"base": "alpine@sha256:294b683c' 
   # 리포트 메타의 프록시 이미지는 빌드 기록의 이미지 ID 다 (태그는 다른 빌드가 덮어쓸 수 있어 쓰지 않는다)
   assert_contains "$(cat "$WEB_RUN/meta.json")" "\"digest\": \"$FAKE_PROXY_ID\""
   # 프록시 설정·필터는 실행마다 환경변수로 넘긴다 — 이번 대상의 출처 하나만 연다

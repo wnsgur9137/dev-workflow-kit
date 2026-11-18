@@ -265,41 +265,71 @@ test_preflight_d6_missing_image_points_to_update_and_never_pulls() {
   assert_contains "$OUT" "images.lock 에 'unknown-tool'"
 }
 
-# 이슈 #35: 로컬 빌드 이미지(egress-proxy)는 빌드 기록이 지금 Dockerfile·베이스와 맞을 때만 그 이미지 ID 를 쓴다
+# 이슈 #35: 로컬 빌드 이미지(egress-proxy)는 빌드 기록이 지금 빌드 입력과 맞고, 그 ID 의 이미지가 그 입력으로 빌드된 것
+# (라벨 dwk.security.build-input)일 때만 쓴다
 test_built_image_ref_and_d6_follow_the_build_record() {
   load_common
   use_fake_docker
-  local d id rec
+  local d id rec input
   d=$(printf 'a%.0s' $(seq 64))
   id="sha256:$(printf 'c%.0s' $(seq 64))"
-  export SEC_IMAGES_LOCK="$SEC_TMP/images.lock" FAKE_LOG="$SEC_TMP/docker.log"
+  export SEC_IMAGES_LOCK="$SEC_TMP/images.lock" FAKE_LOG="$SEC_TMP/docker.log" FAKE_BUILD_STATE="$SEC_TMP/build.state"
   printf 'egress-proxy-base alpine 3.24.2 sha256:%s linux/arm64\n' "$d" >"$SEC_IMAGES_LOCK"
   rec="$SEC_DATA/data/images/egress-proxy.built"
+  input=$(sec_build_input egress-proxy)
   assert_status 1 sec_image_ref egress-proxy
   assert_status 1 sec_preflight web egress-proxy
   assert_contains "$OUT" "egress-proxy — 로컬 빌드 기록이 없습니다"
-  assert_contains "$OUT" "update.sh"
+  assert_contains "$OUT" "update.sh --images"
   mkdir -p "${rec%/*}"
-  printf '%s %s\n' "$(sec_build_input egress-proxy)" "$id" >"$rec"
+  printf '%s %s\n' "$input" "$id" >"$rec"
   assert_eq "$(sec_image_ref egress-proxy)" "$id"
   assert_status 1 sec_preflight web egress-proxy
   assert_contains "$OUT" "빌드한 이미지($id)가 없습니다"
-  FAKE_IMAGES="$id" assert_status 0 sec_preflight web egress-proxy
+  # 리뷰 W1: 그 ID 의 이미지가 있어도 지금 입력으로 빌드된 것이 아니면(라벨 없음·다름) 쓰지 않는다 — 기록만 바꿔 다른 이미지를 쓰게 할 수 없다
+  FAKE_IMAGES="$id" assert_status 1 sec_preflight web egress-proxy
+  assert_contains "$OUT" "빌드 기록이 가리키는 이미지($id)가 지금 빌드 입력으로 만든 것이 아닙니다"
+  echo "dwk-security/egress-proxy:x $id other v" >"$FAKE_BUILD_STATE"
+  assert_status 1 sec_preflight web egress-proxy
+  assert_contains "$OUT" "지금 빌드 입력으로 만든 것이 아닙니다"
+  echo "dwk-security/egress-proxy:x $id $input v" >"$FAKE_BUILD_STATE"
+  assert_status 0 sec_preflight web egress-proxy
   # 베이스 digest 가 바뀌면(관리자가 images.lock 을 올림) 입력이 달라져 다시 빌드해야 한다 — 옛 이미지를 쓰지 않는다
   printf 'egress-proxy-base alpine 3.24.3 sha256:%s linux/arm64\n' "$(printf 'f%.0s' $(seq 64))" >"$SEC_IMAGES_LOCK"
   assert_status 2 sec_built_id egress-proxy
-  FAKE_IMAGES="$id" assert_status 1 sec_preflight web egress-proxy
+  assert_status 1 sec_preflight web egress-proxy
   assert_contains "$OUT" "Dockerfile 또는 베이스가 바뀌어 다시 빌드해야 합니다"
-  # 기록의 ID 형식이 틀리면 쓰지 않는다
-  printf '%s latest\n' "$(sec_build_input egress-proxy)" >"$rec"
-  assert_status 1 sec_image_ref egress-proxy
-  # 입력은 Dockerfile 내용에도 묶인다
-  local other="$SEC_TMP/plugin"
+  # 베이스 항목이 없으면 입력을 계산할 수 없다 (기록 없음으로 오인하지 않는다, 리뷰 N4)
+  printf 'zap zaproxy/zap-stable 1 sha256:%s linux/arm64\n' "$d" >"$SEC_IMAGES_LOCK"
+  assert_status 3 sec_built_id egress-proxy
+  assert_status 1 sec_preflight web egress-proxy
+  assert_contains "$OUT" "빌드 입력을 계산할 수 없습니다"
+  printf 'egress-proxy-base alpine 3.24.2 sha256:%s linux/arm64\n' "$d" >"$SEC_IMAGES_LOCK"
+  # 기록의 ID 형식이 틀리면(접두·길이·hex) 손상으로 보고 쓰지 않는다 (리뷰 N3)
+  local bad
+  for bad in latest "sha256:$(printf 'c%.0s' $(seq 63))" "sha256:$(printf 'g%.0s' $(seq 64))" "xx256:$(printf 'c%.0s' $(seq 64))"; do
+    printf '%s %s\n' "$input" "$bad" >"$rec"
+    assert_status 4 sec_built_id egress-proxy
+  done
+  assert_status 1 sec_preflight web egress-proxy
+  assert_contains "$OUT" "빌드 기록이 손상됐습니다"
+  # 입력은 빌드 문맥 폴더의 모든 파일에 묶인다 — Dockerfile 이 COPY 할 파일이 바뀌어도 달라진다 (리뷰 S3)
+  local other="$SEC_TMP/plugin" i1 i2 i3
   mkdir -p "$other/docker/egress-proxy"
   printf 'FROM x\n' >"$other/docker/egress-proxy/Dockerfile"
-  [ "$(SEC_PLUGIN=$other sec_build_input egress-proxy)" != "$(sec_build_input egress-proxy)" ] || fail "Dockerfile 이 바뀌어도 입력이 같음"
-  assert_not_contains "$(cat "$FAKE_LOG")" "build"
-  assert_not_contains "$(cat "$FAKE_LOG")" "pull"
+  i1=$(SEC_PLUGIN=$other sec_build_input egress-proxy)
+  [ "$i1" != "$input" ] || fail "Dockerfile 이 바뀌어도 입력이 같음"
+  printf 'a\n' >"$other/docker/egress-proxy/extra.conf"
+  i2=$(SEC_PLUGIN=$other sec_build_input egress-proxy)
+  [ "$i2" != "$i1" ] || fail "문맥의 파일이 추가돼도 입력이 같음"
+  printf 'b\n' >"$other/docker/egress-proxy/extra.conf"
+  i3=$(SEC_PLUGIN=$other sec_build_input egress-proxy)
+  [ "$i3" != "$i2" ] || fail "문맥의 파일 내용이 바뀌어도 입력이 같음"
+  rm "$other/docker/egress-proxy/Dockerfile"
+  # shellcheck disable=SC2317  # assert_status 가 부른다
+  _input_in_other() { SEC_PLUGIN=$other sec_build_input egress-proxy; }
+  assert_status 1 _input_in_other   # Dockerfile 이 없으면 입력을 내지 않는다
+  if grep -q '^docker build\|^docker pull' "$FAKE_LOG"; then fail "사전 점검이 빌드·다운로드함"; fi
 }
 
 test_preflight_real_docker_runtime() {
