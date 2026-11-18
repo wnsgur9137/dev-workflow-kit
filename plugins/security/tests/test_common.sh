@@ -470,6 +470,7 @@ test_new_run_continues_when_cleanup_fails() {
 
 # 리뷰 W1: 일부만 실패하면 실패한 run 과 원인을 보이고, 나머지는 지우고 그 개수와 이름(run.log)을 남긴다
 test_new_run_reports_partial_cleanup_failure_precisely() {
+  [ "$(id -u)" -eq 0 ] && { echo "(root 는 권한 거부를 재현할 수 없음)"; exit 77; }   # 2차 리뷰 S1
   load_common
   sec_init_dirs
   local bad good
@@ -530,6 +531,7 @@ test_cleanup_script_dry_run_days_and_bad_args() {
 }
 
 test_cleanup_script_partial_failure_is_an_error() {
+  [ "$(id -u)" -eq 0 ] && { echo "(root 는 권한 거부를 재현할 수 없음)"; exit 77; }   # 2차 리뷰 S1
   load_common
   sec_init_dirs
   local bad

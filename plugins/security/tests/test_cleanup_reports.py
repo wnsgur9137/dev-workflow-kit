@@ -3,6 +3,7 @@
 import datetime as dt
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,9 @@ class CleanupTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.out = tempfile.mkdtemp()   # 링크 대상 — 지워지면 안 된다
+        # 나중에 등록한 것이 먼저 돈다 — 권한을 되돌린 뒤 지운다 (2차 리뷰 N5)
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.addCleanup(shutil.rmtree, self.out, True)
         self.addCleanup(self._chmod_back)
 
     def _chmod_back(self):
@@ -80,6 +84,7 @@ class CleanupTest(unittest.TestCase):
         self.assertTrue(os.path.isdir(keep))
         self.assertTrue(os.path.exists(os.path.join(self.out, "precious")))
 
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root 는 권한 거부를 재현할 수 없다 (2차 리뷰 S1)")
     def test_partial_failure_reports_the_failed_run_and_keeps_going(self):
         bad = self.mk(rid(50))
         good = self.mk(rid(60, kind="web"))
@@ -108,6 +113,7 @@ class CleanupTest(unittest.TestCase):
 
     def test_linked_reports_root_cleans_the_real_folder(self):
         real = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, real, True)
         old = self.mk(rid(45), base=real)
         keep = self.mk(rid(2), base=real)
         root = os.path.join(self.d, "reports")

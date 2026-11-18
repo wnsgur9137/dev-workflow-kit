@@ -209,9 +209,11 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 
 모든 컨테이너는 `--network none`(MobSF 는 내부 전용 네트워크, ZAP 은 허용목록 프록시만 닿는 내부 네트워크)·권한 제거 상태로 돌고, 대상 저장소는 읽기 전용으로 마운트합니다. 대상 저장소의 `.gitleaks.toml`·`osv-scanner.toml`·억제 주석은 쓰지 않고 툴킷 고정 설정으로 점검합니다. 결과는 `reports/<run-id>/`의 `summary.md`(Claude가 읽는 요약)·`findings.json`·`raw/`에 남습니다. 리포트는 **30일** 보관합니다. 스캔할 때마다 그보다 오래된 `reports/<run-id>/` 를 지우고, 지운 이름을 새 실행의 `run.log` 에 남깁니다.
 
-> [!warning] 0.10.0 으로 올린 뒤 **첫 스캔에서** 30일 지난 리포트가 바로 지워집니다 (되돌릴 수 없음)
+> [!WARNING]
+> **0.10.0 으로 올린 뒤 첫 스캔에서 30일 지난 리포트가 바로 지워집니다 (되돌릴 수 없음)**
 > - 먼저 확인: `~/.claude/plugins/cache/dev-workflow-kit/security/<버전>/scripts/cleanup.sh --dry-run`
-> - 남기려면: 다른 곳에 복사하거나, 폴더 이름을 바꾸세요(`<run-id>` 형식이 아니면 건드리지 않습니다). 또는 보관 기간을 늘리세요 — 셸에서 `export DWK_SECURITY_RETENTION_DAYS=90`(1~3650)
+> - 가장 안전한 방법: **업그레이드 전에** 남길 리포트를 `reports/` 밖의 다른 폴더로 복사하세요. 폴더 이름을 바꿔도 됩니다(`<run-id>` 형식이 아니면 건드리지 않습니다). `reports` 자체를 링크로 다른 곳에 두었다면 **그 대상 폴더도 같은 규칙으로 정리**되니, 보관용 사본은 링크 대상이 아닌 별도 폴더에 두세요
+> - 보관 기간 늘리기(1~3650일): 스캔은 Claude Code 가 실행하므로 **Claude Code 가 보는 환경**에 넣어야 합니다. 다른 터미널에서 `export` 한 것은 이미 떠 있는 세션에 전달되지 않습니다. `~/.claude/settings.json` 에 `"env": {"DWK_SECURITY_RETENTION_DAYS": "90"}` 을 넣거나, 셸 설정 파일(`~/.zshrc` 등)에 `export DWK_SECURITY_RETENTION_DAYS=90` 을 넣은 뒤 Claude Code 를 다시 시작하세요. 스캔 출력의 "보관 기간(N일)" 으로 적용됐는지 확인할 수 있습니다
 > - 직접 정리: `cleanup.sh [--days N] [--dry-run]`. 나이는 폴더 이름의 시각으로 판정하고, 다른 이름·링크는 건드리지 않습니다. 자동 정리는 `DWK_SECURITY_RETENTION_DAYS` 를 따르므로 `--days` 로 길게 잡아도 다음 스캔에서 그 기간으로 다시 정리됩니다
 
 ### 권한 설정
