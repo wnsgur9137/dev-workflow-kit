@@ -127,6 +127,54 @@ class BaselineTest(unittest.TestCase):
         self.assertEqual(b["partial_units"], {"semgrep": 1})
         self.assertIn("일부 파일을 점검하지 못한 도구", s)
 
+    def test_partial_file_in_only_one_run_is_excluded_from_both_sides(self):
+        # 3차 리뷰 S2 a: 이번에만 파싱 못 한 파일의 이전 결과는 거짓 '해결'이 아니다. 반대로 이전에만 못 본 파일의 결과는 거짓 '신규'가 아니다
+        bad = [{"level": "warn", "type": "Syntax error", "path": "/src/src/legacy.swift", "message": "x"}]
+        legacy = lambda line, rule: sg(line, rule, path="/src/src/legacy.swift")  # noqa: E731
+        _w(os.path.join(self.target, "src", "legacy.swift"), "x\n" * 20)
+        self.scan("20261101-100000-code", [sg(1, "r.a"), legacy(1, "r.l")])
+        _, m, _ = self.scan("20261102-100000-code", [sg(1, "r.a")], semgrep_errors=bad)
+        self.assertEqual((m["baseline"]["resolved"], m["baseline"]["partial_units"]), (0, {"semgrep": 1}))
+        f, m, _ = self.scan("20261103-100000-code", [sg(1, "r.a"), legacy(1, "r.l")])
+        self.assertEqual(m["baseline"]["new"], 0)
+        self.assertIn(("src/legacy.swift", "not-compared"), {(x["location"]["file"], x["baseline"]) for x in f})
+
+    def test_too_many_partial_paths_make_semgrep_incomplete(self):
+        bad = [{"level": "warn", "type": "Syntax error", "path": f"/src/f{i}.js", "message": "x"} for i in range(2001)]
+        _, m, _ = self.scan("20261101-100000-code", [sg(1, "r.a")], semgrep_errors=bad)
+        self.assertNotIn("semgrep", m["complete_units"])
+
+    def test_units_only_in_previous_status_are_listed(self):
+        # 3차 리뷰 S2 b: 이전 실행에만 있던 도구(도구 목록 변경)도 '비교하지 않음'에 보인다
+        self.scan("20261101-100000-code", [sg(1, "r.a")])
+        prev = os.path.join(self.reports, "20261101-100000-code", "meta.json")
+        m = _read(prev)
+        m["tool_status"].append({"tool": "zap", "status": "ok"})
+        _w(prev, m)
+        _, m, _ = self.scan("20261102-100000-code", [sg(1, "r.a")])
+        self.assertIn("zap", m["baseline"]["not_compared_units"])
+
+    def test_malformed_previous_meta_does_not_break_the_scan(self):
+        # 3차 리뷰 S3: 이전 meta 값이 엉뚱한 형식이어도 이번 결과는 만든다
+        prev = os.path.join(self.reports, "20261101-100000-code", "meta.json")
+        for bad in ({"partial_paths": {"semgrep": 5}}, {"partial_paths": {"semgrep": "src/app.py"}}, {"tool_status": 5},
+                    {"tool_status": [{"tool": ["x"]}]}, {"complete_units": [["a"], "semgrep"]}, {"unit_keys": {"semgrep": ["x"]}}):
+            self.tmp.cleanup()
+            os.makedirs(self.reports)
+            _w(os.path.join(self.target, "src", "app.py"), "\n".join(f"os.system(c{i})" for i in range(20)) + "\n")
+            self.scan("20261101-100000-code", [sg(1, "r.a")])
+            m = _read(prev)
+            m.update(bad)
+            _w(prev, m)
+            pf = os.path.join(self.reports, "20261101-100000-code", "findings.json")
+            rep = _read(pf)
+            rep["findings"][0]["unit"] = ["x"]
+            _w(pf, rep)
+            f, m2, s = self.scan("20261102-100000-code", [sg(1, "r.a")])
+            self.assertIn("baseline", m2, bad)
+            shutil_rm = __import__("shutil").rmtree
+            shutil_rm(os.path.join(self.reports, "20261102-100000-code"))
+
     def test_tools_incomplete_in_both_runs_are_listed_as_not_compared(self):
         # 2차 리뷰 W1: 양쪽 모두 실패·부분 결과인 도구도 '비교하지 않음'에 보인다 — 변화 없음으로 읽히지 않게
         pathless = [{"level": "warn", "type": "Timeout", "message": "t"}]
@@ -172,13 +220,19 @@ class BaselineTest(unittest.TestCase):
         self.assertIn("[high] [신규] semgrep", s)
 
     def test_secrets_are_never_paired_as_moves(self):
-        leak = lambda line: {"tool": "gitleaks", "rule_id": "gitleaks.aws", "id": f"g{line}", "severity": "high",  # noqa: E731
-                             "location": {"file": "a.env", "line": line, "url": None, "package": None}, "unit": "gitleaks-dir"}
+        # 3차 리뷰 S1·S2 d·S4: gitleaks 세 단위와 다른 도구의 시크릿 분류는 짝짓지 않고, 해결 쪽에 '위치만 바뀌었을 수 있음'을 표시한다
         import baseline as bl
-        prev = ("20261101-100000-code", {"complete_units": ["gitleaks-dir"], "unit_keys": {"gitleaks-dir": "k"}}, [leak(1)])
-        cur = [leak(5)]
-        r = bl.compare(cur, ["gitleaks-dir"], {"gitleaks-dir": "k"}, prev)
-        self.assertEqual((r["new"], r["moved"], r["resolved"]), (1, 0, 1))
+        for unit, cat in (("gitleaks-dir", "secret"), ("gitleaks-git", "secret"), ("gitleaks-artifact", "secret"), ("semgrep", "secret")):
+            leak = lambda line: {"tool": "x", "rule_id": "aws", "id": f"{unit}{line}", "severity": "high", "category": cat,  # noqa: E731
+                                 "location": {"file": "a.env", "line": line, "url": None, "package": None}, "unit": unit}
+            prev = ("20261101-100000-code", {"complete_units": [unit], "unit_keys": {unit: "k"}}, [leak(1)])
+            cur = [leak(5)]
+            r = bl.compare(cur, [unit], {unit: "k"}, prev)
+            self.assertEqual((r["new"], r["moved"], r["resolved"]), (1, 0, 1), unit)
+            self.assertTrue(r["resolved_items"][0].get("maybe_moved"), unit)
+        text = "\n".join(normalize._render_baseline({"run_id": "r", "compared_units": ["gitleaks-dir"], "new": 1, "existing": 0,
+                                                     "moved": 0, "resolved": 1, "resolved_items": [dict(r["resolved_items"][0])]}))
+        self.assertIn("위치만 바뀌었을 수 있음", text)
 
     def test_image_digest_and_id_version_are_in_keys_and_zap_note(self):
         # 2차 리뷰 S3 c·e·6: mobsf·zap 이미지 digest, ID_VERSION 이 키에 들어간다. zap 을 비교하면 크롤링 범위 안내가 나온다
