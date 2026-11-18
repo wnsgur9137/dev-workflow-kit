@@ -199,7 +199,7 @@ DECODE_MAX = 3   # 인코딩 풀기 단계 — 세 번 인코딩된 중첩 URL �
 _SET_COOKIE_ATTRS = {"expires", "max-age", "domain", "path", "secure", "httponly", "samesite", "priority", "partitioned"}
 # 헤더 한 줄의 끝 — 실제 줄바꿈 또는 이스케이프된 줄바꿈('\r'·'\n')
 _LINE_END = re.compile(r"[\r\n]|\\[rn]")
-# 쿠키 값이 끝나는 곳(따옴표 없는 값) — 구분자 또는 이스케이프된 줄바꿈·따옴표. _cookie_pairs 의 글자 단위 조건과 같다
+# 쿠키 값이 끝나는 곳(따옴표 없는 값) — 구분자 또는 이스케이프된 줄바꿈·따옴표. ',' 는 넣지 않는다(값 안 ',' 에서 끊으면 뒤쪽이 이름 후보로 밀려 노출된다)
 _VALUE_END = re.compile(r'[; \t\r\n]|\\[rn"]')
 _DQ = re.compile('"')
 _ESC_DQ = re.compile(r'\\"')
