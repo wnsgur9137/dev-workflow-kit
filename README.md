@@ -9,7 +9,7 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 | 플러그인 | 상태 | 커맨드 | 설명 |
 |---|---|---|---|
 | `workflow` | ✅ 사용 가능 | `/workflow:commit` `/workflow:create-pr` `/workflow:pr-review` `/workflow:apply-review` `/workflow:pipeline` | 커밋부터 병합까지 |
-| `security` | 🚧 구현 중 (P3 scan-web) | `/security:scan-code`, `/security:scan-app`, `/security:scan-web` | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
+| `security` | ✅ 사용 가능 (남은 일: LuLu 실측) | `/security:scan-code`, `/security:scan-app`, `/security:scan-web` | 로컬·네트워크 격리 보안 점검. **Docker 호환 런타임 필수** ([설계 문서](docs/security/보안%20툴킷.md)) |
 
 ## 목차
 
@@ -119,7 +119,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 
 ## security 플러그인
 
-> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성), `/security:scan-app`(APK·AAB·IPA 정적 분석), `/security:scan-web`(허용목록 웹 대상의 수동 점검)을 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다. 남은 단계는 P4 마무리(실측·문서)입니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
+> 🚧 **구현 중** — `/security:scan-code`(시크릿·코드 패턴·취약 의존성), `/security:scan-app`(APK·AAB·IPA 정적 분석), `/security:scan-web`(허용목록 웹 대상의 수동 점검)을 쓸 수 있습니다. 스택별 커스텀 검사는 **Web·Server·Android·iOS·Flutter·React Native** 모두 들어가 있습니다. 남은 일은 사람이 수행하는 LuLu 실측입니다. 진행 상황: [구현 계획](docs/security/06%20로드맵/구현%20계획.md)
 
 개인 앱·웹 프로젝트를 **Claude Code 안에서, 외부 전송 없이** 점검합니다. 모든 도구는 네트워크가 차단된 컨테이너에서 실행되고, Claude는 정규화된 요약 리포트만 읽습니다. 설계: [보안 툴킷](docs/security/보안%20툴킷.md)
 
@@ -239,30 +239,39 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 ### 업데이트
 
 1. **플러그인**: `/plugin marketplace update dev-workflow-kit` 후 `/plugin update security@dev-workflow-kit`. 리포트·규칙·DB 는 플러그인 폴더 밖에 있어 그대로 남습니다.
-2. **도구 데이터**: 플러그인을 올린 뒤 터미널에서 `update.sh` 를 실행합니다(외부와 통신하는 유일한 스크립트 — Claude 에게 맡기지 마세요). 받을 것이 없으면 "이미지 있음·규칙 최신" 으로 끝나므로 매번 실행해도 됩니다.
-   - 이미지·egress-proxy 빌드만: `update.sh --images` — 스캔이 D6 로 멈추면 이것으로 충분합니다
-   - 규칙만: `update.sh --rules` — summary 에 "규칙이 lock 과 다릅니다" 경고가 나오면
-   - OSV DB 만: `update.sh --osv` — **주 1회** 권장. 7일이 지나면 summary 가 경고합니다
-3. **버전 고정**: 이미지는 `images.lock` 의 digest, 규칙은 `rules.lock` 의 커밋, egress-proxy 는 `docker/egress-proxy/Dockerfile`(공식 alpine digest + Alpine 패키지 버전)으로 고정됩니다. 사용자는 lock 을 고치지 않습니다 — 관리자가 공개 7일 이상 지난 릴리스로 PR 을 올립니다([업데이트 절차](docs/security/03%20워크플로/업데이트%20절차.md)).
-4. 업데이트 직후 첫 스캔은 "이전 실행과 비교" 에서 규칙·도구가 바뀐 도구를 비교하지 않습니다(정상).
+2. **도구 데이터**: 플러그인을 올린 뒤 터미널에서 **새 버전 폴더의** `update.sh` 를 실행합니다(외부와 통신하는 유일한 스크립트 — Claude 에게 맡기지 마세요). 셸 기록의 옛 경로(`…/security/<옛 버전>/scripts/update.sh`)를 다시 쓰면 옛 lock 으로 "이미지 있음" 만 찍히고 끝납니다 — 스캔의 D6 안내에 찍힌 경로를 그대로 쓰면 됩니다.
+   - 평소: `update.sh --images --rules` — 이미지·규칙은 받을 것이 없으면 "이미지 있음·규칙 최신" 으로 건너뜁니다
+   - OSV DB: `update.sh --osv` — **주 1회** 권장. OSV DB 는 실행할 때마다 전체(수백 MB)를 다시 받으므로, 인자 없이(`update.sh`) 돌리면 매번 받습니다. 7일이 지나면 summary 가 경고합니다
+   - summary 에 "설치된 Semgrep 규칙이 rules.lock 과 다릅니다" 가 나오면 `update.sh --rules`
+3. **버전 고정**: 이미지는 `images.lock` 의 digest, 규칙은 `rules.lock` 의 커밋으로 고정됩니다. egress-proxy 는 베이스 alpine 을 `images.lock` 의 `egress-proxy-base` digest 로, tinyproxy 를 `docker/egress-proxy/Dockerfile` 의 패키지 버전(리비전까지)으로 고정합니다. 사용자는 lock 을 고치지 않습니다 — 관리자가 공개 7일 이상 지난 릴리스로 PR 을 올립니다([업데이트 절차](docs/security/03%20워크플로/업데이트%20절차.md)).
+4. 업데이트 직후 첫 스캔의 "이전 실행과 비교" 는 규칙 커밋·도구 이미지·프로파일이 바뀐 도구와, 플러그인 버전이 바뀐 툴킷 자체 검사(checks)를 비교하지 않습니다(정상).
 
 ### 문제 해결
 
+메시지는 스캔 출력의 실제 문구로 찾을 수 있게 적었습니다. 해결 방법은 대부분 그 메시지 아래에 함께 나옵니다.
+
 | 증상 | 원인 | 해결 |
 |---|---|---|
-| `[D2]` 엔진이 꺼져 있음 | Docker 런타임이 실행 중이 아님 | `colima start` (Docker Desktop 이면 앱 실행) |
-| `[D5]` 메모리 경고 | VM 메모리가 권장치보다 작음 (ZAP·MobSF 는 6~8GB) | `colima stop && colima start --memory 8` — 경고만이라 진행은 됩니다 |
-| `[D6]` 이미지·빌드 기록 없음 / 다시 빌드해야 함 | 처음 설치했거나, 플러그인 업데이트로 고정 버전·egress-proxy Dockerfile 이 바뀜 | 터미널에서 `update.sh --images` |
-| `[D7]` 컨테이너에서 대상 폴더가 보이지 않음 | 런타임이 그 폴더를 공유하지 않음 (Colima 기본값은 홈 아래만) | 대상을 홈 아래로 옮기거나 런타임의 공유 경로(mounts)에 추가 |
-| `update.sh` 가 `credsStore` 오류로 멈춤 | Docker Desktop 을 지운 뒤 `~/.docker/config.json` 에 `"credsStore": "desktop"` 이 남음 | 그 줄을 지우세요 (공개 이미지만 받으므로 자격증명 저장소가 필요 없습니다) |
-| `update.sh` 의 egress-proxy 빌드 실패 (`unable to select packages`) | Alpine 저장소의 tinyproxy 리비전이 바뀜 | 관리자가 Dockerfile 버전을 올린 플러그인 업데이트를 기다리거나 이슈로 알려 주세요. 기존 빌드는 그대로 씁니다 |
-| arm64 에뮬레이션 경고 | 그 이미지에 Apple Silicon 용 빌드가 없음 | 느리지만 동작합니다 |
-| scan-web "대상에 접속하지 못했습니다" | 서버가 꺼져 있거나 포트·주소가 허용목록과 다름 | 호스트의 개발 서버는 `http://host.docker.internal:<포트>` 로 허용목록에 넣고 서버가 떠 있는지 확인 |
+| `[D2] Docker 엔진에 연결할 수 없습니다 (꺼져 있음)` | 런타임이 꺼져 있거나, 현재 docker 컨텍스트가 지운·꺼진 런타임을 가리킴 | `colima start`(Docker Desktop 이면 앱 실행). 컨텍스트는 `docker context ls` 로 확인 |
+| `[D3] docker compose v2 이상이 필요합니다` | `brew install colima docker` 만 하고 compose 를 빠뜨림 | `brew install docker-compose` 후 메시지가 안내하는 `cliPluginsExtraDirs` 설정 |
+| `[D5]` 메모리 경고 | VM 메모리가 권장치보다 작음 (scan-code 4·scan-web 6·scan-app 8 GiB) | 경고에 나온 값으로 `colima stop && colima start --memory <GiB>` (Docker Desktop: Settings → Resources → Memory). 경고만이라 진행은 됩니다 |
+| `[D6] 필요한 이미지가 준비되지 않았습니다` | 처음 설치, 플러그인 업데이트로 고정 버전·egress-proxy 가 바뀜, 런타임을 바꿈(Colima ↔ Docker Desktop), `docker image prune -a`·`colima delete` | 터미널에서 `update.sh --images` |
+| `[D6] Semgrep 규칙 또는 OSV 오프라인 DB 가 없습니다` (scan-code) | 규칙·OSV DB 를 아직 받지 않음 | 메시지에 찍힌 대로 인자 없이 `update.sh` |
+| `[D7]` 컨테이너에서 대상 폴더가 보이지 않음 | 런타임이 그 폴더를 공유하지 않음 (Colima 기본값은 홈 아래만) | Colima: `colima stop` 후 `colima start --edit` 로 `mounts` 에 그 폴더를 더함. Docker Desktop: Settings → Resources → File sharing. 공유는 필요한 폴더로만 좁히세요(`/`·`/Volumes` 전체는 피함). 툴킷은 읽기 전용으로 마운트합니다 |
+| `[D7] … 확인용 컨테이너를 실행하지 못했습니다` | 공유 경로가 아니라 컨테이너 실행 자체가 실패 | 메시지의 종료코드·출력을 확인하고 런타임을 다시 시작 |
+| 대상 경로 거부 | 홈 전체·그 상위, `~/.ssh` 같은 자격증명 폴더, 시스템 폴더, `:`·`,` 가 든 경로 | 점검할 저장소 폴더를 정확히 지정 |
+| scan-app 산출물 거부 | APK·AAB·IPA 가 아니거나 ZIP 이 아님, 크기 상한 초과 | 빌드 산출물을 직접 지정 |
+| `update.sh` 가 `credsStore` 오류로 멈춤 | Docker Desktop 을 지운 뒤 `~/.docker/config.json` 에 `"credsStore": "desktop"` 이 남음 (그 helper 가 없어 이미 깨진 설정) | 그 줄을 지우세요(앞 줄 끝의 쉼표도 확인 — JSON 이 깨지면 docker 전체가 실패). 나중에 `docker login` 을 할 거라면 `brew install docker-credential-helper` 후 `"credsStore": "osxkeychain"` 으로 바꾸는 편이 안전합니다(지우면 자격증명이 `config.json` 에 평문으로 저장됨) |
+| `update.sh` 의 egress-proxy 빌드 실패 (`unable to select packages`) | Alpine 저장소의 tinyproxy 리비전이 바뀜 | 그동안 scan-web 은 쓸 수 없습니다(scan-code·scan-app 은 영향 없음). 관리자가 Dockerfile 버전을 올린 플러그인 업데이트를 기다리거나 이슈로 알려 주세요 |
+| arm64 에뮬레이션 경고 | 그 이미지에 Apple Silicon 용 빌드가 없음 (지금 고정된 이미지는 모두 arm64 를 지원) | 느리지만 동작합니다 |
+| scan-web `허용목록에 없는 대상입니다` | `~/.config/dev-workflow-kit/security/targets.allowlist` 에 그 출처(scheme·host·port)가 없음 | 허용목록에 직접 추가 (Claude 는 이 파일을 고칠 수 없게 권한에서 막습니다) |
+| scan-web `… 는 컨테이너 자신을 가리킵니다` | 대상이 `localhost`·`127.0.0.1` | 호스트의 개발 서버는 `http://host.docker.internal:<포트>` 로 지정 |
+| scan-web "대상에 접속하지 못했습니다" | 서버가 꺼져 있거나 포트·주소가 허용목록과 다름 | 서버가 떠 있는지, 허용목록의 포트가 맞는지 확인 |
 | scan-web "55초 안에 응답하지 않았습니다" | 개발 서버의 첫 요청 컴파일·콜드 스타트 | 브라우저로 한 번 열어 둔 뒤 다시 실행 |
-| scan-web "격리 확인 실패" | ZAP 컨테이너에서 프록시를 거치지 않는 통신이 됨 (오래된 Docker 엔진의 DNS 누출, `~/.docker/config.json` 의 `proxies`, 런타임 네트워크 설정) | Docker 엔진을 올리고 `proxies` 설정을 확인하세요. 대상에는 요청하지 않고 멈춥니다 |
+| scan-web·scan-app "격리 확인 실패" | 컨테이너에서 프록시를 거치지 않는 통신이 됨(오래된 Docker 엔진의 DNS 누출, `~/.docker/config.json` 의 `proxies`, 런타임 네트워크 설정), 또는 (scan-web) 프록시가 허용목록 밖 요청을 막지 않음 | Docker 엔진을 올리고 `proxies` 설정을 확인하세요. 대상에는 요청하지 않고 멈춥니다 |
 | Claude 가 스캔 도중 끊김 | Bash 도구의 기본 시간 제한(2분) | 스킬은 백그라운드로 실행하게 돼 있습니다. 직접 실행할 때는 터미널에서 돌리세요 |
 | 오래된 리포트가 사라짐 | 보관 기간(30일)이 지나 스캔 시 자동 정리 | 지운 이름은 새 실행의 `run.log` 에 남습니다. 기간은 `DWK_SECURITY_RETENTION_DAYS`(Claude Code 가 보는 환경)로 바꿉니다 |
-| "이전 실행과 비교" 가 비교하지 않음 | 같은 대상의 직전 실행이 없음, 이전 버전 리포트, 도구 실패·부분 결과, 규칙·도구가 바뀜 | summary 에 이유가 적혀 있습니다. 다음 실행부터 비교됩니다 |
+| "이전 실행과 비교" 가 비교하지 않음 | 같은 대상의 직전 실행이 없음, 이전 버전 리포트, 도구 실패·부분 결과, 규칙·도구가 바뀜 | summary 에 이유가 적혀 있습니다. 원인이 없어진 실행의 **다음 실행부터** 비교됩니다(도구가 계속 실패하면 계속 비교하지 않음) |
 | summary 에 "Semgrep 이 N개 파일의 일부를 점검하지 못했습니다" | 파싱하지 못하는 문법·타임아웃 | `raw/semgrep.json` 의 `errors` 를 확인하세요. 그 파일의 결과는 베이스라인 비교에서도 빠집니다 |
 
 > **개발자**: `plugins/security/tests/run.sh`(단위·통합 테스트), `plugins/security/tests/lint.sh`(shellcheck)가 게이트입니다.
