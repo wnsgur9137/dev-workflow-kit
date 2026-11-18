@@ -63,6 +63,19 @@ sec_init_dirs() {
   chmod 700 "$SEC_DATA" "$SEC_DATA/data" "$SEC_DATA/reports" "$SEC_CONF" || return 1
 }
 
+# sec_cleanup_reports — 보관 기간(30일)이 지난 리포트를 지운다 (스캔마다 자동, scripts/cleanup.sh 와 같은 규칙).
+#   실패해도 스캔은 계속한다 — 경고만 낸다
+sec_cleanup_reports() {
+  local out n
+  if ! out=$(python3 -I "$SEC_PLUGIN/scripts/lib/cleanup_reports.py" "$SEC_DATA/reports" 2>&1); then
+    sec_warn "오래된 리포트를 정리하지 못했습니다: $(printf '%s' "$out" | tail -n 1) — $SEC_PLUGIN/scripts/cleanup.sh 로 확인하세요"
+    return 0
+  fi
+  n=$(printf '%s' "$out" | grep -c .)
+  [ "$n" -gt 0 ] && sec_log "보관 기간(30일)이 지난 리포트 ${n}개를 지웠습니다"
+  return 0
+}
+
 # sec_new_run <code|app|web>  → SEC_RUN_ID, SEC_RUN_DIR 설정, raw/ 생성
 sec_new_run() {
   local kind=$1 base n=1
@@ -74,6 +87,7 @@ sec_new_run() {
       ;;
   esac
   sec_init_dirs || return 1
+  sec_cleanup_reports
   base="$(date '+%Y%m%d-%H%M%S')-$kind"
   SEC_RUN_ID=$base
   # mkdir(-p 없이)의 성공 여부로 선점한다 — 동시 실행해도 두 스캔이 같은 폴더를 쓰지 않는다
