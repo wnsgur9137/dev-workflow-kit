@@ -42,7 +42,8 @@ test_compose_calls_matches_with_or_without_options() {
   compose_calls run "$log" | grep -qE ' mobsf-client( |$)' || fail "옵션 있는 run 을 놓침"
   printf '%s\n' 'docker compose up' >"$log"
   compose_calls up "$log" >/dev/null || fail "인자 없는 up 을 놓침"
-  printf '%s\n' 'docker compose -p x runner mobsf-client' 'docker compose -p upx down' >"$log"
+  printf '%s\n' 'docker compose -p x runner mobsf-client' 'docker compose -p upx down' \
+    '  x docker compose run mobsf-client' 'python3 -c "docker compose up"' >"$log"   # 여러 줄 인자의 본문 줄은 호출이 아니다 (PR #51 리뷰 N3)
   if compose_calls run "$log" | grep -q .; then fail "run 이 아닌 줄을 run 으로 봄"; fi
   if compose_calls up "$log" | grep -q .; then fail "up 이 아닌 줄을 up 으로 봄"; fi
 }

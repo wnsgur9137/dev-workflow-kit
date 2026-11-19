@@ -23,4 +23,8 @@ assert_status() {
 file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
 # compose_calls <하위 명령> [기록 파일]  — 가짜 docker 기록에서 `docker compose … <하위 명령>` 호출 줄만 고른다.
 # 하위 명령 앞뒤에 옵션이 없어도(`docker compose run x`, `docker compose up`) 맞는다 (이슈 #33, PR #44 리뷰 N3)
-compose_calls() { grep -E "^docker compose( .*)? $1( |\$)" "${2:-$FAKE_LOG}"; }
+# 하위 명령은 정규식에 그대로 들어가므로 소문자 단어만 받는다 (PR #51 리뷰 N2)
+compose_calls() {
+  case "$1" in '' | *[!a-z]*) fail "compose_calls: 하위 명령은 소문자 단어만: '$1'" ;; esac
+  grep -E "^docker compose( .*)? $1( |\$)" "${2:-$FAKE_LOG}"
+}
