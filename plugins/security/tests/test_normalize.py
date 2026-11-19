@@ -220,6 +220,36 @@ class ParserTest(unittest.TestCase):
         # 자유 텍스트(경고)도 같은 표기 (PR #44 리뷰 S2)
         self.assertEqual(normalize.clean_text("y\udcff.xml: XML 을 해석하지 못했습니다", 200, True), "y%ED%B3%BF.xml: XML 을 해석하지 못했습니다")
 
+    def test_truncation_never_splits_percent_form(self):
+        """이슈 #33 (PR #44 리뷰 N1): 길이를 자를 때 %XX 중간이나 퍼센트로 쓴 UTF-8 한 글자 중간에서 끊지 않는다."""
+        import urllib.parse
+        enc = "%ED%B3%BF"
+        for pad in range(0, 12):                     # 서로게이트가 절단 경계의 모든 자리를 지나가게
+            src = "가" * (190 + pad) + "\udcff" + "나" * 20        # 한글: clean_text 의 고엔트로피 토큰 가림에 걸리지 않게
+            for f in (lambda t: normalize.clean_ident(t, 200), lambda t: normalize.clean_text(t, 200)):
+                out = f(src)
+                self.assertTrue(out.endswith("…"), out[-12:])
+                body = out[:-1]
+                self.assertLessEqual(len(out), 200)
+                # 표기가 199자 안에 들어가면 남기고(pad 0), 걸치면 통째로 빼고(1~8), 뒤에서 잘리면 채움만 (PR #51 리뷰 S1)
+                want = "가" * 190 + enc if pad == 0 else ("가" * (190 + pad))[:199]
+                self.assertEqual(body, want, (pad, body[-12:]))
+                urllib.parse.unquote_to_bytes(body).decode("utf-8", "surrogatepass")     # 끊긴 바이트가 있으면 예외
+        # 원문의 %XX·퍼센트로 쓴 4바이트 글자도 같다 (ZAP URL 은 인코딩된 채 들어온다)
+        for pad in range(0, 14):
+            out = normalize.clean_ident("u" * (190 + pad) + "%F0%9F%98%80" + "v" * 20, 200)[:-1]
+            self.assertIn(out[len(out.rstrip("%0123456789ABCDEF")):], ("", "%F0%9F%98%80"), out[-14:])
+        # 완결된 글자는 경계에 딱 맞아도 남긴다 — 과잉 절단 변이(need > 0)를 잡게 (PR #51 리뷰 S1)
+        self.assertEqual(normalize._cut("uuu%F0%9F%98%80v", 15), "uuu%F0%9F%98%80")
+        self.assertEqual(normalize._cut("%ED%B3%BFx", 9), "%ED%B3%BF")
+        self.assertEqual(normalize._cut("%C3%A9z", 6), "%C3%A9")
+        self.assertEqual(normalize.clean_ident("abcdef", 0), "…")         # limit 0 이하도 길이를 넘지 않는다 (리뷰 N1)
+        # 경계 근처만 본다 — 앞쪽의 짝 없는 바이트나 ASCII %XX 는 건드리지 않는다
+        self.assertEqual(normalize._cut("ab%41cd", 4), "ab")
+        self.assertEqual(normalize._cut("ab%41cd", 5), "ab%41")
+        self.assertEqual(normalize._cut("ab%4", 3), "ab%")           # 뒤가 %XX 가 아니면 그대로
+        self.assertEqual(normalize._cut("%80%80%41xyz", 9), "%80%80%41")
+
     def test_toolkit_ids_use_original_names(self):
         """PR #44 리뷰 S1: 잘못된 UTF-8 이름과 실제 이름이 '%ED%B3%BF' 인 파일은 다른 결과다 (id 는 표시용이 아닌 원래 값으로)."""
         res = [{"rule": "web.x", "file": n, "line": 1, "severity": "high", "category": "config", "title": "t"}
