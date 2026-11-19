@@ -28,9 +28,23 @@ PY
 }
 
 no_container_started() {
-  if grep -q '^docker run\|^docker compose .* up' "$FAKE_LOG"; then
-    fail "컨테이너가 기동됨: $(grep '^docker run\|^docker compose .* up' "$FAKE_LOG" | head -n 1)"
+  if grep -q '^docker run' "$FAKE_LOG" || compose_calls up >/dev/null; then
+    fail "컨테이너가 기동됨: $({ grep '^docker run' "$FAKE_LOG"; compose_calls up; } | head -n 1)"
   fi
+}
+
+# 이슈 #33 (PR #44 리뷰 N3): "호출되지 않음" 단언이 옵션 없는 호출에도 걸리는지 고정한다 (아래 단언들이 쓰는 헬퍼)
+test_compose_calls_matches_with_or_without_options() {
+  local log="$SEC_TMP/calls"
+  printf '%s\n' 'docker compose run --rm mobsf-client' >"$log"
+  compose_calls run "$log" | grep -qE ' mobsf-client( |$)' || fail "옵션 없는 run 을 놓침"
+  printf '%s\n' 'docker compose -p x -f y --profile client run --rm --no-deps -T mobsf-client --a' >"$log"
+  compose_calls run "$log" | grep -qE ' mobsf-client( |$)' || fail "옵션 있는 run 을 놓침"
+  printf '%s\n' 'docker compose up' >"$log"
+  compose_calls up "$log" >/dev/null || fail "인자 없는 up 을 놓침"
+  printf '%s\n' 'docker compose -p x runner mobsf-client' 'docker compose -p upx down' >"$log"
+  if compose_calls run "$log" | grep -q .; then fail "run 이 아닌 줄을 run 으로 봄"; fi
+  if compose_calls up "$log" | grep -q .; then fail "up 이 아닌 줄을 up 으로 봄"; fi
 }
 
 test_app_rejects_options_and_extra_args_without_containers() {
@@ -127,7 +141,7 @@ test_app_compose_up_failure_is_recorded_and_stack_removed() {
   _assert_no_api_key_in_raw
   grep -q '^docker compose -p dwk-sec-app-[0-9a-f]\{12\} .* down -v' "$FAKE_LOG" || fail "down -v 가 호출되지 않음"
   assert_not_contains "$(cat "$SEC_TMP/scan.err")" "내리지 못했습니다"
-  if grep -qE '^docker compose .* run .*mobsf-client' "$FAKE_LOG"; then fail "mobsf-client 가 실행됨"; fi
+  if compose_calls run | grep -qE ' mobsf-client( |$)'; then fail "mobsf-client 가 실행됨"; fi
   assert_contains "$(cat "$APP_RUN/summary.md")" "| mobsf | failed |"
 }
 
@@ -138,7 +152,7 @@ test_app_isolation_leak_stops_before_upload() {
   assert_contains "$(awk -F '\t' '$1 == "mobsf"' "$APP_RUN/raw/status.tsv")" "격리 확인 실패"
   assert_contains "$(cat "$APP_RUN/raw/status.tsv")" "CVE-2024-29018"
   # 앱을 올리는 mobsf-client run 은 호출되지 않는다 — 호출 줄만 본다(격리 확인 스크립트 내용도 인자로 기록된다)
-  if grep -qE '^docker compose .* run .*mobsf-client' "$FAKE_LOG"; then fail "mobsf-client 가 실행됨"; fi
+  if compose_calls run | grep -qE ' mobsf-client( |$)'; then fail "mobsf-client 가 실행됨"; fi
   grep -q ' down -v' "$FAKE_LOG" || fail "down -v 가 호출되지 않음"
 }
 
@@ -254,7 +268,7 @@ test_app_term_during_analysis_cleans_up_immediately() {
   export FAKE_RUN_PIDFILE="$SEC_TMP/fake-run.pids"
   FAKE_COMPOSE_RUN_SLEEP=30 "$SCAN_APP" "$HOME/apps/app.apk" >"$SEC_TMP/out" 2>"$SEC_TMP/err" &
   local pid=$! i=0 rc start
-  while ! grep -qE '^docker compose .* run .*mobsf-client' "$FAKE_LOG" 2>/dev/null; do
+  while ! compose_calls run 2>/dev/null | grep -qE ' mobsf-client( |$)'; do
     i=$((i + 1))
     [ $i -le 100 ] || { kill "$pid" 2>/dev/null; fail "mobsf-client 실행까지 가지 못함: $(tail -n 3 "$SEC_TMP/err")"; }
     sleep 0.1

@@ -21,3 +21,6 @@ assert_status() {
   [ "$got" = "$want" ] || fail "종료코드 기대 $want, 실제 $got: $* → $OUT"
 }
 file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+# compose_calls <하위 명령> [기록 파일]  — 가짜 docker 기록에서 `docker compose … <하위 명령>` 호출 줄만 고른다.
+# 하위 명령 앞뒤에 옵션이 없어도(`docker compose run x`, `docker compose up`) 맞는다 (이슈 #33, PR #44 리뷰 N3)
+compose_calls() { grep -E "^docker compose( .*)? $1( |\$)" "${2:-$FAKE_LOG}"; }
