@@ -231,12 +231,19 @@ class ParserTest(unittest.TestCase):
                 self.assertTrue(out.endswith("…"), out[-12:])
                 body = out[:-1]
                 self.assertLessEqual(len(out), 200)
-                self.assertTrue(body == "가" * (190 + pad) + enc or body.rstrip("가") == "", body[-12:])
+                # 표기가 199자 안에 들어가면 남기고(pad 0), 걸치면 통째로 빼고(1~8), 뒤에서 잘리면 채움만 (PR #51 리뷰 S1)
+                want = "가" * 190 + enc if pad == 0 else ("가" * (190 + pad))[:199]
+                self.assertEqual(body, want, (pad, body[-12:]))
                 urllib.parse.unquote_to_bytes(body).decode("utf-8", "surrogatepass")     # 끊긴 바이트가 있으면 예외
         # 원문의 %XX·퍼센트로 쓴 4바이트 글자도 같다 (ZAP URL 은 인코딩된 채 들어온다)
         for pad in range(0, 14):
             out = normalize.clean_ident("u" * (190 + pad) + "%F0%9F%98%80" + "v" * 20, 200)[:-1]
             self.assertIn(out[len(out.rstrip("%0123456789ABCDEF")):], ("", "%F0%9F%98%80"), out[-14:])
+        # 완결된 글자는 경계에 딱 맞아도 남긴다 — 과잉 절단 변이(need > 0)를 잡게 (PR #51 리뷰 S1)
+        self.assertEqual(normalize._cut("uuu%F0%9F%98%80v", 15), "uuu%F0%9F%98%80")
+        self.assertEqual(normalize._cut("%ED%B3%BFx", 9), "%ED%B3%BF")
+        self.assertEqual(normalize._cut("%C3%A9z", 6), "%C3%A9")
+        self.assertEqual(normalize.clean_ident("abcdef", 0), "…")         # limit 0 이하도 길이를 넘지 않는다 (리뷰 N1)
         # 경계 근처만 본다 — 앞쪽의 짝 없는 바이트나 ASCII %XX 는 건드리지 않는다
         self.assertEqual(normalize._cut("ab%41cd", 4), "ab")
         self.assertEqual(normalize._cut("ab%41cd", 5), "ab%41")

@@ -247,7 +247,9 @@ _HEX = frozenset("0123456789ABCDEFabcdef")
 
 def _cut(t: str, n: int) -> str:
     """t[:n] 을 돌려주되 퍼센트 표기(%XX)의 중간이나 퍼센트로 쓴 UTF-8 한 글자(%ED%B3%BF 등)의 중간에서 끊지 않는다
-    — mobsf_report.safe_ident 의 문자 단위 절단과 같은 목적 (이슈 #33, PR #44 리뷰 N1). 경계 근처만 보므로 길이와 무관하다."""
+    — mobsf_report.safe_ident 의 문자 단위 절단과 같은 목적 (이슈 #33, PR #44 리뷰 N1). 경계 근처만 보므로 길이와 무관하다.
+    경계 바로 앞의 짝 없는 첫 바이트(%E4 등)는 원문에 있던 것이라도 버린다 — 더 짧아질 뿐이다 (PR #51 리뷰 N4)."""
+    n = max(n, 0)                   # limit 이 0 이하여도 t[:-1] 이 되지 않게 (PR #51 리뷰 N1)
     if len(t) <= n:
         return t
     for back in (1, 2):             # 경계가 %XX 안 → %XX 앞에서 자른다 (원문에 있던 %XX 도 같다)
