@@ -1,0 +1,67 @@
+# workflow 변경 이력
+
+이 플러그인의 주요 변경을 버전별로 적습니다. 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를 따르고, 버전은 [유의적 버전](https://semver.org/lang/ko/)을 따릅니다.
+태그는 `workflow--v<버전>`이며, 같은 이름의 [GitHub Release](https://github.com/wnsgur9137/dev-workflow-kit/releases?q=workflow--v&expanded=true)가 있습니다.
+
+## [Unreleased]
+
+## [2.0.1] - 2026-11-23
+
+### 추가
+- 플러그인 폴더에 이 변경 이력(`CHANGELOG.md`)을 둡니다. 버전마다 같은 이름의 GitHub Release를 만듭니다.
+
+## [2.0.0] - 2026-11-23
+
+> [!IMPORTANT]
+> GitHub MCP 대신 **`gh` CLI 인증**(`gh auth login`)이 필요합니다. 플러그인 구조가 `commands/`에서 `skills/`로 바뀌었습니다.
+
+### 추가
+- **Codex CLI 지원.** `codex plugin add workflow@dev-workflow-kit`로 설치하고 `$workflow:<이름>`으로 부릅니다. 각 skill 맨 앞의 "실행 환경" 블록이 Codex에서 다른 점(인자·경로 치환, 선택지 질문, 백그라운드·서브에이전트, sandbox 네트워크)을 안내합니다.
+- `pr-review`: 실행 주체가 Codex이면 교차 리뷰를 생략합니다(`실행 환경이 Codex`).
+- 자기 PR에는 `COMMENT`로 게시합니다. GitHub가 자기 PR의 APPROVE/REQUEST_CHANGES를 거부하기 때문입니다.
+
+### 변경
+- **BREAKING** 커맨드를 `skills/<이름>/SKILL.md`로 옮겼습니다. Claude Code의 호출 이름(`/workflow:<이름>`)은 그대로입니다.
+- **BREAKING** 모든 GitHub 작업을 GitHub MCP에서 `gh`로 바꿨습니다. GitHub MCP는 `gh`를 쓸 수 없을 때만 대신 씁니다.
+- `pr-review`: 리뷰를 `POST /pulls/N/reviews` 한 번으로 게시합니다(인라인 코멘트 묶음). 파일 단위 코멘트는 `subject_type=file`로 따로 답니다. 422는 원인(event·본문·줄)에 따라 최대 2번 다시 시도합니다.
+- `pr-review`: secret scanning 경고는 위치를 확인해 PR과 관계있는 것만 REQUEST_CHANGES 판정에 넣습니다. code scanning은 `refs/pull/N/merge`로 조회합니다.
+- `create-pr`: MCP 경로와 `gh` 폴백을 `gh pr create` 하나로 합쳤습니다. 라벨·마일스톤 오류로 생성이 실패하면 그것을 빼고 만든 뒤 붙입니다.
+- `pipeline`: 병합에 `--match-head-commit`을 써서 CI가 확인한 head만 병합합니다. CI는 PR head의 워크플로마다 가장 최근 실행으로 판정합니다.
+
+### 수정
+- 목록 조회가 30건을 넘으면 페이지 경계 때문에 세거나 거르는 결과가 틀릴 수 있던 문제(`--paginate --jq '.[]'`로 통일).
+- fork 구성에서 답글·PR 생성이 다른 저장소의 같은 번호 PR로 갈 수 있던 문제(`-R` 명시).
+- 같은 브랜치에서 다른 base로 향하는 PR을 중복으로 오인하던 문제.
+
+## [1.1.0] - 2026-11-23
+
+### 추가
+- `pr-review`: **Codex 교차 리뷰.** Claude가 리뷰하는 동안 Codex(`codex exec`, 읽기 전용 sandbox)가 같은 PR을 따로 리뷰하고, Claude가 지적마다 코드를 확인해 채택·기각한 뒤 합쳐 게시합니다. 기본으로 켜지고 `--no-codex`로 끕니다. PR 코드·diff가 OpenAI로 전송됩니다.
+- 코멘트마다 출처(`Claude`·`Codex`·`Claude+Codex`)와 `dwk:reviewer` 표식을 남깁니다. `apply-review`는 표식이 있으면 본인 계정 코멘트도 반영합니다.
+- `pipeline`: `--no-codex`를 전달합니다. Codex 생략은 정지 조건이 아닙니다.
+
+### 변경
+- `pr-review`의 Gemini 권고 단계를 Codex 교차 리뷰로 바꿨습니다.
+
+## [1.0.2] - 2026-11-05
+
+### 추가
+- `pr-review`·`apply-review`에 frontmatter(`description`·`argument-hint`)를 넣어 플러그인 커맨드 목록에 설명이 보이게 했습니다.
+
+## [1.0.1] - 2026-11-05
+
+### 추가
+- MIT 라이선스.
+
+## [1.0.0] - 2026-11-05
+
+### 추가
+- Claude Code 플러그인 마켓플레이스로 첫 배포. `commit`, `create-pr`, `pr-review`, `apply-review`, `pipeline` 커맨드.
+
+[Unreleased]: https://github.com/wnsgur9137/dev-workflow-kit/compare/workflow--v2.0.1...HEAD
+[2.0.1]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v2.0.1
+[2.0.0]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v2.0.0
+[1.1.0]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v1.1.0
+[1.0.2]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v1.0.2
+[1.0.1]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v1.0.1
+[1.0.0]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v1.0.0
