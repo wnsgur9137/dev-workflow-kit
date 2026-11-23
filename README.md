@@ -81,15 +81,15 @@ codex plugin add security@dev-workflow-kit
 ```
 
 - 업데이트: `codex plugin marketplace upgrade dev-workflow-kit` 후 `codex plugin add security@dev-workflow-kit`
-- **sandbox 권한**: security는 Docker로 도구를 돌리고 `~/.local/share/dev-workflow-kit/`에 리포트를 씁니다. Codex 기본 sandbox(workspace-write)는 둘 다 막아서, 스캔할 때마다 Codex가 권한 상승 승인을 요청합니다. 매번 묻지 않으려면 `~/.codex/config.toml`에 다음을 넣습니다 (실측으로 확인한 최소 설정).
+- **sandbox 권한**: security는 Docker로 도구를 돌리고 `~/.local/share/dev-workflow-kit/security/reports/`에 리포트를 씁니다. Codex 기본 sandbox(workspace-write)는 둘 다 막아서, 스캔할 때 Codex가 권한 상승 승인을 요청합니다.
+  - **권장**: 설정 파일은 고치지 않습니다. 승인 창에서 **스캔 스크립트(`…/scripts/scan-code.sh` 등)로 시작하는 명령을 계속 허용**하는 선택지를 고르세요. 그 스크립트만 sandbox 밖에서 돌고, 다음부터는 묻지 않습니다. 스크립트는 정해진 도구 컨테이너만 네트워크를 끊고 실행합니다.
+  - **비권장 — sandbox 설정을 넓히는 방법**: 아래 설정으로도 승인 없이 동작합니다(실측한 최소 설정). 다만 `network_access = true`는 Codex가 실행하는 **모든 명령**에 네트워크와 Docker 데몬 접근을 열어 줍니다. Docker 데몬에 접근할 수 있으면 호스트 폴더를 마운트한 컨테이너를 띄울 수 있으므로 **sandbox를 사실상 끄는 것**과 같습니다. 이 세션에서 신뢰할 수 없는 코드나 문서를 다룬다면 쓰지 마세요.
 
-  ```toml
-  [sandbox_workspace_write]
-  network_access = true    # Docker 소켓 연결에 필요
-  writable_roots = ["/Users/<사용자>/.local/share/dev-workflow-kit"]   # 절대 경로. DWK_SECURITY_DATA_DIR을 바꿨으면 그 경로
-  ```
-
-  `network_access = true`는 Codex가 실행하는 **모든 명령**의 네트워크를 엽니다. 스캔 도구 자체는 이 설정과 관계없이 네트워크가 차단된 컨테이너에서 돕니다. 이 범위가 넓다고 느껴지면 설정을 넣지 말고 스캔할 때마다 승인하세요.
+    ```toml
+    [sandbox_workspace_write]
+    network_access = true    # Docker 소켓 연결에 필요 (위 경고 참고)
+    writable_roots = ["/Users/<사용자>/.local/share/dev-workflow-kit/security/reports"]   # 절대 경로. 리포트 폴더만. DWK_SECURITY_DATA_DIR을 바꿨으면 <그 경로>/reports
+    ```
 - Claude Code의 [권한 설정](#권한-설정)(`allowed-tools`, `settings.json`)은 Codex에 적용되지 않습니다.
 
 ---
