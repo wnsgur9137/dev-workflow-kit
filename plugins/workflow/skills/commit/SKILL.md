@@ -1,10 +1,15 @@
 ---
+name: commit
 description: 변경사항과 기존 커밋 컨벤션을 분석해 gitmoji·Conventional Commits 형식의 커밋을 생성합니다.
 argument-hint: "[-G|--no-gitmoji] [-g|--gitmoji] [-C|--no-coauthor] [-a|--all] [-e|--amend] [-S|--no-split] [-y|--yes] [-h|--help]"
 allowed-tools: Bash, Read, Glob, Grep, AskUserQuestion
 ---
 
 # /commit
+
+> **실행 환경** — 이 절차는 Claude Code와 Codex 모두에서 따른다. Claude Code가 아닌 환경(Codex 등)에서는:
+> - 인자: 본문에서 인자 자리가 `$`로 시작하는 자리표시자 그대로 보이면, 사용자가 이 skill을 부른 메시지에서 skill 이름 뒤의 내용을 인자로 쓴다.
+> - 사용자에게 묻기: `AskUserQuestion`이 없으면 같은 질문과 선택지를 번호 목록으로 보여 주고 답을 기다린다. 대화할 수 없는 실행(예: `codex exec`)이면 확인이 필요한 지점에서 멈추고 무엇을 확인해야 하는지 보고한다 — 임의로 기본값을 골라 진행하지 않는다.
 
 스테이징된(또는 사용자가 승인한) 변경을 분석하고, **이 레포의 기존 커밋 컨벤션**에 맞춰
 gitmoji + Conventional Commits 형식의 커밋 메시지를 생성·실행한다.

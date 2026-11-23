@@ -38,7 +38,7 @@ PR의 변경 사항을 분석하고, GitHub에 인라인 리뷰 코멘트를 자
 ## 리뷰 프로세스
 
 1. PR URL 파싱 + 상태 확인 (draft/merged/CI)
-2. GitHub MCP를 통해 PR 정보 수집 (기존 리뷰 중복 방지, 재리뷰 감지)
+2. `gh` CLI로 PR 정보 수집 (기존 리뷰 중복 방지, 재리뷰 감지)
 3. 보안 스캔 (Secret/Code/Dependabot alerts)
 4. 레포지토리 컨텍스트 분석 (로컬 일치 시 자동, 외부 레포 시 사용자 선택)
 5. 변경 파일 확장자로 PR 타입 감지 (iOS/Android/FrontEnd/BackEnd)

@@ -1,6 +1,6 @@
 # Dev Workflow Kit
 
-Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커밋 → PR 생성 → 리뷰 → 반영 → 병합까지의 흐름을 커맨드로 자동화합니다.
+Claude Code(와 Codex)에서 쓰는 개발 워크플로 플러그인 모음입니다. 커밋 → PR 생성 → 리뷰 → 반영 → 병합까지의 흐름을 커맨드로 자동화합니다.
 
 > 저장소 이름이 `pr-review-command`에서 `dev-workflow-kit`으로 바뀌었습니다. 이전 주소는 새 주소로 자동 연결되지만, 로컬 clone의 remote는 `git remote set-url origin <새 주소>`로 갱신하는 것을 권장합니다.
 
@@ -49,10 +49,10 @@ claude plugin install workflow@dev-workflow-kit
 ```
 
 - 업데이트: `/plugin marketplace update dev-workflow-kit` 후 `/plugin update workflow@dev-workflow-kit`
-- 플러그인 커맨드는 **`/workflow:<커맨드>`** 형식으로 호출합니다 (예: `/workflow:commit`, `/workflow:pr-review <URL>`). 이 문서의 `/commit` 등은 `/workflow:commit`을 줄여 쓴 것입니다.
+- 플러그인 커맨드는 Claude Code에서 **`/workflow:<커맨드>`**, Codex에서 **`$workflow:<커맨드>`** 형식으로 호출합니다 (예: `/workflow:commit`, `/workflow:pr-review <URL>`). 이 문서의 `/commit` 등은 `/workflow:commit`을 줄여 쓴 것입니다.
 - 설치 없이 한 세션만 시험하려면: `claude --plugin-dir <clone 경로>/plugins/workflow`
 
-> **릴리스 규칙 (저장소 관리자)**: 커맨드·템플릿을 바꾸면 `plugins/workflow/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 해당 플러그인 `version`을 **함께** 올립니다. 버전이 그대로면 사용자의 `/plugin update`가 새 내용을 받지 못할 수 있습니다. 병합 후 `claude plugin tag plugins/workflow --push`로 `workflow--v<버전>` 태그를 남기면 두 파일의 버전 일치도 함께 검사됩니다.
+> **릴리스 규칙 (저장소 관리자)**: skill·템플릿을 바꾸면 `plugins/workflow/.claude-plugin/plugin.json`과 `.claude-plugin/marketplace.json`의 해당 플러그인 `version`을 **함께** 올립니다. 버전이 그대로면 사용자의 `/plugin update`가 새 내용을 받지 못할 수 있습니다. 병합 후 `claude plugin tag plugins/workflow --push`로 `workflow--v<버전>` 태그를 남기면 두 파일의 버전 일치도 함께 검사됩니다.
 
 ### 이전 설치 방식(복사)에서 옮겨오기
 
@@ -73,14 +73,17 @@ mv ~/.claude/templates/{review,review-criteria,apply-review} ~/.claude/backup/te
 | 플러그인 | Codex 지원 |
 |---|---|
 | `security` | ✅ `$security:scan-code <경로>` 형식으로 부릅니다 |
-| `workflow` | ❌ 아직 지원하지 않습니다 (Claude Code 전용 `commands/` 형식) |
+| `workflow` | ✅ `$workflow:commit`, `$workflow:pr-review <URL>` 형식으로 부릅니다 |
 
 ```bash
 codex plugin marketplace add wnsgur9137/dev-workflow-kit
+codex plugin add workflow@dev-workflow-kit
 codex plugin add security@dev-workflow-kit
 ```
 
-- 업데이트: `codex plugin marketplace upgrade dev-workflow-kit` 후 `codex plugin add security@dev-workflow-kit`
+- 업데이트: `codex plugin marketplace upgrade dev-workflow-kit` 후 `codex plugin add <플러그인>@dev-workflow-kit`을 다시 실행
+- **workflow의 네트워크**: `gh`, `git fetch`·`push`는 네트워크가 필요합니다. Codex 기본 sandbox는 네트워크를 막으므로 실행할 때 권한 상승 승인을 요청합니다. 승인 창에서 `gh`·`git push` 등 필요한 명령만 계속 허용하세요.
+- **Codex에서 workflow를 쓸 때 달라지는 점**: 선택지를 고르는 창 대신 번호 목록으로 묻습니다. `codex exec`처럼 대화할 수 없는 실행에서는 확인이 필요한 지점에서 멈춥니다. `/pr-review`의 Codex 교차 리뷰는 실행 주체가 Codex이면 생략합니다(Codex가 Codex를 부르면 교차 리뷰가 아니므로).
 - **sandbox 권한**: security는 Docker로 도구를 돌리고 `~/.local/share/dev-workflow-kit/security/reports/`에 리포트를 씁니다. Codex 기본 sandbox(workspace-write)는 둘 다 막아서, 스캔할 때 Codex가 권한 상승 승인을 요청합니다.
   - **권장**: 설정 파일은 고치지 않습니다. 승인 창에서 **스캔 스크립트(`…/scripts/scan-code.sh` 등)로 시작하는 명령을 계속 허용**하는 선택지를 고르세요. 그 스크립트만 sandbox 밖에서 돌고, 다음부터는 묻지 않습니다. 스크립트는 정해진 도구 컨테이너만 네트워크를 끊고 실행합니다.
   - **비권장 — sandbox 설정을 넓히는 방법**: 아래 설정으로도 승인 없이 동작합니다(실측한 최소 설정). 다만 `network_access = true`는 Codex가 실행하는 **모든 명령**에 네트워크와 Docker 데몬 접근을 열어 줍니다. Docker 데몬에 접근할 수 있으면 호스트 폴더를 마운트한 컨테이너를 띄울 수 있으므로 **sandbox를 사실상 끄는 것**과 같습니다. 이 세션에서 신뢰할 수 없는 코드나 문서를 다룬다면 쓰지 마세요.
@@ -98,10 +101,9 @@ codex plugin add security@dev-workflow-kit
 
 | 항목 | 필요한 커맨드 | 설명 |
 |---|---|---|
-| **GitHub MCP 서버** | `pr-review`·`apply-review` 필수, `create-pr` 선택 | `cp examples/mcp.json.example .mcp.json` 후 사용. `.mcp.json`은 커밋하지 않습니다 |
-| **`GITHUB_PERSONAL_ACCESS_TOKEN`** | GitHub MCP 사용 시 | 환경 변수로만 주입 |
-| **Docker 호환 런타임** | GitHub MCP 사용 시, `security` 플러그인 전체 | GitHub MCP 서버와 보안 도구를 모두 컨테이너로 실행. 아래 [Docker 런타임](#docker-런타임) 참고 |
-| **`gh` CLI** | `apply-review` 답글, `create-pr` 폴백, `pipeline` | `gh auth login` 필요 |
+| **`gh` CLI** | `create-pr`·`pr-review`·`apply-review`·`pipeline` 필수 | GitHub 작업은 모두 `gh`로 합니다. `gh auth login` 필요 |
+| **Docker 호환 런타임** | `security` 플러그인 전체 | 보안 도구를 컨테이너로 실행. 아래 [Docker 런타임](#docker-런타임) 참고 |
+| **GitHub MCP 서버** (선택) | 없음 | 2.0.0부터 필요 없습니다. `gh`를 쓸 수 없을 때만 대신 씁니다(`examples/mcp.json.example`). 쓰면 `GITHUB_PERSONAL_ACCESS_TOKEN`·Docker가 필요합니다 |
 | **Codex CLI** (선택) | `pr-review` (`pipeline` 11단계 포함) | 있으면 Claude 리뷰에 Codex 교차 리뷰를 더합니다. `codex login` 필요. 없거나 사용량 제한이면 생략. **PR 코드·diff가 OpenAI로 전송**되므로 원치 않으면 `--no-codex` ([상세](docs/workflow/pr-review.md#codex-교차-리뷰)) |
 
 ### Docker 런타임
@@ -125,7 +127,7 @@ docker info && docker compose version
 
 Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple Silicon 주의사항: [Docker 런타임](docs/security/01%20개요/Docker%20런타임.md)
 
-자세한 설정·의존성: [docs/workflow/설정.md](docs/workflow/설정.md) · 왜 GitHub MCP인가: [docs/workflow/GitHub MCP.md](docs/workflow/GitHub%20MCP.md)
+자세한 설정·의존성: [docs/workflow/설정.md](docs/workflow/설정.md) · GitHub MCP를 쓰던 이유와 `gh`로 바꾼 이유: [docs/workflow/GitHub MCP.md](docs/workflow/GitHub%20MCP.md)
 
 > **기존 clone 사용자**: 이전 버전은 `.mcp.json`을 저장소에서 추적했습니다. `git pull` 시 로컬 `.mcp.json`이 삭제되므로 **pull 전에 백업**(`cp .mcp.json .mcp.json.bak`)한 뒤 복원하세요.
 

@@ -25,7 +25,7 @@ Example: /pr-review https://github.com/owner/repo/pull/123
 
 -- Review Process --
 1. PR URL 파싱 + 상태 확인 (draft/merged/CI)
-2. GitHub MCP를 통해 PR 정보를 수집합니다.
+2. `gh` CLI로 PR 정보를 수집합니다.
 3. 보안 스캔 (Secret/Code/Dependabot alerts)
 4. 변경 파일 확장자로 PR 타입을 감지합니다.
    - iOS (.swift, .m, .xib, .pbxproj ...)

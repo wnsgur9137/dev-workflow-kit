@@ -120,7 +120,7 @@ CI가 Draft PR을 건너뛰는 설정이면, Ready 전환 후의 모든 push가 
 ## 인증
 
 - 환경 변수 `<OWNER>_GITHUB_TOKEN`(owner 대문자, `-`는 `_`)이 있으면 그 토큰을 `gh` 호출마다 붙여 씁니다. 예: owner `octo-org` → `OCTO_ORG_GITHUB_TOKEN`. 회사 계정 `GITHUB_TOKEN`이 개인 저장소 권한을 가로막는 경우를 위한 장치입니다.
-- GitHub MCP가 연결되지 않았으면 같은 일을 `gh` CLI로 합니다.
+- GitHub 작업은 `gh` CLI로 합니다. `gh`를 쓸 수 없고 GitHub MCP가 연결돼 있으면 MCP로 대신할 수 있습니다.
 
 ## 보호 브랜치에서 시작할 때
 

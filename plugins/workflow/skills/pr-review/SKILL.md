@@ -1,9 +1,19 @@
 ---
+name: pr-review
 description: PR을 플랫폼별 기준으로 코드 리뷰하고, 확인 후 GitHub 인라인 코멘트로 게시합니다.
 argument-hint: "<PR_URL> [--mode=strict|normal|relaxed] [--focus=항목,...] [--skip=항목,...] [--no-codex] [--help]"
 ---
 
 # PR Review Command
+
+> **실행 환경** — 이 절차는 Claude Code와 Codex 모두에서 따른다. Claude Code가 아닌 환경(Codex 등)에서는:
+> - 인자: 본문에서 인자 자리가 `$`로 시작하는 자리표시자 그대로 보이면, 사용자가 이 skill을 부른 메시지에서 skill 이름 뒤의 내용을 인자로 쓴다.
+> - 경로: `$`로 시작하는 플러그인 루트 변수가 그대로 보이면, 이 `SKILL.md`가 있는 폴더의 두 단계 위(`../..`)를 플러그인 루트로 쓴다.
+> - 사용자에게 묻기: `AskUserQuestion`이 없으면 같은 질문과 선택지를 번호 목록으로 보여 주고 답을 기다린다. 대화할 수 없는 실행(예: `codex exec`)이면 확인이 필요한 지점에서 멈추고 무엇을 확인해야 하는지 보고한다 — 임의로 기본값을 골라 진행하지 않는다.
+> - 백그라운드 실행(`run_in_background`)이 없으면 명령 실행 도구의 시간 제한을 늘려 끝날 때까지 기다린다. 서브에이전트(`Task`)가 없으면 직접 수행한다.
+> - GitHub·`git fetch`/`push`는 네트워크가 필요하다. sandbox 때문에 실패하면 권한 상승 승인을 요청한다.
+
+GitHub 작업은 `gh` CLI로 한다(`gh auth status`로 인증 확인). `gh`를 쓸 수 없고 GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 해도 된다.
 
 PR URL: $ARGUMENTS
 
@@ -41,7 +51,7 @@ Example: /pr-review https://github.com/owner/repo/pull/32
 
 -- Review Process --
 1. PR URL 파싱 + 상태 확인 (draft/merged/CI)
-2. GitHub MCP를 통해 PR 정보 수집
+2. `gh` CLI로 PR 정보 수집
 3. 보안 스캔 (Secret/Code/Dependabot alerts)
 4. 변경 파일 확장자로 PR 타입 감지 (iOS/Android/FrontEnd/BackEnd)
 5. Codex 교차 리뷰를 백그라운드로 시작 (사용량 제한·미설치 등이면 생략)
@@ -107,10 +117,10 @@ If a valid PR URL is provided, show the guide briefly then proceed below.
 
 ## Error Handling Policy
 
-모든 GitHub MCP 호출에 대해 다음 에러 핸들링을 적용합니다:
+모든 GitHub 호출(`gh`)에 대해 다음 에러 핸들링을 적용합니다. `gh api`는 실패하면 0이 아닌 종료 코드와 함께 stderr에 `HTTP <상태 코드>`를 남기므로 그 코드로 판단합니다:
 
 **인증/권한 오류 (401/403)**:
-- "GitHub 토큰 권한이 부족합니다. GITHUB_PERSONAL_ACCESS_TOKEN을 확인하세요." 출력 후 리뷰 중단
+- "GitHub 토큰 권한이 부족합니다. `gh auth status`로 인증·권한(scope)을 확인하세요." 출력 후 리뷰 중단
 
 **Not Found (404)**:
 - PR 조회 시: "PR을 찾을 수 없습니다. URL을 확인하세요." 출력 후 중단
@@ -152,44 +162,49 @@ The URL format is: `https://github.com/{owner}/{repo}/pull/{pr_number}`
 
 ### Step 2: Fetch PR Information & Pre-check
 
-Use GitHub MCP tools to gather PR data and validate PR status:
+Use the `gh` CLI to gather PR data and validate PR status (`{o}/{r}` = `owner/repo`, `N` = `pr_number`):
 
 **2.1 PR 기본 정보 및 상태 확인:**
 
-`mcp__github__get_pull_request`로 PR 정보를 가져온 뒤 상태를 확인합니다:
+REST로 PR 정보를 가져온 뒤 상태를 확인합니다. 아래 필드명(`state`, `merged`, `draft`, `mergeable`, `base.ref`, `base.sha`, `head.ref`, `head.sha` 등)은 이 REST 응답의 이름입니다:
+
+```bash
+gh api "repos/{o}/{r}/pulls/N"
+```
+
 
 - `state` == "closed": `AskUserQuestion`으로 "이 PR은 이미 닫혔습니다. 리뷰를 계속 하시겠습니까?" 확인 (옵션: 계속 진행 / 중단)
 - `merged` == true: `AskUserQuestion`으로 "이 PR은 이미 머지되었습니다. 리뷰를 계속 하시겠습니까?" 확인 (옵션: 계속 진행 / 중단)
 - `draft` == true: "Draft PR입니다. 리뷰 코멘트는 작성하되, submit은 COMMENT로 제한합니다." 안내
-- `mergeable` == false: "Merge conflict가 있습니다." 경고 안내
+- `mergeable` == false: "Merge conflict가 있습니다." 경고 안내 (`null`이면 GitHub가 아직 계산 중인 것이므로 경고하지 않습니다)
 
 **2.2 CI 상태 확인:**
 
-`mcp__github__get_pull_request_status`로 CI 통과 여부를 확인합니다:
+`gh pr checks N -R {o}/{r} --json name,state,bucket`으로 CI 통과 여부를 확인합니다 (`bucket`: `pass`/`fail`/`pending`/`skipping`/`cancel`. 체크가 하나도 없거나 실패·대기 중이면 종료 코드가 0이 아니므로, 종료 코드가 아니라 출력으로 판단합니다):
 - 모든 check가 success: 정상 진행
 - pending/in_progress: "CI가 아직 실행 중입니다" 안내 후 진행
 - failure: "CI가 실패했습니다. CI 실패 관련 이슈도 리뷰에 포함합니다." 안내
 
 **2.3 변경 파일 및 Diff:**
 
-- `mcp__github__get_pull_request_files`로 변경 파일 목록 조회
-- `mcp__github__get_pull_request_diff`로 전체 diff 조회
+- `gh api "repos/{o}/{r}/pulls/N/files" --paginate`로 변경 파일 목록 조회
+- `gh pr diff N -R {o}/{r}`로 전체 diff 조회
 
 **2.4 기존 리뷰 확인 (중복 방지 + 재리뷰 감지):**
 
-- `mcp__github__get_pull_request_reviews`로 기존 리뷰 조회
+- `gh api "repos/{o}/{r}/pulls/N/reviews" --paginate`로 기존 리뷰 조회 (`id`, `user.login`, `state`, `body`, `submitted_at`, `commit_id`)
   - 각 리뷰의 state (APPROVED, CHANGES_REQUESTED, COMMENTED)와 reviewer 기록
   - 이미 REQUEST_CHANGES 상태인 리뷰가 있으면 해당 리뷰어가 지적한 사항 파악
-- `mcp__github__get_pull_request_review_comments`로 기존 인라인 코멘트 조회
+- `gh api "repos/{o}/{r}/pulls/N/comments" --paginate`로 기존 인라인 코멘트 조회
   - 기존 코멘트의 path, line, body를 파싱하여 이미 지적된 이슈 목록 생성
 
 **재리뷰 감지:**
 
-기존 리뷰 중 현재 사용자(GitHub MCP의 인증 사용자)가 남긴 리뷰가 있는지 확인합니다. `mcp__github__get_me`로 현재 사용자를 확인하고, 기존 리뷰의 `user.login`과 비교합니다.
+기존 리뷰 중 현재 사용자(`gh`로 인증된 사용자)가 남긴 리뷰가 있는지 확인합니다. `gh api user --jq .login`으로 현재 사용자를 확인하고, 기존 리뷰의 `user.login`과 비교합니다.
 
 이전 리뷰가 발견되면 `AskUserQuestion`으로 다음 옵션을 제시합니다:
 
-- **🔄 증분 리뷰 (Recommended)**: 이전 리뷰의 `submitted_at` 이후에 추가된 커밋만 리뷰합니다. `mcp__github__list_commits`에서 이전 리뷰 시점 이후의 커밋만 필터링하고, 해당 커밋에서 변경된 파일/라인만 리뷰 대상으로 합니다. 이전에 지적한 이슈가 수정되었는지도 확인합니다.
+- **🔄 증분 리뷰 (Recommended)**: 이전 리뷰의 `submitted_at` 이후에 추가된 커밋만 리뷰합니다. `gh api "repos/{o}/{r}/pulls/N/commits" --paginate`의 결과에서 이전 리뷰 시점 이후의 커밋만(`commit.committer.date` 기준) 필터링하고, 해당 커밋에서 변경된 파일/라인만 리뷰 대상으로 합니다. 이전에 지적한 이슈가 수정되었는지도 확인합니다.
 - **🔁 전체 리뷰**: 이전 리뷰를 무시하고 PR 전체를 처음부터 다시 리뷰합니다. 단, 동일 파일 + 동일 라인 + 유사 내용의 기존 코멘트는 여전히 건너뜁니다.
 
 **증분 리뷰 동작:**
@@ -211,14 +226,14 @@ Use GitHub MCP tools to gather PR data and validate PR status:
 
 PR description (body)에서 이슈 참조 패턴을 파싱합니다:
 - 패턴: `Fixes #N`, `Closes #N`, `Resolves #N`, `Related #N`, `refs #N` (대소문자 무관)
-- 각 이슈 번호에 대해 `mcp__github__get_issue`로 이슈 내용 조회
+- 각 이슈 번호에 대해 `gh issue view <n> -R {o}/{r} --json title,body,labels,state`로 이슈 내용 조회
 - 이슈의 title, body, labels를 리뷰 컨텍스트에 추가
 - Step 4 리뷰 시: PR 변경 내용이 이슈 요구사항을 충족하는지 검증
 - Step 7 Summary에 "Linked Issues Coverage" 섹션 추가
 
 **2.6 커밋 분석:**
 
-`mcp__github__list_commits`로 PR의 커밋 목록을 조회합니다:
+`gh api "repos/{o}/{r}/pulls/N/commits" --paginate`로 PR의 커밋 목록을 조회합니다 (메시지는 `commit.message`):
 - 커밋 수가 20개 초과: Summary에 "스쿼시 머지를 권장합니다" SUGGESTION
 - 커밋 메시지 패턴 분석:
   - "fix typo", "formatting", "lint" 등 포매팅 전용 커밋이 전체의 50% 이상이면: "포매팅 변경과 로직 변경을 별도 PR로 분리하면 리뷰가 용이합니다" SUGGESTION
@@ -254,7 +269,7 @@ Check if the PR's repository matches the current working directory's git remote:
 
    **캐시가 없는 경우** — `AskUserQuestion` 옵션:
    - **분석 없이 PR diff만으로 리뷰 진행**: 추가 분석 없이 진행
-   - **레포지토리를 분석하고 문서를 저장한 뒤 리뷰 진행**: GitHub MCP로 분석 후 캐시
+   - **레포지토리를 분석하고 문서를 저장한 뒤 리뷰 진행**: `gh`로 분석 후 캐시
 
    **캐시가 있는 경우** — `AskUserQuestion` 옵션:
    - **분석 없이 PR diff만으로 리뷰 진행**: 추가 분석 없이 진행
@@ -265,8 +280,8 @@ Check if the PR's repository matches the current working directory's git remote:
    캐시가 있는 경우 description에 캐시 생성 일시도 포함합니다 (예: "캐시 생성일: 2026-03-25").
 
    - **분석 없이 진행**: 추가 분석 없이 PR diff와 GitHub 컨텍스트만으로 리뷰를 진행합니다.
-   - **레포지토리 분석 후 진행**: GitHub MCP를 통해 레포지토리를 분석합니다:
-     1. `mcp__github__get_file_contents`로 루트의 `README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md` 등 주요 문서를 가져옵니다.
+   - **레포지토리 분석 후 진행**: `gh`로 레포지토리를 분석합니다:
+     1. `gh api "repos/{o}/{r}/contents/<path>?ref=<head.sha>" -H "Accept: application/vnd.github.raw"`로 루트의 `README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md` 등 주요 문서를 가져옵니다.
      2. PR이 수정한 디렉토리의 문서와 주요 소스 파일을 가져옵니다.
      3. 분석 결과를 `.claude/repo-cache/{owner}/{repo}/` 디렉토리에 저장합니다:
         - `meta.json`: 분석 일시, PR 타입, 주요 기술 스택, 브랜치 전략 등
@@ -311,7 +326,7 @@ Check if the PR's repository matches the current working directory's git remote:
      - **CI 설정**: `.github/workflows/`, `Jenkinsfile` 등에서 자동화된 검증 항목 (이미 CI가 검증하는 항목은 우선순위를 낮춤)
      - **테스트 구조**: 테스트 커버리지 정책, 테스트 프레임워크, 필수 테스트 패턴
      - **보안 민감 영역**: auth, payment, crypto 등 디렉토리 식별 → 해당 영역 변경 시 최우선 리뷰
-     - **최근 PR/이슈**: `mcp__github__list_pull_requests`로 최근 머지된 PR 패턴을 참고하여 자주 발생하는 이슈 파악
+     - **최근 PR/이슈**: `gh pr list -R {o}/{r} --state merged --limit 20 --json number,title,mergedAt,url`로 최근 머지된 PR 패턴을 참고하여 자주 발생하는 이슈 파악
      4. 저장된 문서를 참조하여 리뷰를 진행합니다.
    - **기존 분석 문서 참조**: `.claude/repo-cache/{owner}/{repo}/` 에 저장된 기존 문서를 읽어 리뷰에 활용합니다. 저장된 문서가 없으면 사용자에게 알리고 다시 선택하도록 합니다.
    - **기존 문서 삭제 후 새로 분석**: `.claude/repo-cache/{owner}/{repo}/` 디렉토리를 삭제하고 "레포지토리 분석 후 진행"과 동일하게 새로 분석을 진행합니다.
@@ -328,20 +343,20 @@ When local context is available (same repo or cached analysis), use it to:
 
 PR이 속한 레포지토리의 보안 경고를 확인합니다. 이 정보는 Step 4 리뷰와 Step 6 판정에서 참조됩니다.
 
-1. **Secret Scanning**: `mcp__github__list_secret_scanning_alerts`로 시크릿 노출 경고 조회
-   - `owner`, `repo`, `state: "open"` 파라미터 사용
+1. **Secret Scanning**: 시크릿 노출 경고 조회
+   - `gh api "repos/{o}/{r}/secret-scanning/alerts?state=open" --paginate`
    - PR이 변경한 파일 경로와 교차 확인
    - 발견 시: 해당 파일에 CRITICAL 코멘트 자동 생성 대상으로 마킹
    - **Secret alert가 있으면 Step 6에서 무조건 REQUEST_CHANGES 판정**
 
-2. **Code Scanning**: `mcp__github__list_code_scanning_alerts`로 CodeQL 정적 분석 경고 조회
-   - `ref`: PR의 head branch
+2. **Code Scanning**: CodeQL 정적 분석 경고 조회
+   - `gh api "repos/{o}/{r}/code-scanning/alerts?state=open&ref=<head.ref>" --paginate` (`ref`: PR의 head branch)
    - PR 변경 파일과 교차 확인하여 관련 경고만 필터링
    - severity가 `critical` 또는 `high`인 경고는 CRITICAL 코멘트 대상
    - severity가 `medium`인 경고는 WARNING 코멘트 대상
 
-3. **Dependabot Alerts**: `mcp__github__list_dependabot_alerts`로 의존성 취약점 조회
-   - `state: "open"` 필터
+3. **Dependabot Alerts**: 의존성 취약점 조회
+   - `gh api "repos/{o}/{r}/dependabot/alerts?state=open" --paginate`
    - PR이 의존성 파일(`package.json`, `package-lock.json`, `Podfile`, `Podfile.lock`, `build.gradle`, `requirements.txt`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`)을 수정했을 때만 조회
    - CVSS 7.0 이상: CRITICAL 코멘트 대상
    - CVSS 4.0~6.9: WARNING 코멘트 대상
@@ -381,6 +396,7 @@ Codex는 **추가 리뷰어**입니다. Claude 리뷰는 Codex 실행 여부와 
 | `--no-codex` | 인자 | `--no-codex` |
 | 미설치 | `command -v codex` 실패 | `미설치` |
 | 미로그인 | `codex login status` 종료 코드 ≠ 0 **그리고** 환경 변수 `CODEX_API_KEY`·`OPENAI_API_KEY`가 모두 없음 | `미로그인` |
+| 실행 환경이 Codex | 이 skill을 실행하는 에이전트가 Codex(OpenAI)임 — Codex가 Codex를 부르면 교차 리뷰가 아님 | `실행 환경이 Codex` |
 
 API 키 환경 변수만 쓰는 환경에서는 `codex login status`가 실패해도 `codex exec`가 동작할 수 있으므로, 키가 있으면 실행하고 결과로 판정합니다(Step 5.1).
 
@@ -392,8 +408,8 @@ API 키 환경 변수만 쓰는 환경에서는 `codex login status`가 실패�
 mktemp -d "${TMPDIR:-/tmp}/dwk-codex.XXXXXX"     # 이하 <W>
 ```
 
-PR 정보에서 `base.ref`(이하 `<base>`), `base.sha`(이하 `<base_sha>`), `head.sha`(이하 `<head>`)를 씁니다. 범위는 **PR 정보를 받은 시점의 SHA로 고정**합니다 — 리뷰 중 base 브랜치가 움직여도 Claude가 받은 diff와 Codex가 보는 범위가 어긋나지 않게 하기 위해서입니다.
-증분 리뷰(Step 2.4)를 골랐으면 시작점 `<prev>`는 **현재 사용자의 가장 최근 리뷰의 `commit_id`**입니다(`mcp__github__get_pull_request_reviews` 응답의 필드).
+PR 정보(Step 2.1의 `gh api "repos/{o}/{r}/pulls/N"` 응답)에서 `base.ref`(이하 `<base>`), `base.sha`(이하 `<base_sha>`), `head.sha`(이하 `<head>`)를 씁니다. 범위는 **PR 정보를 받은 시점의 SHA로 고정**합니다 — 리뷰 중 base 브랜치가 움직여도 Claude가 받은 diff와 Codex가 보는 범위가 어긋나지 않게 하기 위해서입니다.
+증분 리뷰(Step 2.4)를 골랐으면 시작점 `<prev>`는 **현재 사용자의 가장 최근 리뷰의 `commit_id`**입니다(Step 2.4의 `gh api "repos/{o}/{r}/pulls/N/reviews"` 응답의 필드).
 
 | Step 2.5 결과 | 실행 위치(이하 `<DIR>`) | 범위 |
 |---|---|---|
@@ -413,7 +429,10 @@ git worktree add --detach "<W>/tree" "<head>"
 
 다른 레포 — 저장소 원본 없이 diff만 넘깁니다.
 
-- 전체 리뷰: Step 2.3에서 받은 diff(`mcp__github__get_pull_request_diff`)를 `Write`로 `<W>/pr.diff`에 저장합니다.
+- 전체 리뷰: Step 2.3과 같은 diff를 파일로 저장합니다.
+  ```bash
+  gh pr diff <pr_number> -R "<owner>/<repo>" > "<W>/pr.diff"
+  ```
 - 증분 리뷰: 먼저 `<prev>`가 `<head>`의 조상인지 확인합니다. compare는 세 점(`...`) 비교라, force-push로 갈라진 뒤에도 성공해서 "공통 조상 이후 전체"를 증분처럼 돌려줄 수 있기 때문입니다.
   ```bash
   gh api "repos/<owner>/<repo>/compare/<prev>...<head>" --jq .merge_base_commit.sha   # 결과가 <prev>와 같아야 증분
@@ -474,9 +493,9 @@ Read the review templates from `${CLAUDE_PLUGIN_ROOT}/templates/review-criteria/
    - 변경된 파일을 import/include/require하는 다른 파일 목록을 `Grep`으로 탐색
    - 영향받는 파일 수가 10개 이상이면: SUGGESTION "이 파일은 {N}개 파일에서 참조됩니다. 변경 영향을 신중히 확인하세요."
 
-**원격 레포인 경우 (GitHub MCP 활용):**
+**원격 레포인 경우 (`gh` 활용):**
 
-1. `mcp__github__search_code`로 동일 레포 내에서 변경된 함수/클래스명 검색
+1. `gh search code "<함수/클래스명>" --repo {o}/{r} --json path,url`로 동일 레포 내에서 변경된 함수/클래스명 검색
 2. 검색 결과에서 PR에 포함되지 않은 참조 파일 식별
 3. 일관성이 깨지는 경우 SUGGESTION 코멘트
 
@@ -519,7 +538,7 @@ Claude 리뷰(Step 4~4.5)가 끝나면 Codex 결과를 받아 합칩니다. Step
 
 `confidence` < 0.5이면 한 단계 내립니다 (CRITICAL → WARNING → SUGGESTION, SUGGESTION은 유지). 변환 뒤 `--mode`·`--focus`·`--skip`을 Claude 지적과 똑같이 적용합니다.
 
-**5.3 Claude 검증** — Codex 지적을 그대로 싣지 않습니다. 지적마다 **해당 코드를 직접 읽고**(같은 레포는 `<DIR>`의 파일, 다른 레포는 diff 또는 `mcp__github__get_file_contents`) 판정합니다.
+**5.3 Claude 검증** — Codex 지적을 그대로 싣지 않습니다. 지적마다 **해당 코드를 직접 읽고**(같은 레포는 `<DIR>`의 파일, 다른 레포는 diff 또는 `gh api "repos/{o}/{r}/contents/<path>?ref=<head>" -H "Accept: application/vnd.github.raw"`) 판정합니다.
 
 | 판정 | 기준 | 처리 |
 |---|---|---|
@@ -532,7 +551,7 @@ Claude 리뷰(Step 4~4.5)가 끝나면 Codex 결과를 받아 합칩니다. Step
 
   | 위치 | 게시 방법 |
   |---|---|
-  | PR의 변경 파일이지만 줄이 diff 밖 | 파일 단위 코멘트(`subjectType: FILE`) |
+  | PR의 변경 파일이지만 줄이 diff 밖 | 파일 단위 코멘트(`subject_type=file`, Step 6.3) |
   | PR의 변경 파일이 아님 | Summary의 "인라인 불가" 목록에 항목마다 출처 표식과 번호(`<!-- dwk:reviewer=codex item=1 -->`)를 붙여 기록 (`/apply-review`가 리뷰 본문에서 수집). 번호는 Step 6.2에서 게시하기로 한 항목에만, 게시할 때 1부터 매깁니다 |
 
 - `--mode=relaxed`로 Summary에만 적는 지적(CRITICAL이 아닌 것)은 출처와 관계없이 **표식을 붙이지 않습니다.** Claude 지적과 Codex 지적이 `/apply-review`에서 똑같이 다뤄지게 하기 위해서입니다.
@@ -595,13 +614,28 @@ rm -rf "<W>"
 
 **6.3 PR 코멘트 게시 (사용자 승인 시):**
 
-1. **Create a pending review**: Use `mcp__github__create_pending_pull_request_review` to start a review.
-2. **Add comments**: For each issue found, use `mcp__github__add_comment_to_pending_review` with:
-   - `path`: The file path
-   - `line`: The specific line number in the diff
-   - `subjectType`: 줄이 diff 밖인 채택 지적(Step 5.3)은 `FILE`로 달고 `line`을 생략합니다. 그 밖에는 `LINE`(기본)
-   - `body`: The review comment (follow the comment format below)
-3. **Submit the review**: Use `mcp__github__submit_pending_pull_request_review` with:
+리뷰는 **한 번의 요청**으로 만들고, 파일 단위 코멘트는 리뷰를 만든 뒤 따로 답니다. 긴 본문·JSON은 셸 따옴표 문제를 피하려고 `mktemp`로 만든 임시 파일에 쓰고(`Write` 또는 `jq -n`으로 써서 이스케이프를 맞춥니다) `--input`/`-F body=@<파일>`로 넘기며, 끝나면 지웁니다. `<head sha>`는 Step 2.1에서 고정한 `head.sha`입니다.
+
+1. **게시할 지적 나누기** (Step 6.2에서 확정한 목록):
+   - 인라인: 줄이 diff 안인 지적
+   - 파일 단위: 줄이 diff 밖인 채택 지적(Step 5.3)
+2. **리뷰 JSON 작성** (`<review.json>`):
+   ```json
+   {
+     "commit_id": "<head sha>",
+     "event": "COMMENT | REQUEST_CHANGES | APPROVE",
+     "body": "<Summary>",
+     "comments": [
+       { "path": "src/a.ts", "line": 42, "side": "RIGHT", "body": "..." },
+       { "path": "src/a.ts", "start_line": 40, "line": 42, "side": "RIGHT", "body": "..." }
+     ]
+   }
+   ```
+   - `comments`의 각 항목:
+     - `path`: The file path
+     - `line`: 변경 후 파일의 줄 번호 (`side: "RIGHT"`). 삭제된 줄에 달 때는 `side: "LEFT"`와 변경 전 줄 번호
+     - `start_line`: 여러 줄 범위일 때만 (`line`이 끝 줄)
+     - `body`: The review comment (follow the comment format below, 출처 표식 포함)
    - `event`: 아래 판정 매트릭스에 따라 결정:
 
      | 조건 | 판정 (event) |
@@ -613,14 +647,26 @@ rm -rf "<W>"
      | 🚨 CRITICAL 0, ⚠️ WARNING 0, 💡 SUGGESTION만 존재 | `COMMENT` |
      | 이슈 없음 또는 🔹 NITPICK만 존재 | `APPROVE` |
      | Draft PR | `COMMENT` (APPROVE/REQUEST_CHANGES 금지) |
+     | PR 작성자 = 현재 사용자 | `COMMENT` (GitHub가 자기 PR의 APPROVE/REQUEST_CHANGES를 422로 거부함). 원래 판정은 Summary에 적습니다 |
 
    - `body`: 판정 근거를 포함한 Summary (Step 7 참조)
+3. **리뷰 게시**:
+   ```bash
+   gh api -X POST "repos/{o}/{r}/pulls/N/reviews" --input "<review.json>"
+   ```
+   - **422**(줄이 diff 밖 등)가 나면 문제가 된 코멘트를 `comments`에서 빼고 다시 시도합니다. 오류 메시지로 어느 코멘트인지 알 수 없으면 Step 2.3의 변경 파일 `patch`(diff hunk)와 대조해 diff 밖의 줄을 찾아 뺍니다. 뺀 코멘트는 PR의 변경 파일이면 파일 단위 코멘트(4번)로, 아니면 Summary의 "인라인 불가" 목록(Step 5.3)으로 옮깁니다. **조용히 버리지 않습니다.**
+4. **파일 단위 코멘트 게시** — 리뷰 API의 `comments`는 파일 단위 코멘트를 지원하지 않으므로, 리뷰를 만든 뒤 지적마다 따로 답니다. 본문 끝에도 출처 표식(`dwk:reviewer`)을 반드시 넣습니다:
+   ```bash
+   gh api -X POST "repos/{o}/{r}/pulls/N/comments" \
+     -f commit_id="<head sha>" -f path="<path>" -f subject_type=file -F body=@"<body 파일>"
+   ```
+   실패한 코멘트는 오류와 함께 사용자에게 보고합니다(조용히 버리지 않습니다).
 
 ### Comment Format
 
 Each comment should follow `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `comment_format` 템플릿.
 
-**출처 표식 (필수):** 모든 리뷰 코멘트(인라인과 파일 단위 `subjectType: FILE` 모두) 본문 끝에 출처 줄과 HTML 주석 표식을 넣습니다. `/apply-review`는 이 표식이 있는 코멘트를 리뷰어 본인 계정의 코멘트여도 반영 대상으로 삼습니다 (작성자 = 리뷰어인 `/pipeline`에서 지적이 걸러지지 않게).
+**출처 표식 (필수):** 모든 리뷰 코멘트(인라인과 파일 단위 `subject_type=file` 모두) 본문 끝에 출처 줄과 HTML 주석 표식을 넣습니다. `/apply-review`는 이 표식이 있는 코멘트를 리뷰어 본인 계정의 코멘트여도 반영 대상으로 삼습니다 (작성자 = 리뷰어인 `/pipeline`에서 지적이 걸러지지 않게).
 
 | 출처 | 표식 |
 |---|---|

@@ -10,8 +10,8 @@
   "plugins": [
     {
       "name": "workflow",
-      "description": "커밋 → Draft PR → 리뷰 → 반영 → 병합까지의 개발 워크플로 커맨드 (/commit, /create-pr, /pr-review, /apply-review, /pipeline)",
-      "version": "1.1.0",
+      "description": "커밋 → Draft PR → 리뷰 → 반영 → 병합까지의 개발 워크플로 skill (commit, create-pr, pr-review, apply-review, pipeline). Claude Code·Codex 지원, GitHub 작업은 gh CLI",
+      "version": "2.0.0",
       "author": {
         "name": "wnsgur9137"
       },
