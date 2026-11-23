@@ -151,6 +151,7 @@ You are a senior developer applying PR review feedback. Read the review comments
   - **예외**: 본문에 `<!-- dwk:reviewer=... -->` 표식이 있는 코멘트는 `/pr-review`가 남긴 리뷰 지적이므로 자기 계정 코멘트여도 **포함**합니다. 작성자와 리뷰어가 같은 `/pipeline`이나 자기 PR 리뷰에서 Claude·Codex 지적이 걸러지지 않게 하기 위해서입니다
   - 표식의 값(`claude`·`codex`·`claude+codex`)을 출처로 표시합니다. 판단(Step 4)은 출처와 관계없이 같은 기준으로 합니다
   - 리뷰 **본문**의 "Codex 교차 리뷰 > 인라인 불가" 목록에서 표식이 붙은 항목도 코멘트로 수집합니다(인라인으로 달 수 없었던 채택 지적). 스레드가 없으므로 Step 10의 답글 대신 반영 내역 코멘트에 결과를 적습니다
+    - 이런 항목에는 코멘트 ID가 없으므로 `review-{리뷰 id}#{표식의 item 번호}`(예: `review-2468#1`)를 ID로 쓰고, 작성 시각은 리뷰의 `submitted_at`을 씁니다. 반영 기록(Step 11)의 `comment_id`에도 이 문자열을 그대로 넣습니다 — 기존 숫자 ID 기록은 그대로 읽습니다
 - reply 코멘트 중 "resolved" 또는 수정 확인 내용이 있는 스레드는 제외
 - bot 코멘트는 별도 표시하되 포함
 

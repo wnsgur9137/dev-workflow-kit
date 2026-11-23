@@ -91,7 +91,7 @@ Example: /pr-review https://github.com/owner/repo/pull/123
 --- 판정 ---
 {verdict}: {판정 근거}
 🚨 {critical} / ⚠️ {warning} / 💡 {suggestion} / ❓ {question} / 🔹 {nitpick}
-🤖 Codex: 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d} | 생략({사유})
+🤖 Codex: 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d} · 옵션 제외 {f} | 생략({사유})
 ```
 
 ---
@@ -177,9 +177,9 @@ guard let value = optionalValue else { return }
 ### Codex 교차 리뷰
 - 결과: 실행됨 (범위: {range} | diff만 — 저장소 원본 없음) | 생략({--no-codex | 미설치 | 미로그인 | 변경 없음 | 사용량 제한, {재시도 가능 시각} | 시간 초과 | 오류: {요약}})
 - 범위 변경: {증분 시작점이 조상이 아니거나 compare 실패로 전체 범위를 봄 — 있으면}
-- 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d}
+- 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d} · 옵션 제외 {f}
 - 기각: {file:line} — {이유} (있으면)
-- 인라인 불가: {file:line} [{emoji} {severity}] — {요약} <!-- dwk:reviewer={codex | claude+codex} --> (있으면, 항목마다 표식)
+- 인라인 불가: {file:line} [{emoji} {severity}] — {요약} <!-- dwk:reviewer={codex | claude+codex} item={1부터 매기는 번호} --> (있으면, 게시하기로 한 항목만, 항목마다 표식)
 
 ### Already Flagged (if duplicates skipped)
 - {file:line} - Already flagged by {reviewer}

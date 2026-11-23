@@ -372,7 +372,7 @@ If a file matches multiple types, assign the most specific one. If no type is de
 Claude 리뷰(Step 4~4.5)와 **동시에** Codex 리뷰를 돌리기 위해 여기서 시작만 하고 기다리지 않습니다. 결과는 Step 5에서 합칩니다.
 Codex는 **추가 리뷰어**입니다. Claude 리뷰는 Codex 실행 여부와 관계없이 그대로 수행합니다.
 
-**어느 단계에서 생략하든** 사유를 기록하고, 이미 만든 임시 폴더·worktree는 **즉시 Step 5.5대로 정리**한 뒤 Step 4로 갑니다. Step 5에서 생략을 다시 판정하지 않습니다.
+**Step 3.5에서 생략하면** 사유를 기록하고, 이미 만든 임시 폴더·worktree는 **즉시 Step 5.5대로 정리**한 뒤 Step 4로 갑니다. 이 경우 Step 5 전체를 건너뜁니다. (실행을 시작한 뒤의 실패는 Step 5.1에서 판정합니다.)
 
 **3.5.1 실행 전 확인** — 하나라도 해당하면 생략합니다.
 
@@ -392,28 +392,34 @@ API 키 환경 변수만 쓰는 환경에서는 `codex login status`가 실패�
 mktemp -d "${TMPDIR:-/tmp}/dwk-codex.XXXXXX"     # 이하 <W>
 ```
 
-PR 정보에서 `base.ref`(이하 `<base>`), `head.sha`(이하 `<head>`)를 씁니다.
+PR 정보에서 `base.ref`(이하 `<base>`), `base.sha`(이하 `<base_sha>`), `head.sha`(이하 `<head>`)를 씁니다. 범위는 **PR 정보를 받은 시점의 SHA로 고정**합니다 — 리뷰 중 base 브랜치가 움직여도 Claude가 받은 diff와 Codex가 보는 범위가 어긋나지 않게 하기 위해서입니다.
 증분 리뷰(Step 2.4)를 골랐으면 시작점 `<prev>`는 **현재 사용자의 가장 최근 리뷰의 `commit_id`**입니다(`mcp__github__get_pull_request_reviews` 응답의 필드).
 
 | Step 2.5 결과 | 실행 위치(이하 `<DIR>`) | 범위 |
 |---|---|---|
-| **같은 레포**, `git rev-parse HEAD` = `<head>`, `git status --porcelain` 비어 있음 | `git rev-parse --show-toplevel`의 경로 | 전체: `<merge-base>..<head>` / 증분: `<prev>..<head>` |
-| **같은 레포**, 그 밖 (다른 브랜치·dirty) | `<W>/tree` 임시 worktree | 위와 같음 |
+| **같은 레포** | `<W>/tree` 임시 worktree (`<head>`) | 전체: `<merge-base>..<head>` / 증분: `<prev>..<head>` |
 | **다른 레포** | `<W>` (diff만) | `<W>/pr.diff` |
+
+같은 레포라도 사용자 작업 폴더를 그대로 넘기지 않고 **항상 임시 worktree**를 씁니다. worktree에는 커밋된 파일만 있어서, 작업 폴더의 `.env` 같은 ignore·미추적 파일이 Codex(OpenAI)로 넘어가지 않습니다. 사용자 작업 트리·체크아웃도 건드리지 않습니다.
 
 같은 레포 — `<remote>`는 Step 2.5에서 PR의 `owner/repo`와 **일치한 remote 이름**입니다(`origin`이라고 가정하지 않습니다. fork 구성이면 `upstream` 등).
 
 ```bash
-git fetch "<remote>" "<base>" "pull/<pr_number>/head"
-git merge-base "<remote>/<base>" "<head>"                  # 전체 리뷰의 시작점
+git fetch "<remote>" "refs/heads/<base>" "pull/<pr_number>/head"   # 객체만 받으면 됨 (remote의 fetch 설정과 무관)
+git merge-base "<base_sha>" "<head>"                       # 전체 리뷰의 시작점 (원격 추적 브랜치가 아니라 고정한 SHA)
 git merge-base --is-ancestor "<prev>" "<head>"             # 증분 리뷰일 때만. 실패(force-push 등)면 전체 범위로 바꾸고 Summary에 적는다
-git worktree add --detach "<W>/tree" "<head>"              # 두 번째 경우에만. 사용자 작업 트리·체크아웃은 건드리지 않는다
+git worktree add --detach "<W>/tree" "<head>"
 ```
 
 다른 레포 — 저장소 원본 없이 diff만 넘깁니다.
 
 - 전체 리뷰: Step 2.3에서 받은 diff(`mcp__github__get_pull_request_diff`)를 `Write`로 `<W>/pr.diff`에 저장합니다.
-- 증분 리뷰: `gh api repos/<owner>/<repo>/compare/<prev>...<head> -H "Accept: application/vnd.github.diff" > "<W>/pr.diff"`. 실패하면(404 — `<prev>`가 rebase로 사라짐, `gh` 미인증 등) 전체 diff로 바꾸고 Summary에 적습니다.
+- 증분 리뷰: 먼저 `<prev>`가 `<head>`의 조상인지 확인합니다. compare는 세 점(`...`) 비교라, force-push로 갈라진 뒤에도 성공해서 "공통 조상 이후 전체"를 증분처럼 돌려줄 수 있기 때문입니다.
+  ```bash
+  gh api "repos/<owner>/<repo>/compare/<prev>...<head>" --jq .merge_base_commit.sha   # 결과가 <prev>와 같아야 증분
+  gh api "repos/<owner>/<repo>/compare/<prev>...<head>" -H "Accept: application/vnd.github.diff" > "<W>/pr.diff"
+  ```
+  merge base가 `<prev>`와 다르거나 요청이 실패하면(404 — `<prev>`가 rebase로 사라짐, `gh` 미인증 등) 전체 diff로 바꾸고 Summary에 적습니다.
 
 준비 결과에 따라 생략합니다.
 
@@ -431,13 +437,18 @@ git worktree add --detach "<W>/tree" "<head>"              # 두 번째 경우�
 
 ```bash
 perl -e 'alarm 900; exec @ARGV' codex exec --json -C "<DIR>" -s read-only --ephemeral \
+  --ignore-user-config -c project_doc_max_bytes=0 -c 'web_search="disabled"' \
   --output-schema "${CLAUDE_PLUGIN_ROOT}/templates/codex-review/schema.json" \
   -o "<W>/result.json" - < "<W>/prompt.md" > "<W>/events.jsonl" 2> "<W>/stderr.log"; echo $? > "<W>/exit"
 ```
 
-- `perl -e 'alarm 900; exec @ARGV'`: **15분 시간 제한**입니다. 시간이 지나면 SIGALRM으로 끝나 `exit`에 `142`가 남습니다(macOS에는 `timeout` 명령이 없어 perl을 씁니다). 그 밖의 종료 코드는 그대로 전달됩니다.
+- `perl -e 'alarm 900; exec @ARGV'`: **15분 시간 제한**입니다. 시간이 지나면 SIGALRM으로 끝나 `exit`에 `142`가 남습니다(macOS에는 `timeout` 명령이 없어 perl을 씁니다). 그 밖의 종료 코드는 그대로 전달됩니다. Codex가 띄운 하위 명령까지 끝내지는 않지만, 모두 읽기 전용 sandbox 안에서만 돕니다.
 - 다른 레포(`<DIR>` = `<W>`)는 git 저장소가 아니므로 `--skip-git-repo-check`를 붙입니다.
 - `-s read-only`: Codex는 파일을 고치지 못합니다. `--ephemeral`: Codex 세션 기록을 남기지 않습니다.
+- **PR 내용이 Codex를 조종하지 못하게** 도구를 줄입니다. `-s read-only`는 셸 명령만 제한하기 때문입니다.
+  - `--ignore-user-config`: 사용자 `~/.codex/config.toml`을 읽지 않습니다. 그래서 거기 설정된 MCP 서버(쓰기 권한 토큰이 있을 수 있음)를 쓰지 않습니다. 로그인 정보는 그대로 씁니다.
+  - `-c project_doc_max_bytes=0`: PR 작성자가 바꿀 수 있는 `AGENTS.md`를 지시로 읽지 않습니다.
+  - `-c 'web_search="disabled"'`: 웹 검색을 끕니다.
 
 ### Step 4: Apply Review Priorities by Type
 
@@ -475,7 +486,11 @@ Claude 리뷰(Step 4~4.5)가 끝나면 Codex 결과를 받아 합칩니다. Step
 
 **5.1 완료 대기와 실패 판정**
 
-- 백그라운드 작업의 완료 알림을 기다립니다. 짧은 간격으로 폴링하지 않습니다. 15분 제한은 명령 자체(`alarm 900`)에 걸려 있으므로 따로 시간을 재지 않습니다.
+- 먼저 `<W>/exit`가 있는지 봅니다. 있으면 이미 끝난 것입니다.
+- 없으면 끝날 때까지 기다립니다. 15분 제한은 명령 자체(`alarm 900`)에 걸려 있으므로 따로 시간을 재지 않습니다.
+  - 메인 세션: 백그라운드 작업의 완료 알림을 기다립니다.
+  - **서브에이전트로 실행 중이거나 완료 알림을 받을 수 없는 경우**(예: `/pipeline`이 리뷰를 위임함): 턴을 끝내면 알림을 받지 못하고 부모로 돌아갑니다. 턴을 끝내지 말고 `<W>/exit`가 생길 때까지 30~60초 간격으로 확인합니다(대기 도구가 있으면 그것으로 `<W>/exit` 생성을 기다립니다).
+  - `exit`가 생기기 전에는 결과 파일을 읽고 판정하지 않습니다.
 - 끝나면 `<W>/exit`, `<W>/result.json`, `<W>/events.jsonl`, `<W>/stderr.log`를 읽고 **위에서부터** 판정합니다.
 
 | 순서 | 판정 | 근거 | 처리 |
@@ -489,6 +504,7 @@ Claude 리뷰(Step 4~4.5)가 끝나면 Codex 결과를 받아 합칩니다. Step
 - 사용량 제한 판정은 오류 코드 하나에 기대지 않고 위 문자열 전체로 합니다 — Codex 버전에 따라 이벤트 형식이 바뀔 수 있습니다. 사용량 제한은 짧은 시간 안에 풀리지 않으므로 재시도하지 않습니다.
 - 실패하면 `result.json`은 0바이트로 남습니다(파일 존재만으로 성공이라 보지 않습니다).
 - **일부만 나온 결과는 리뷰로 취급하지 않습니다.** 생략과 같게 처리합니다.
+- 표의 "생략"은 **5.2~5.4를 건너뛴다**는 뜻입니다. 5.5 정리는 반드시 수행합니다.
 
 **5.2 등급 변환**
 
@@ -514,14 +530,14 @@ Claude 리뷰(Step 4~4.5)가 끝나면 Codex 결과를 받아 합칩니다. Step
   | 위치 | 게시 방법 |
   |---|---|
   | PR의 변경 파일이지만 줄이 diff 밖 | 파일 단위 코멘트(`subjectType: FILE`) |
-  | PR의 변경 파일이 아님 | Summary의 "인라인 불가" 목록에 항목마다 출처 표식을 붙여 기록 (`/apply-review`가 리뷰 본문에서 수집) |
+  | PR의 변경 파일이 아님 | Summary의 "인라인 불가" 목록에 항목마다 출처 표식과 번호(`<!-- dwk:reviewer=codex item=1 -->`)를 붙여 기록 (`/apply-review`가 리뷰 본문에서 수집) |
 
 **5.4 합치기**
 
 - Claude 지적과 **같은 파일·줄 차이 3 이내·같은 원인**이면 하나로 합치고 출처를 `Claude+Codex`로 표시합니다. 등급은 높은 쪽, 설명은 더 구체적인 쪽을 씁니다.
 - 나머지 채택 지적은 출처 `Codex`, Claude만의 지적은 출처 `Claude`입니다.
 - 기존 PR 코멘트와의 중복 처리(Step 2.4)는 Codex 지적에도 똑같이 적용합니다.
-- 집계는 한 가지로 씁니다: **지적 N = 채택 a + 기각 r + 기존 코멘트와 중복 d**. 채택 a 중 Claude 지적과 합친 수를 `Claude와 겹침 m`으로 따로 적습니다.
+- 집계는 한 가지로 씁니다: **지적 N = 채택 a + 기각 r + 기존 코멘트와 중복 d + 옵션 제외 f**. `f`는 5.2에서 `--mode`·`--focus`·`--skip`으로 빠진 수입니다. 채택 a 중 Claude 지적과 합친 수를 `Claude와 겹침 m`으로 따로 적습니다.
 
 **5.5 정리** — 성공·생략·실패 모두 마지막에 수행합니다.
 
@@ -542,7 +558,7 @@ rm -rf "<W>"
 
 - 지적마다 출처(`Claude` · `Codex` · `Claude+Codex`)를 표시합니다.
 - 판정은 **Claude 지적과 채택된 Codex 지적을 합친 결과**로 냅니다.
-- 끝에 Codex 교차 리뷰 결과 한 줄을 붙입니다: 실행했으면 `지적 N → 채택 a (Claude와 겹침 m) · 기각 r · 기존 중복 d`, 생략했으면 `생략(<사유>)`.
+- 끝에 Codex 교차 리뷰 결과 한 줄을 붙입니다: 실행했으면 `지적 N → 채택 a (Claude와 겹침 m) · 기각 r · 기존 중복 d · 옵션 제외 f`, 생략했으면 `생략(<사유>)`.
 
 **6.2 PR 코멘트 게시 여부 확인:**
 
@@ -570,12 +586,15 @@ rm -rf "<W>"
 
 선택되지 않은 코멘트는 게시하지 않으며, Step 7 Summary의 "Excluded Comments" 섹션에 기록합니다.
 
+**여기서 확정한 "게시할 지적" 목록을 인라인·파일 단위·리뷰 본문(Summary의 "인라인 불가") 게시에 똑같이 씁니다.** 인라인으로 달 수 없는 Codex 지적도 이 선택 대상에 넣습니다. 제외된 지적은 "Excluded Comments"에만 적고 `dwk:reviewer` 표식을 붙이지 않습니다 — 표식이 있으면 `/apply-review`가 반영 대상으로 수집합니다.
+
 **6.3 PR 코멘트 게시 (사용자 승인 시):**
 
 1. **Create a pending review**: Use `mcp__github__create_pending_pull_request_review` to start a review.
 2. **Add comments**: For each issue found, use `mcp__github__add_comment_to_pending_review` with:
    - `path`: The file path
    - `line`: The specific line number in the diff
+   - `subjectType`: 줄이 diff 밖인 채택 지적(Step 5.3)은 `FILE`로 달고 `line`을 생략합니다. 그 밖에는 `LINE`(기본)
    - `body`: The review comment (follow the comment format below)
 3. **Submit the review**: Use `mcp__github__submit_pending_pull_request_review` with:
    - `event`: 아래 판정 매트릭스에 따라 결정:
@@ -596,7 +615,7 @@ rm -rf "<W>"
 
 Each comment should follow `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `comment_format` 템플릿.
 
-**출처 표식 (필수):** 모든 인라인 코멘트 본문 끝에 출처 줄과 HTML 주석 표식을 넣습니다. `/apply-review`는 이 표식이 있는 코멘트를 리뷰어 본인 계정의 코멘트여도 반영 대상으로 삼습니다 (작성자 = 리뷰어인 `/pipeline`에서 지적이 걸러지지 않게).
+**출처 표식 (필수):** 모든 리뷰 코멘트(인라인과 파일 단위 `subjectType: FILE` 모두) 본문 끝에 출처 줄과 HTML 주석 표식을 넣습니다. `/apply-review`는 이 표식이 있는 코멘트를 리뷰어 본인 계정의 코멘트여도 반영 대상으로 삼습니다 (작성자 = 리뷰어인 `/pipeline`에서 지적이 걸러지지 않게).
 
 | 출처 | 표식 |
 |---|---|
@@ -638,7 +657,7 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/templates/review-criteria/` directory for type-s
 
 After posting all comments, provide a summary in the review body using `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `review_summary` 템플릿.
 
-Summary에는 **Codex 교차 리뷰** 섹션을 항상 넣습니다. 실행했으면 범위·집계(Step 5.4)·기각(이유)·인라인 불가 목록을, 생략했으면 사유(사용량 제한이면 재시도 가능 시각)를 적습니다. 다른 레포라 diff만 넘겼으면 그 한계도 적습니다.
+Summary에는 **Codex 교차 리뷰** 섹션을 항상 넣습니다. 실행했으면 범위·집계(Step 5.4)·기각(이유)·인라인 불가 목록(Step 6.2에서 게시하기로 한 것만)을, 생략했으면 사유(사용량 제한이면 재시도 가능 시각)를 적습니다. 다른 레포라 diff만 넘겼으면 그 한계도 적습니다.
 
 ### Step 8: Review Pattern Recording
 
@@ -659,7 +678,7 @@ Summary에는 **Codex 교차 리뷰** 섹션을 항상 넣습니다. 실행했�
    - Verdict: {APPROVE/COMMENT/REQUEST_CHANGES}
    - Critical: {count}, Warning: {count}, Suggestion: {count}
    - Key Issues: {top 3 이슈 한줄 요약}
-   - Codex: {지적 N → 채택 a (Claude와 겹침 m) · 기각 r · 기존 중복 d | 생략(사유)}
+   - Codex: {지적 N → 채택 a (Claude와 겹침 m) · 기각 r · 기존 중복 d · 옵션 제외 f | 생략(사유)}
    ```
 
 3. **로컬 레포인 경우**: 위 파일 경로를 `.claude/repo-cache/{owner}/{repo}/` 대신 프로젝트 루트의 `.claude/review-history/` 아래에 기록

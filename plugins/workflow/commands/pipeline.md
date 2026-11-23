@@ -429,7 +429,7 @@ mcp__github__update_pull_request(draft: false)    # 또는 gh pr ready <N>
 - 커밋      : N개
 - 게이트    : 통과 | 게이트 없음(경고)
 - 리뷰      : CRITICAL n / WARNING n / SUGGESTION n → 반영 n건
-- Codex     : 지적 N → 채택 a (Claude와 겹침 m) · 기각 r · 기존 중복 d | 생략(--no-codex · 미설치 · 미로그인 · 변경 없음 · 사용량 제한 · 시간 초과 · 오류)
+- Codex     : 지적 N → 채택 a (Claude와 겹침 m) · 기각 r · 기존 중복 d · 옵션 제외 f | 생략(--no-codex · 미설치 · 미로그인 · 변경 없음 · 사용량 제한 · 시간 초과 · 오류)
 - CI        : success (M분 SS초) | 스킵(docs-only) | 미실행
 - PR        : #NN <URL> (병합됨 | Ready | Draft)
 - 병합      : <sha> | 미수행(사유)
