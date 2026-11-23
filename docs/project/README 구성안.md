@@ -1,7 +1,7 @@
 ---
 title: README 구성안
 tags: [roadmap, docs]
-status: draft
+status: done
 created: 2026-11-05
 ---
 

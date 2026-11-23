@@ -11,7 +11,7 @@
     {
       "name": "workflow",
       "description": "커밋 → Draft PR → 리뷰 → 반영 → 병합까지의 개발 워크플로 skill (commit, create-pr, pr-review, apply-review, pipeline). Claude Code·Codex 지원, GitHub 작업은 gh CLI",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "author": {
         "name": "wnsgur9137"
       },
@@ -21,7 +21,7 @@
     {
       "name": "security",
       "description": "로컬·네트워크 격리 보안 점검 (/scan-code, /scan-app, /scan-web). Docker 호환 런타임 필수",
-      "version": "0.12.0",
+      "version": "0.12.1",
       "author": {
         "name": "wnsgur9137"
       },
