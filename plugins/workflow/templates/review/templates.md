@@ -179,7 +179,7 @@ guard let value = optionalValue else { return }
 - 범위 변경: {증분 시작점이 조상이 아니거나 compare 실패로 전체 범위를 봄 — 있으면}
 - 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d} · 옵션 제외 {f}
 - 기각: {file:line} — {이유} (있으면)
-- 인라인 불가: {file:line} [{emoji} {severity}] — {요약} <!-- dwk:reviewer={codex | claude+codex} item={1부터 매기는 번호} --> (있으면, 게시하기로 한 항목만, 항목마다 표식)
+- 인라인 불가: {file:line} [{emoji} {severity}] — {요약} <!-- dwk:reviewer={codex | claude+codex} item={게시하는 항목에 1부터 매기는 번호} --> (있으면, 게시하기로 한 항목만, 항목마다 표식. relaxed 모드에서 Summary에만 적는 지적은 표식 없음)
 
 ### Already Flagged (if duplicates skipped)
 - {file:line} - Already flagged by {reviewer}

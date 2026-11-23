@@ -69,6 +69,7 @@ Claude 리뷰에 **Codex 리뷰를 더합니다.** Claude 리뷰를 대신하지
 
   증분 리뷰를 고르면 Codex도 이전 리뷰 이후 커밋만 봅니다.
 - PR 내용이 Codex를 조종하지 못하도록 사용자 `~/.codex/config.toml`(MCP 서버 등), 저장소의 `AGENTS.md`, 웹 검색을 쓰지 않고 실행합니다. 다만 Codex의 읽기 전용 sandbox는 디스크 읽기를 막지 않으므로, PR에 숨은 지시가 Codex에게 로컬 파일을 읽게 할 가능성은 남습니다. 민감한 환경에서는 `--no-codex`를 쓰세요.
+- `~/.codex/config.toml`을 읽지 않으므로 거기 적은 모델·공급자 설정(Azure, 로컬 모델 등)도 쓰지 않습니다. 그런 설정이 있어야만 동작하는 환경에서는 Codex 리뷰가 오류로 생략됩니다.
 - 등급 변환: critical·high → CRITICAL, medium → WARNING, low → SUGGESTION (confidence 0.5 미만은 한 단계 내림)
 - Claude가 지적마다 코드를 직접 읽고 채택·수정 채택·기각합니다. Claude 지적과 겹치면 하나로 합칩니다.
 - 리뷰는 **1건**으로 게시하고, 코멘트마다 출처(`Claude`·`Codex`·`Claude+Codex`)와 표식(`<!-- dwk:reviewer=... -->`)을 남깁니다. `/apply-review`는 이 표식이 있으면 본인 계정 코멘트여도 반영 대상에 넣습니다.
