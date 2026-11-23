@@ -20,6 +20,7 @@ Example: /pr-review https://github.com/owner/repo/pull/123
   --mode=relaxed   CRITICAL만 코멘트, 나머지는 Summary에만 기록
   --focus=항목,...  지정 카테고리만 집중 리뷰 (예: security,performance,memory)
   --skip=항목,...   지정 severity/카테고리 건너뛰기 (예: nitpick,style)
+  --no-codex       Codex 교차 리뷰를 끄고 Claude 리뷰만 합니다
   --help           도움말을 표시합니다
 
 -- Review Process --
@@ -31,9 +32,11 @@ Example: /pr-review https://github.com/owner/repo/pull/123
    - Android (.kt, .java, build.gradle ...)
    - FrontEnd (.ts, .tsx, .vue, .css ...)
    - BackEnd (.go, .py, .rs, Dockerfile ...)
-5. 타입별 우선순위에 따라 코드를 리뷰합니다.
-6. GitHub PR에 라인별 인라인 코멘트를 생성합니다.
-7. 리뷰 결과를 기록합니다.
+5. Codex 교차 리뷰를 백그라운드로 시작합니다. (PR 코드·diff가 OpenAI로 전송됩니다)
+6. 타입별 우선순위에 따라 코드를 리뷰합니다.
+7. Codex 결과를 검증해 합칩니다. (사용량 제한·미설치 등이면 생략)
+8. GitHub PR에 라인별 인라인 코멘트를 생성합니다.
+9. 리뷰 결과를 기록합니다.
 
 -- Severity Levels --
   🚨 CRITICAL  : 머지 전 반드시 수정 (버그, 보안, 데이터 손실)
@@ -75,12 +78,12 @@ Example: /pr-review https://github.com/owner/repo/pull/123
 === 리뷰 결과 ===
 
 📁 {file_path}:{line}
-  [{emoji} {severity}] {category}
+  [{emoji} {severity}] {category} · {Claude | Codex | Claude+Codex}
   {description}
   {suggestion code if applicable}
 
 📁 {file_path}:{line}
-  [{emoji} {severity}] {category}
+  [{emoji} {severity}] {category} · {Claude | Codex | Claude+Codex}
   {description}
 
 ...
@@ -88,6 +91,7 @@ Example: /pr-review https://github.com/owner/repo/pull/123
 --- 판정 ---
 {verdict}: {판정 근거}
 🚨 {critical} / ⚠️ {warning} / 💡 {suggestion} / ❓ {question} / 🔹 {nitpick}
+🤖 Codex: 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d} · 옵션 제외 {f} | 생략({사유})
 ```
 
 ---
@@ -100,6 +104,9 @@ Example: /pr-review https://github.com/owner/repo/pull/123
 {description}
 
 {suggestion if applicable - see below}
+
+<sub>리뷰: {Claude | Codex | Claude+Codex}</sub>
+<!-- dwk:reviewer={claude | codex | claude+codex} -->
 ```
 
 ---
@@ -166,6 +173,13 @@ guard let value = optionalValue else { return }
 ### Commit Quality
 - Total commits: {count}
 - {observations: squash recommendation, WIP commits, formatting-only commits}
+
+### Codex 교차 리뷰
+- 결과: 실행됨 (범위: {range} | diff만 — 저장소 원본 없음) | 생략({--no-codex | 미설치 | 미로그인 | 변경 없음 | 사용량 제한, {재시도 가능 시각} | 시간 초과 | 오류: {요약}})
+- 범위 변경: {증분 시작점이 조상이 아니거나 compare 실패로 전체 범위를 봄 — 있으면}
+- 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d} · 옵션 제외 {f}
+- 기각: {file:line} — {이유} (있으면)
+- 인라인 불가: {file:line} [{emoji} {severity}] — {요약} <!-- dwk:reviewer={codex | claude+codex} item={게시하는 항목에 1부터 매기는 번호} --> (있으면, 게시하기로 한 항목만, 항목마다 표식. relaxed 모드에서 Summary에만 적는 지적은 표식 없음)
 
 ### Already Flagged (if duplicates skipped)
 - {file:line} - Already flagged by {reviewer}

@@ -20,7 +20,7 @@ tags: [workflow, command]
 ## 사용법
 
 ```
-/pipeline [이슈번호] [--from=N] [--stop-at=N] [--merge=critical|auto|confirm] [--type=<라벨>] [--area=<라벨>] [--base=<branch>] [--branch=<name>] [--no-cleanup] [--post] [-h|--help]
+/pipeline [이슈번호] [--from=N] [--stop-at=N] [--merge=critical|auto|confirm] [--type=<라벨>] [--area=<라벨>] [--base=<branch>] [--branch=<name>] [--no-cleanup] [--post] [--no-codex] [-h|--help]
 /pipeline --no-issue "작업 설명" [options]
 ```
 
@@ -48,6 +48,7 @@ tags: [workflow, command]
 | `--branch=<name>` | 작업 브랜치 이름 지정 (기본: 규약 → 기존 병합 이력 패턴) |
 | `--no-cleanup` | 병합 후 브랜치 삭제 생략 |
 | `--post` | 병합 후 진행 문서 갱신·실기기 체크리스트 출력 |
+| `--no-codex` | 11단계 `/pr-review`의 [Codex 교차 리뷰](pr-review.md#codex-교차-리뷰)를 끔 |
 | `-h`, `--help` | 도움말을 출력하고 종료 |
 
 ## 이슈 모드와 규약 문서
@@ -133,6 +134,7 @@ CI가 Draft PR을 건너뛰는 설정이면, Ready 전환 후의 모든 push가 
 ## 보고 규칙
 
 - 리뷰 단계에서 **작성자와 리뷰어가 동일**하다는 사실을 리뷰 결과와 PR 코멘트에 명시합니다. 변경 500줄 초과면 외부 리뷰어를 권고합니다.
+- 11단계에는 [Codex 교차 리뷰](pr-review.md#codex-교차-리뷰)가 함께 돕니다(기본, `--no-codex`로 끔). 사용량 제한 등으로 실행할 수 없으면 Codex만 생략하고 진행하며, 생략은 정지 조건이 아닙니다. 14단계 `critical` 판정에는 채택된 Codex 지적이 포함됩니다.
 - 스크린샷·실기기 검증처럼 자동으로 확인할 수 없는 것은 **미수행이라고 적습니다**.
 - 게이트 실패를 우회하려고 테스트를 지우거나 약화시키지 않습니다.
 

@@ -1,6 +1,6 @@
 ---
 description: 작업 파악부터 병합까지 14단계 파이프라인을 수행합니다 (이슈 선택 → 설계 확인 → 기획서·디자인 → 개발 → commit → Draft PR → 리뷰 → 반영 → Ready·CI → 병합). --no-issue로 이슈 없이 구현~병합만 할 수 있습니다.
-argument-hint: "[이슈번호 | --no-issue \"작업 설명\"] [--from=N] [--stop-at=N] [--merge=critical|auto|confirm] [--type=<라벨>] [--area=<라벨>] [--base=<branch>] [--branch=<name>] [--no-cleanup] [--post] [-h|--help]"
+argument-hint: "[이슈번호 | --no-issue \"작업 설명\"] [--from=N] [--stop-at=N] [--merge=critical|auto|confirm] [--type=<라벨>] [--area=<라벨>] [--base=<branch>] [--branch=<name>] [--no-cleanup] [--post] [--no-codex] [-h|--help]"
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion, Task, Skill, WebFetch, mcp__github__create_pull_request, mcp__github__get_pull_request, mcp__github__list_pull_requests, mcp__github__update_pull_request, mcp__github__merge_pull_request, mcp__github__add_issue_comment, mcp__github__list_workflow_runs, mcp__github__list_workflow_jobs, mcp__github__get_pull_request_files
 ---
 
@@ -35,6 +35,7 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion, Task, Skill
 - `--branch=<name>`: 작업 브랜치 이름 지정. 미지정 시 규약 → 기존 병합 이력 패턴에서 제안
 - `--no-cleanup`: 병합 후 브랜치 삭제 생략
 - `--post`: 병합 후 진행 문서 갱신·실기기 체크리스트 출력까지 수행
+- `--no-codex`: 11단계 `/pr-review`의 Codex 교차 리뷰를 끈다 (그대로 전달)
 - `-h`, `--help`: 도움말 출력 후 종료
 
 인자 없이 호출하면 실물 상태를 판정해 **다음에 해야 할 단계부터** 이어서 진행한다.
@@ -73,6 +74,7 @@ Example: /pipeline
   --branch=<n>   작업 브랜치 이름 지정
   --no-cleanup   병합 후 브랜치 삭제 생략
   --post         병합 후 진행 문서 갱신·실기기 체크리스트
+  --no-codex     11단계의 Codex 교차 리뷰 끄기 (기본: 실행, 사용 불가면 생략)
   -h, --help     이 도움말
 
 -- 정지 조건 --
@@ -101,7 +103,7 @@ CI가 Draft를 건너뛰는 설정이면, Ready 전환 후의 모든 push가 CI�
 | 기획서 병합됨 | base에 기획서 파일 존재 |
 | 개발·커밋 완료 | 워킹트리 clean **그리고** `<base>..HEAD`에 커밋 존재 |
 | PR 생성됨 | `list_pull_requests(head: 현재 브랜치, state: open)` |
-| 리뷰 완료 | 그 PR에 자체 리뷰 결과 코멘트 존재 |
+| 리뷰 완료 | 그 PR에 자체 리뷰 결과 코멘트 존재 (Codex 실행·생략 여부는 그 Summary의 "Codex 교차 리뷰" 섹션) |
 | 반영 완료 | 리뷰 코멘트 이후 반영 내역 코멘트 존재 |
 | Ready 상태 | PR의 `draft` 필드 |
 | CI 결과 | `list_workflow_jobs(run_id)`의 `conclusion` |
@@ -349,9 +351,10 @@ git add <기획서 경로>
 
 ## 11단계: /pr-review
 
-`${CLAUDE_PLUGIN_ROOT}/commands/pr-review.md`의 절차를 따른다. 대상은 10단계에서 만든 PR 번호.
+`${CLAUDE_PLUGIN_ROOT}/commands/pr-review.md`의 절차를 따른다. 대상은 10단계에서 만든 PR 번호. `--no-codex`가 있으면 그대로 넘긴다.
 
-- 이 파이프라인에서는 **작성자와 리뷰어가 동일**하다. 리뷰 결과와 PR 코멘트에 그 사실을 명시한다. 구조적 사각이 남는다는 점을 숨기지 마라.
+- **Codex 교차 리뷰가 함께 돈다**(pr-review Step 3.5·5). Claude 리뷰를 대신하지 않고 더해진다. 사용량 제한·미설치·미로그인·오류면 Codex만 생략하고 진행한다 — **Codex 생략은 정지 조건이 아니다.**
+- 이 파이프라인에서는 **작성자와 리뷰어가 동일**하다. 리뷰 결과와 PR 코멘트에 그 사실을 명시한다. 구조적 사각이 남는다는 점을 숨기지 마라. Codex 리뷰가 실행됐으면 사각이 줄지만, 채택 판단은 여전히 작성자(Claude)가 한다는 점도 함께 적는다. Codex를 생략했으면 그 사유를 적는다.
 - 변경 500줄 초과면 외부 리뷰어를 권고하는 문장을 넣는다.
 - 위임한 리뷰 에이전트가 **빈 응답으로 끝나면 그 결과를 리뷰로 취급하지 마라.** 직접 검토하고, 위임이 실패했다는 사실을 보고한다.
 - Draft PR이므로 submit은 `COMMENT`로 제한된다.
@@ -362,7 +365,8 @@ git add <기획서 경로>
 
 `${CLAUDE_PLUGIN_ROOT}/commands/apply-review.md`의 절차를 따른다.
 
-- CRITICAL·WARNING은 반영한다. SUGGESTION은 판단하되 **미반영 사유를 남긴다**.
+- CRITICAL·WARNING은 반영한다. SUGGESTION은 판단하되 **미반영 사유를 남긴다**. 출처(Claude·Codex)와 관계없이 같은 기준이다.
+- 11단계 코멘트는 작성자 본인 계정으로 달리지만, `dwk:reviewer` 표식이 있어 `/apply-review`가 반영 대상에 넣는다.
 - 반영 후 **게이트를 다시 통과**해야 한다(8단계와 동일한 검증 명령).
 - 반영분을 커밋하고 push한다. **이 시점까지 PR은 Draft다.**
 - 반영 내역을 PR 코멘트로 남긴다. 무엇을 왜 안 고쳤는지도 함께.
@@ -392,7 +396,7 @@ mcp__github__update_pull_request(draft: false)    # 또는 gh pr ready <N>
 
 | 값 | 동작 |
 |----|------|
-| `critical` (기본) | CRITICAL이 0건이거나 모두 반영됐고, 미반영 WARNING이 없고, CI가 통과했으면 확인 없이 병합. 하나라도 걸리면 확인한다 |
+| `critical` (기본) | CRITICAL이 0건이거나 모두 반영됐고, 미반영 WARNING이 없고, CI가 통과했으면 확인 없이 병합. 하나라도 걸리면 확인한다. CRITICAL·WARNING에는 채택된 Codex 지적이 포함되고, Codex 생략만으로는 확인하지 않는다 |
 | `confirm` | 항상 병합 직전에 확인한다(AskUserQuestion) |
 | `auto` | 정지 조건에 걸리지 않으면 확인 없이 병합 |
 
@@ -425,6 +429,7 @@ mcp__github__update_pull_request(draft: false)    # 또는 gh pr ready <N>
 - 커밋      : N개
 - 게이트    : 통과 | 게이트 없음(경고)
 - 리뷰      : CRITICAL n / WARNING n / SUGGESTION n → 반영 n건
+- Codex     : 지적 N → 채택 a (Claude와 겹침 m) · 기각 r · 기존 중복 d · 옵션 제외 f | 생략(--no-codex · 미설치 · 미로그인 · 변경 없음 · 사용량 제한 · 시간 초과 · 오류)
 - CI        : success (M분 SS초) | 스킵(docs-only) | 미실행
 - PR        : #NN <URL> (병합됨 | Ready | Draft)
 - 병합      : <sha> | 미수행(사유)

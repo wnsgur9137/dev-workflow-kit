@@ -32,6 +32,7 @@ PR의 변경 사항을 분석하고, GitHub에 인라인 리뷰 코멘트를 자
 | `--mode=relaxed` | CRITICAL만 코멘트, 나머지는 Summary에만 기록 |
 | `--focus=항목,...` | 지정 카테고리만 집중 리뷰 (예: security,performance,memory) |
 | `--skip=항목,...` | 지정 severity/카테고리 건너뛰기 (예: nitpick,style) |
+| `--no-codex` | [Codex 교차 리뷰](#codex-교차-리뷰)를 끄고 Claude 리뷰만 수행 |
 | `--help` | `/pr-review` 도움말 표시 |
 
 ## 리뷰 프로세스
@@ -41,10 +42,48 @@ PR의 변경 사항을 분석하고, GitHub에 인라인 리뷰 코멘트를 자
 3. 보안 스캔 (Secret/Code/Dependabot alerts)
 4. 레포지토리 컨텍스트 분석 (로컬 일치 시 자동, 외부 레포 시 사용자 선택)
 5. 변경 파일 확장자로 PR 타입 감지 (iOS/Android/FrontEnd/BackEnd)
-6. 타입별 우선순위에 따라 코드 리뷰
-7. CLI에 리뷰 결과 출력 → 사용자가 게시할 코멘트를 선택
-8. GitHub PR에 선택된 인라인 코멘트 게시
-9. 리뷰 결과 기록
+6. Codex 교차 리뷰를 백그라운드로 시작
+7. 타입별 우선순위에 따라 코드 리뷰 (Claude)
+8. Codex 결과를 검증해 Claude 리뷰와 합침
+9. CLI에 리뷰 결과 출력 → 사용자가 게시할 코멘트를 선택
+10. GitHub PR에 선택된 인라인 코멘트 게시
+11. 리뷰 결과 기록
+
+## Codex 교차 리뷰
+
+Claude 리뷰에 **Codex 리뷰를 더합니다.** Claude 리뷰를 대신하지 않습니다. 옵션 없이 기본으로 실행하고, `--no-codex`로 끕니다.
+
+> **외부 전송**: PR의 코드·diff가 Codex(OpenAI)로 전송됩니다. 외부로 보내면 안 되는 저장소에서는 `--no-codex`를 쓰세요.
+
+**필요한 것**: [Codex CLI](https://github.com/openai/codex) 설치와 로그인(`codex login`). 없으면 생략합니다.
+
+**동작**
+
+- Claude가 리뷰하는 동안 `codex exec`(읽기 전용 sandbox, 세션 기록 없음)를 백그라운드로 돌립니다. **Claude 리뷰 결과는 Codex에 넘기지 않습니다** — 독립된 시각을 유지하기 위해서입니다.
+- 리뷰 범위
+
+  | PR | Codex가 보는 것 |
+  |---|---|
+  | 현재 저장소 | PR head의 임시 worktree. 커밋된 파일만 있고 변경 밖 코드도 읽음. 작업 폴더의 `.env` 같은 ignore·미추적 파일은 넘기지 않음 |
+  | 다른 저장소 | PR diff만 |
+
+  증분 리뷰를 고르면 Codex도 이전 리뷰 이후 커밋만 봅니다.
+- PR 내용이 Codex를 조종하지 못하도록 사용자 `~/.codex/config.toml`(MCP 서버 등), 저장소의 `AGENTS.md`, 웹 검색을 쓰지 않고 실행합니다. 다만 Codex의 읽기 전용 sandbox는 디스크 읽기를 막지 않으므로, PR에 숨은 지시가 Codex에게 로컬 파일을 읽게 할 가능성은 남습니다. 민감한 환경에서는 `--no-codex`를 쓰세요.
+- `~/.codex/config.toml`을 읽지 않으므로 거기 적은 모델·공급자 설정(Azure, 로컬 모델 등)도 쓰지 않습니다. 그런 설정이 있어야만 동작하는 환경에서는 Codex 리뷰가 오류로 생략됩니다.
+- 등급 변환: critical·high → CRITICAL, medium → WARNING, low → SUGGESTION (confidence 0.5 미만은 한 단계 내림)
+- Claude가 지적마다 코드를 직접 읽고 채택·수정 채택·기각합니다. Claude 지적과 겹치면 하나로 합칩니다.
+- 리뷰는 **1건**으로 게시하고, 코멘트마다 출처(`Claude`·`Codex`·`Claude+Codex`)와 표식(`<!-- dwk:reviewer=... -->`)을 남깁니다. `/apply-review`는 이 표식이 있으면 본인 계정 코멘트여도 반영 대상에 넣습니다.
+
+**생략** — 다음 경우 Codex만 생략하고 Claude 리뷰로 끝까지 진행합니다. 사유는 Summary의 "Codex 교차 리뷰" 섹션에 남습니다.
+
+| 경우 | 처리 |
+|---|---|
+| `--no-codex` · 미설치 · 미로그인(API 키 환경 변수도 없음) · 준비 실패 · 리뷰할 변경 없음 | 시작하지 않음 |
+| 사용량 제한 | 재시도하지 않고 생략, 재시도 가능 시각이 있으면 기록 |
+| 오류(종료 코드 ≠ 0, 결과 없음·JSON 깨짐) | 1회 재시도 후 생략 |
+| 15분 초과 | 명령에 걸린 시간 제한으로 끝나고 생략 (재시도 없음) |
+
+일부만 나온 결과는 리뷰로 취급하지 않습니다. 프롬프트·출력 스키마: `plugins/workflow/templates/codex-review/`
 
 ## Severity 레벨
 
