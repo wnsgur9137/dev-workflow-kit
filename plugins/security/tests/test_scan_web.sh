@@ -98,7 +98,7 @@ test_web_d6_missing_zap_image_points_to_update() {
   assert_contains "$OUT" "[D6]"
   assert_contains "$OUT" "zaproxy/zap-stable@sha256:"
   assert_contains "$OUT" "update.sh"
-  if grep -q '^docker run\|^docker compose .* up\|^docker compose .* run' "$FAKE_LOG"; then fail "컨테이너가 기동됨"; fi
+  if grep -q '^docker run' "$FAKE_LOG" || compose_calls up >/dev/null || compose_calls run >/dev/null; then fail "컨테이너가 기동됨"; fi
 }
 
 # 이슈 #35: egress-proxy 빌드 기록이 없거나·지금 Dockerfile·베이스와 다르거나·그 ID 의 이미지가 없으면 스캔하지 않고 update.sh 를 안내한다
@@ -119,7 +119,7 @@ test_web_d6_proxy_build_record_missing_stale_or_gone() {
   FAKE_IMAGES="$FAKE_IMAGES $FAKE_PROXY_ID" assert_status 1 "$SCAN_WEB" http://host.docker.internal:3000/
   assert_contains "$OUT" "지금 빌드 입력으로 만든 것이 아닙니다"
   assert_contains "$OUT" "update.sh --images"
-  if grep -q '^docker build\|^docker pull\|^docker compose .* up\|^docker compose .* run' "$FAKE_LOG"; then
+  if grep -q '^docker build\|^docker pull' "$FAKE_LOG" || compose_calls up >/dev/null || compose_calls run >/dev/null; then
     fail "스캔이 빌드·다운로드하거나 컨테이너를 띄움"
   fi
 }
@@ -140,7 +140,7 @@ test_web_isolation_leak_stops_before_scanning_target() {
   grep -q 'host\.docker\.internal 3000 http://host\.docker\.internal:3000/$' "$FAKE_LOG" ||
     fail "격리 확인에 대상 host·port·시작 URL 이 넘어가지 않음"
   # 대상에 요청하는 ZAP run(진입점 덮어쓰기 없는 run)은 호출되지 않는다
-  if grep '^docker compose .* run ' "$FAKE_LOG" | grep -vq -- '--entrypoint python3'; then fail "격리 실패 뒤 스캔이 실행됨"; fi
+  if compose_calls run | grep -vq -- '--entrypoint python3'; then fail "격리 실패 뒤 스캔이 실행됨"; fi
   grep -q '^docker compose -p dwk-sec-web-[0-9a-f]\{12\} .* down -v' "$FAKE_LOG" || fail "down -v 가 호출되지 않음"
   assert_contains "$(cat "$WEB_RUN/summary.md")" "| zap | failed |"
 }
@@ -196,7 +196,7 @@ test_web_unreachable_target_is_failed_without_scanning() {
   setup_web_fake
   FAKE_COMPOSE_ISO_OUTPUT="UNREACHABLE proxy-500" _web_scan
   assert_contains "$(awk -F '\t' '$1 == "zap"' "$WEB_RUN/raw/status.tsv")" "대상에 접속하지 못했습니다(proxy-500)"
-  if grep '^docker compose .* run ' "$FAKE_LOG" | grep -vq -- '--entrypoint python3'; then fail "접속 불가인데 스캔이 실행됨"; fi
+  if compose_calls run | grep -vq -- '--entrypoint python3'; then fail "접속 불가인데 스캔이 실행됨"; fi
   grep -q ' down -v' "$FAKE_LOG" || fail "down -v 가 호출되지 않음"
   assert_contains "$(cat "$WEB_RUN/summary.md")" "| zap | failed |"
 }

@@ -30,10 +30,15 @@ def probe(resolve=socket.getaddrinfo, connect=socket.create_connection, environ=
         except OSError:
             pass
     try:
-        connect(INTERNET_IP, timeout=3).close()
-        leaks.append("ip")
+        conn = connect(INTERNET_IP, timeout=3)
     except OSError:
         pass
+    else:
+        leaks.append("ip")          # 닫기 전에 기록한다 — close() 가 실패해도 누출을 놓치지 않게 (이슈 #33, PR #44 리뷰 N2)
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001 — 닫기 실패는 판정과 무관하다
+            pass
     leaks += ["proxy-env:" + k for k, v in environ.items() if k.lower() in PROXY_ENV_KEYS and str(v).strip()]
     return leaks
 

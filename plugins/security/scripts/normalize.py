@@ -230,7 +230,7 @@ def clean_text(text, limit: int, single_line: bool = False) -> str:
         text = re.sub(r"\s+", " ", text).strip()
     text = mask_secrets(text)
     if len(text) > limit:
-        text = text[: limit - 1] + "…"
+        text = _cut(text, limit - 1) + "…"
     return text
 
 
@@ -240,6 +240,36 @@ _SURROGATE = re.compile("[\ud800-\udfff]")
 def _percent_surrogates(t: str) -> str:
     """짝 없는 서로게이트 → UTF-8(surrogatepass) 퍼센트 표기 (mobsf_report.safe_ident 와 같은 표기, 이슈 #33)."""
     return _SURROGATE.sub(lambda m: "".join(f"%{b:02X}" for b in m.group().encode("utf-8", "surrogatepass")), t)
+
+
+_HEX = frozenset("0123456789ABCDEFabcdef")
+
+
+def _cut(t: str, n: int) -> str:
+    """t[:n] 을 돌려주되 퍼센트 표기(%XX)의 중간이나 퍼센트로 쓴 UTF-8 한 글자(%ED%B3%BF 등)의 중간에서 끊지 않는다
+    — mobsf_report.safe_ident 의 문자 단위 절단과 같은 목적 (이슈 #33, PR #44 리뷰 N1). 경계 근처만 보므로 길이와 무관하다.
+    경계 바로 앞의 짝 없는 첫 바이트(%E4 등)는 원문에 있던 것이라도 버린다 — 더 짧아질 뿐이다 (PR #51 리뷰 N4)."""
+    n = max(n, 0)                   # limit 이 0 이하여도 t[:-1] 이 되지 않게 (PR #51 리뷰 N1)
+    if len(t) <= n:
+        return t
+    for back in (1, 2):             # 경계가 %XX 안 → %XX 앞에서 자른다 (원문에 있던 %XX 도 같다)
+        k = n - back
+        if k >= 0 and t[k] == "%" and k + 2 < len(t) and t[k + 1] in _HEX and t[k + 2] in _HEX:
+            n = k
+            break
+    # 바로 앞의 %XX 들이 끝나지 않은 UTF-8 한 글자면 그 첫 바이트 앞에서 자른다 (이어지는 바이트는 많아야 3개)
+    k, cont = n, 0
+    while cont <= 3 and k >= 3 and t[k - 3] == "%" and t[k - 2] in _HEX and t[k - 1] in _HEX:
+        b = int(t[k - 2:k], 16)
+        if 0x80 <= b <= 0xBF:       # 이어지는 바이트
+            cont += 1
+            k -= 3
+            continue
+        need = 1 if 0xC0 <= b <= 0xDF else 2 if 0xE0 <= b <= 0xEF else 3 if 0xF0 <= b <= 0xF7 else 0
+        if need > cont:
+            n = k - 3
+        break
+    return t[:n]
 
 
 def clean_ident(text, limit: int, keep_surrogates: bool = False) -> str:
@@ -256,7 +286,7 @@ def clean_ident(text, limit: int, keep_surrogates: bool = False) -> str:
         t = _percent_surrogates(t)
     for rx, repl in _IDENT_SECRET_PATTERNS:     # 개인키·접두사 토큰·URL 자격증명·Bearer 만 가린다
         t = rx.sub(repl, t)
-    return t if len(t) <= limit else t[: limit - 1] + "…"
+    return t if len(t) <= limit else _cut(t, limit - 1) + "…"
 
 
 def strip_container_prefix(path: str) -> str:

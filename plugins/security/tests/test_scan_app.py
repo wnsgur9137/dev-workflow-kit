@@ -534,6 +534,15 @@ class AppIsoProbeTest(unittest.TestCase):
         self.assertEqual(p.probe(self.fail, self.fail, env), ["proxy-env:FTP_PROXY", "proxy-env:all_proxy"])
         self.assertEqual(p.PROXY_ENV_KEYS, ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy"))
 
+    def test_ip_leak_recorded_even_if_close_fails(self):
+        """이슈 #33 (PR #44 리뷰 N2): 연결은 됐는데 close() 가 실패해도 ip 누출을 기록한다(fail-closed)."""
+        import app_iso_probe as p
+
+        class BadClose:
+            def close(self):
+                raise OSError("close failed")
+        self.assertEqual(p.probe(self.fail, lambda a, timeout=0: BadClose(), {}), ["ip"])
+
     def test_script_runs_standalone_and_fails_closed(self):
         import subprocess
         path = os.path.join(HERE, "..", "scripts", "lib", "app_iso_probe.py")
