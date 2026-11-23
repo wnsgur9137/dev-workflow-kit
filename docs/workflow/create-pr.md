@@ -42,7 +42,7 @@ tags: [workflow, command]
 6. 본문 작성: 커밋 prefix(`feat:`/`fix:`/`refactor:`/`update:`) 기반 분류, HTML 주석 유지, 데모 자리 비움
    - **라벨**: 저장소에 이미 있는 라벨 중 커밋 prefix·diff에 맞는 것을 모두 고른다 (새 라벨은 만들지 않음, 맞는 라벨이 없으면 생략하고 보고)
    - **연결 이슈·마일스톤**: 브랜치의 이슈 번호·작업 ID로 연결 이슈를 찾아 `Closes #N`, PR 마일스톤은 연결 이슈의 것을 사용 (임의 생성 금지)
-7. PR 생성 (`gh pr create --body-file`, 라벨·마일스톤은 생성 직후 붙이고 확인. `gh`를 쓸 수 없고 GitHub MCP가 연결돼 있으면 MCP로 대신)
+7. PR 생성 (`gh pr create --body-file`, 라벨·마일스톤도 같은 명령의 플래그로 붙이고 생성 후 확인. 라벨·마일스톤·권한 오류로 실패하면 그것을 빼고 만든 뒤 `gh pr edit`으로 붙임. `gh`를 쓸 수 없고 GitHub MCP가 연결돼 있으면 MCP로 대신)
 8. URL / Draft·Open 상태 / base ← head / 커밋 수 / 변경 파일 / 라벨 / 마일스톤·연결 이슈 / 다음 단계 보고
 
 ## Base 브랜치 자동 추론

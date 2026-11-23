@@ -115,7 +115,7 @@ CI가 Draft를 건너뛰는 설정이면, Ready 전환 후의 모든 push가 CI�
 | PR 생성됨 | `gh pr list -R <owner>/<repo> --head <현재 브랜치> --state open --json number,url,isDraft` |
 | 리뷰 완료 | 그 PR에 자체 리뷰 결과 코멘트 존재 (Codex 실행·생략 여부는 그 Summary의 "Codex 교차 리뷰" 섹션) |
 | 반영 완료 | 리뷰 코멘트 이후 반영 내역 코멘트 존재 |
-| Ready 상태 | PR의 `isDraft` 필드 (`gh pr view <N> --json isDraft`) |
+| Ready 상태 | PR의 `isDraft` 필드 (`gh pr view <N> -R <owner>/<repo> --json isDraft`) |
 | CI 결과 | `gh run view <run-id> --json jobs`의 각 job `conclusion` (`gh pr checks <N>` 병행) |
 
 `--from`이 주어지면 그 단계부터, 없으면 판정 결과의 **다음 단계**부터 시작한다. 이미 끝난 단계는 건너뛰고 한 줄로 알린다.
@@ -158,7 +158,7 @@ env -u GITHUB_TOKEN GH_TOKEN="$OCTO_ORG_GITHUB_TOKEN" gh issue list --repo <owne
 ```
 
 - 그 밖의 저장소는 기본 `gh` 인증을 쓴다. 저장소의 `CLAUDE.md`·규약 문서에 인증 지시가 있으면 그것을 따른다.
-- `gh auth status`가 실패하면 **중단**하고 `gh auth login`이 필요하다고 알린다.
+- `gh auth status`가 실패하면, GitHub MCP 도구가 연결돼 있으면 이후 GitHub 작업을 MCP로 하고 그 사실을 보고에 적는다. 둘 다 없으면 **중단**하고 `gh auth login`이 필요하다고 알린다.
 - PR 생성·Ready 전환·병합·CI 조회는 `gh`로 한다(`gh pr create --draft`, `gh pr ready`, `gh pr merge`, `gh run list`, `gh run view`).
 - Assignee는 `gh api user -q .login`으로 얻은 현재 인증 사용자다.
 
@@ -379,7 +379,7 @@ git add <기획서 경로>
 - 11단계 코멘트는 작성자 본인 계정으로 달리지만, `dwk:reviewer` 표식이 있어 `/apply-review`가 반영 대상에 넣는다.
 - 반영 후 **게이트를 다시 통과**해야 한다(8단계와 동일한 검증 명령).
 - 반영분을 커밋하고 push한다. **이 시점까지 PR은 Draft다.**
-- 반영 내역을 PR 코멘트로 남긴다(`gh pr comment <N> --body-file <파일>`, 본문은 `mktemp` 임시 파일에 써서 넘기고 끝나면 지운다). 무엇을 왜 안 고쳤는지도 함께.
+- 반영 내역을 PR 코멘트로 남긴다(`gh pr comment <N> -R <owner>/<repo> --body-file <파일>`, 본문은 `mktemp` 임시 파일에 써서 넘기고 끝나면 지운다). 무엇을 왜 안 고쳤는지도 함께.
 
 리뷰에서 지적한 내용이 **잘못된 것으로 드러나면** 고치지 말고 정정을 공개한다. 자기 리뷰의 오진을 그대로 코드에 반영하면 더 나빠진다.
 
@@ -393,7 +393,7 @@ gh pr ready <N> -R <owner>/<repo>
 
 그 밖에는 CI를 기다린다.
 
-- `gh run list -R <owner>/<repo> --branch <branch> --limit 1 --json databaseId,status,conclusion,headSha,event,workflowName`로 run id(`databaseId`)를 확보한다(1회만).
+- `gh run list -R <owner>/<repo> --branch <branch> --commit <PR head SHA> --json databaseId,status,conclusion,headSha,event,workflowName`로 **PR head에 대한 실행들**의 run id(`databaseId`)를 확보한다. 최신 실행 하나만 보면 CI가 아닌 워크플로(라벨러 등)나 이전 head의 실행을 볼 수 있다. 그 head의 실행이 **모두** 성공해야 통과다(`gh pr checks <N> -R <owner>/<repo> --json bucket`으로 교차 확인).
 - 이후에는 `gh run view <run-id> -R <owner>/<repo> --json jobs`로 확인한다(필요하면 `gh pr checks <N>` 병행).
 - **백그라운드 대기 후 조회**한다. 짧은 간격 폴링은 비싸다. 첫 확인은 그 저장소의 과거 실행 시간에 맞춰(모르면 10분), 이후 2분 간격.
 - `conclusion: cancelled`면 다른 실행이 concurrency로 취소한 것이다. 같은 브랜치의 더 최신 실행이 있으면 그것을 보고, 없으면 `gh run rerun <run-id>`로 다시 돌린 뒤 기다린다. 취소된 실행의 체크(`fail`)가 PR 체크 목록에 남을 수 있으니 판정은 **최신 실행의 job 결론**으로 한다.
@@ -412,7 +412,7 @@ gh pr ready <N> -R <owner>/<repo>
 
 확인할 때는 PR 번호·제목, CI 결과, 커밋 수, 변경 규모, 미반영 리뷰 지적, 미수행 검증(실기기 등)을 함께 제시한다.
 
-- 병합 방식은 저장소 관례를 따른다(`git log --merges`로 기존 병합 커밋 형태를 확인). 병합은 `gh pr merge <N> -R <owner>/<repo> --merge|--squash|--rebase` 중 그 관례의 방식으로 한다.
+- 병합 방식은 저장소 관례를 따른다(`git log --merges`로 기존 병합 커밋 형태를 확인). 병합은 `gh pr merge <N> -R <owner>/<repo> --merge|--squash|--rebase --match-head-commit <sha>` 중 그 관례의 방식으로 한다. `<sha>`는 13단계에서 CI 성공을 확인한 head SHA다 — 확인 뒤(사용자 승인 대기 중 등)에 새 커밋이 push됐으면 병합이 거부되고, 그때는 새 head로 13단계를 다시 한다.
 - **merge conflict가 있으면 병합하지 말고 중단**한다.
 - 병합 후: base 동기화 → 병합된 브랜치 원격·로컬 삭제(`--no-cleanup`이면 생략).
 - 이슈에서 "진행 중" 라벨을 제거한다 (`Closes #N`으로 자동 종료되지 않는 경우).

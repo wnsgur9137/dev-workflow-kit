@@ -62,7 +62,7 @@ Example: /pr-review https://github.com/owner/repo/pull/32
 
 -- Codex 교차 리뷰 --
   기본으로 실행합니다. PR의 코드·diff가 Codex(OpenAI)로 전송됩니다.
-  사용량 제한·미설치·미로그인·오류면 생략하고 Claude 리뷰만으로 끝냅니다.
+  사용량 제한·미설치·미로그인·오류, 또는 이 skill을 Codex에서 실행하면 생략하고 Claude 리뷰만으로 끝냅니다.
 
 -- Severity Levels --
   🚨 CRITICAL  : 머지 전 반드시 수정 (버그, 보안, 데이터 손실)
@@ -117,9 +117,13 @@ If a valid PR URL is provided, show the guide briefly then proceed below.
 
 ## Error Handling Policy
 
-모든 GitHub 호출(`gh`)에 대해 다음 에러 핸들링을 적용합니다. `gh api`는 실패하면 0이 아닌 종료 코드와 함께 stderr에 `HTTP <상태 코드>`를 남기므로 그 코드로 판단합니다:
+모든 GitHub 호출(`gh`)에 대해 다음 에러 핸들링을 적용합니다. `gh api`는 실패하면 0이 아닌 종료 코드와 함께 stderr에 `HTTP <상태 코드>`를 남기므로 그 코드로 판단합니다. `gh pr diff`·`gh pr checks`·`gh issue view`처럼 GraphQL을 쓰는 명령은 코드 없이 `Could not resolve to a …`를 남기는데, 이것은 404로 봅니다.
 
-**인증/권한 오류 (401/403)**:
+**보안 경고 API (Step 2.7)는 아래 401/403 규칙의 예외입니다.** Advanced Security 미사용·Dependabot 꺼짐·`security_events` 권한 없음이 모두 403/404로 오므로, Step 2.7의 규칙대로 건너뛰고 계속 진행합니다.
+
+**Rate limit (403 또는 429)**: GitHub의 기본 rate limit은 403으로 옵니다. 403 응답 본문에 `rate limit`이 있거나 `gh api rate_limit --jq .rate.remaining`이 0이면 아래 "Rate Limit" 처리를 따릅니다(권한 오류로 보지 않습니다).
+
+**인증/권한 오류 (401/403, rate limit이 아닌 경우)**:
 - "GitHub 토큰 권한이 부족합니다. `gh auth status`로 인증·권한(scope)을 확인하세요." 출력 후 리뷰 중단
 
 **Not Found (404)**:
@@ -127,9 +131,11 @@ If a valid PR URL is provided, show the guide briefly then proceed below.
 - 보안 도구 (Step 2.7): "보안 스캔 접근 권한 없음 - 건너뜀" 출력 후 계속 진행
 - 파일/이슈 조회: "리소스를 찾을 수 없음 - 건너뜀" 출력 후 계속 진행
 
-**Rate Limit (429)**:
+**Rate Limit (429, 또는 위에서 rate limit으로 판정한 403)**:
 - "GitHub API rate limit에 도달했습니다." 출력
 - 현재까지의 리뷰 결과를 Summary로 출력 후 중단
+
+**diff가 너무 큼 (`gh pr diff`가 HTTP 406)**: 파일 300개·약 2만 줄을 넘는 PR은 diff를 한 번에 받을 수 없습니다. Step 2.3의 `/pulls/N/files` 응답의 `patch` 필드로 파일별 diff를 모아 쓰고, `patch`가 없는(너무 큰) 파일은 Summary에 "diff 미제공으로 리뷰하지 못함"으로 적습니다.
 
 **네트워크 오류 / 타임아웃**:
 - "GitHub API 연결 오류. 네트워크를 확인하세요." 출력 후 중단
@@ -145,7 +151,7 @@ If a valid PR URL is provided, show the guide briefly then proceed below.
 - 변경 파일 200개 초과: "매우 큰 PR입니다. PR 분할을 강력 권장합니다." → SUGGESTION으로 Summary에 기록
 
 **Codex 실행 실패**:
-- Codex 교차 리뷰의 실패(사용량 제한·미설치·미로그인·오류·시간 초과)는 **리뷰를 멈추지 않습니다.** Codex만 생략하고 Claude 리뷰로 끝까지 진행하며, 사유를 Summary에 남깁니다 (Step 5.1).
+- Codex 교차 리뷰의 생략·실패(실행 환경이 Codex·사용량 제한·미설치·미로그인·오류·시간 초과)는 **리뷰를 멈추지 않습니다.** Codex만 생략하고 Claude 리뷰로 끝까지 진행하며, 사유를 Summary에 남깁니다 (Step 5.1).
 
 **자동 생성 파일 감지**:
 - `*.generated.*`, `*.min.js`, `*.min.css`, `*.lock`, `*.sum`, `*.pbxproj` 등 자동 생성 파일은 리뷰 우선순위를 최하위로 설정
@@ -181,30 +187,33 @@ gh api "repos/{o}/{r}/pulls/N"
 **2.2 CI 상태 확인:**
 
 `gh pr checks N -R {o}/{r} --json name,state,bucket`으로 CI 통과 여부를 확인합니다 (`bucket`: `pass`/`fail`/`pending`/`skipping`/`cancel`. 체크가 하나도 없거나 실패·대기 중이면 종료 코드가 0이 아니므로, 종료 코드가 아니라 출력으로 판단합니다):
-- 모든 check가 success: 정상 진행
-- pending/in_progress: "CI가 아직 실행 중입니다" 안내 후 진행
-- failure: "CI가 실패했습니다. CI 실패 관련 이슈도 리뷰에 포함합니다." 안내
+- 모든 check의 `bucket`이 `pass` 또는 `skipping`: 정상 진행
+- 하나라도 `pending`: "CI가 아직 실행 중입니다" 안내 후 진행
+- 하나라도 `fail` 또는 `cancel`: "CI가 실패했습니다. CI 실패 관련 이슈도 리뷰에 포함합니다." 안내
+- check가 하나도 없음(출력이 비고 `no checks reported`): "CI 없음"으로 안내 후 진행
 
 **2.3 변경 파일 및 Diff:**
 
-- `gh api "repos/{o}/{r}/pulls/N/files" --paginate`로 변경 파일 목록 조회
+- `gh api "repos/{o}/{r}/pulls/N/files" --paginate --slurp`로 변경 파일 목록 조회 (`--paginate`만 쓰면 페이지마다 JSON 배열이 따로 출력됩니다. 이 문서의 목록 조회는 모두 `--slurp`로 한 배열로 받거나 `--jq '.[] | …'`로 항목 단위로 처리합니다. `--slurp`와 `--jq`는 함께 쓸 수 없습니다)
 - `gh pr diff N -R {o}/{r}`로 전체 diff 조회
 
 **2.4 기존 리뷰 확인 (중복 방지 + 재리뷰 감지):**
 
-- `gh api "repos/{o}/{r}/pulls/N/reviews" --paginate`로 기존 리뷰 조회 (`id`, `user.login`, `state`, `body`, `submitted_at`, `commit_id`)
+- `gh api "repos/{o}/{r}/pulls/N/reviews" --paginate --slurp`로 기존 리뷰 조회 (`id`, `user.login`, `state`, `body`, `submitted_at`, `commit_id`)
   - 각 리뷰의 state (APPROVED, CHANGES_REQUESTED, COMMENTED)와 reviewer 기록
   - 이미 REQUEST_CHANGES 상태인 리뷰가 있으면 해당 리뷰어가 지적한 사항 파악
-- `gh api "repos/{o}/{r}/pulls/N/comments" --paginate`로 기존 인라인 코멘트 조회
+- `gh api "repos/{o}/{r}/pulls/N/comments" --paginate --slurp`로 기존 인라인 코멘트 조회
   - 기존 코멘트의 path, line, body를 파싱하여 이미 지적된 이슈 목록 생성
 
 **재리뷰 감지:**
 
 기존 리뷰 중 현재 사용자(`gh`로 인증된 사용자)가 남긴 리뷰가 있는지 확인합니다. `gh api user --jq .login`으로 현재 사용자를 확인하고, 기존 리뷰의 `user.login`과 비교합니다.
 
+**"이전 리뷰"는 본문(`body`)이 비어 있지 않은 리뷰만 셉니다.** 파일 단위 코멘트(Step 6.3의 4번)나 `/apply-review`의 스레드 답글은 GitHub에 본문 없는 COMMENTED 리뷰로 따로 기록되기 때문에, 이것을 이전 리뷰로 잡으면 증분 범위(`submitted_at`·`commit_id`)가 어긋납니다. 아래의 "가장 최근 리뷰"도 같은 기준입니다.
+
 이전 리뷰가 발견되면 `AskUserQuestion`으로 다음 옵션을 제시합니다:
 
-- **🔄 증분 리뷰 (Recommended)**: 이전 리뷰의 `submitted_at` 이후에 추가된 커밋만 리뷰합니다. `gh api "repos/{o}/{r}/pulls/N/commits" --paginate`의 결과에서 이전 리뷰 시점 이후의 커밋만(`commit.committer.date` 기준) 필터링하고, 해당 커밋에서 변경된 파일/라인만 리뷰 대상으로 합니다. 이전에 지적한 이슈가 수정되었는지도 확인합니다.
+- **🔄 증분 리뷰 (Recommended)**: 이전 리뷰의 `submitted_at` 이후에 추가된 커밋만 리뷰합니다. `gh api "repos/{o}/{r}/pulls/N/commits" --paginate --slurp`의 결과에서 이전 리뷰 시점 이후의 커밋만(`commit.committer.date` 기준) 필터링하고, 해당 커밋에서 변경된 파일/라인만 리뷰 대상으로 합니다. 이전에 지적한 이슈가 수정되었는지도 확인합니다.
 - **🔁 전체 리뷰**: 이전 리뷰를 무시하고 PR 전체를 처음부터 다시 리뷰합니다. 단, 동일 파일 + 동일 라인 + 유사 내용의 기존 코멘트는 여전히 건너뜁니다.
 
 **증분 리뷰 동작:**
@@ -233,7 +242,7 @@ PR description (body)에서 이슈 참조 패턴을 파싱합니다:
 
 **2.6 커밋 분석:**
 
-`gh api "repos/{o}/{r}/pulls/N/commits" --paginate`로 PR의 커밋 목록을 조회합니다 (메시지는 `commit.message`):
+`gh api "repos/{o}/{r}/pulls/N/commits" --paginate --slurp`로 PR의 커밋 목록을 조회합니다 (메시지는 `commit.message`):
 - 커밋 수가 20개 초과: Summary에 "스쿼시 머지를 권장합니다" SUGGESTION
 - 커밋 메시지 패턴 분석:
   - "fix typo", "formatting", "lint" 등 포매팅 전용 커밋이 전체의 50% 이상이면: "포매팅 변경과 로직 변경을 별도 PR로 분리하면 리뷰가 용이합니다" SUGGESTION
@@ -344,20 +353,22 @@ When local context is available (same repo or cached analysis), use it to:
 PR이 속한 레포지토리의 보안 경고를 확인합니다. 이 정보는 Step 4 리뷰와 Step 6 판정에서 참조됩니다.
 
 1. **Secret Scanning**: 시크릿 노출 경고 조회
-   - `gh api "repos/{o}/{r}/secret-scanning/alerts?state=open" --paginate`
-   - PR이 변경한 파일 경로와 교차 확인
-   - 발견 시: 해당 파일에 CRITICAL 코멘트 자동 생성 대상으로 마킹
-   - **Secret alert가 있으면 Step 6에서 무조건 REQUEST_CHANGES 판정**
+   - `gh api "repos/{o}/{r}/secret-scanning/alerts?state=open" --paginate --slurp`
+   - 목록 응답에는 파일 경로가 없습니다. 경고마다 `gh api "repos/{o}/{r}/secret-scanning/alerts/<number>/locations" --paginate --slurp`로 위치(`details.path`, `details.start_line`)를 받아 PR이 변경한 파일과 교차 확인합니다
+   - PR 변경 파일에 있는 경고: 해당 파일에 CRITICAL 코멘트 자동 생성 대상으로 마킹하고, **Step 6에서 무조건 REQUEST_CHANGES 판정**(단, 판정표의 Draft·자기 PR 행이 우선)
+   - PR과 관계없는 위치의 경고: `[SECURITY SCAN]`에 목록으로만 적고 판정에는 넣지 않습니다
 
 2. **Code Scanning**: CodeQL 정적 분석 경고 조회
-   - `gh api "repos/{o}/{r}/code-scanning/alerts?state=open&ref=<head.ref>" --paginate` (`ref`: PR의 head branch)
+   - `gh api "repos/{o}/{r}/code-scanning/alerts?state=open&ref=refs/pull/N/merge" --paginate --slurp` — PR에 대한 CodeQL 결과는 `refs/pull/N/merge`에 기록됩니다. 결과가 없고 PR이 같은 저장소의 브랜치(`head.repo.full_name` = `{o}/{r}`)이면 `ref=refs/heads/<head.ref>`로 한 번 더 조회합니다. fork의 브랜치 이름으로는 조회하지 않습니다
+   - "분석 결과 없음"(빈 배열·`no analysis found`)과 "권한 없음"(403)을 구분해 Summary에 적습니다
    - PR 변경 파일과 교차 확인하여 관련 경고만 필터링
    - severity가 `critical` 또는 `high`인 경고는 CRITICAL 코멘트 대상
    - severity가 `medium`인 경고는 WARNING 코멘트 대상
 
 3. **Dependabot Alerts**: 의존성 취약점 조회
-   - `gh api "repos/{o}/{r}/dependabot/alerts?state=open" --paginate`
+   - `gh api "repos/{o}/{r}/dependabot/alerts?state=open" --paginate --slurp`
    - PR이 의존성 파일(`package.json`, `package-lock.json`, `Podfile`, `Podfile.lock`, `build.gradle`, `requirements.txt`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`)을 수정했을 때만 조회
+   - 점수는 `security_advisory.cvss_severities.cvss_v4.score`, 없으면 `cvss_v3.score`를 씁니다(`cvss.score`는 폐기 예정)
    - CVSS 7.0 이상: CRITICAL 코멘트 대상
    - CVSS 4.0~6.9: WARNING 코멘트 대상
 
@@ -429,10 +440,11 @@ git worktree add --detach "<W>/tree" "<head>"
 
 다른 레포 — 저장소 원본 없이 diff만 넘깁니다.
 
-- 전체 리뷰: Step 2.3과 같은 diff를 파일로 저장합니다.
+- 전체 리뷰: **고정한 SHA로** diff를 받습니다. PR 번호로 다시 받으면 그사이 push된 커밋이 섞여 Claude가 본 diff와 어긋날 수 있기 때문입니다. 세 점 비교는 merge base 이후의 변경, 즉 PR diff와 같습니다.
   ```bash
-  gh pr diff <pr_number> -R "<owner>/<repo>" > "<W>/pr.diff"
+  gh api "repos/<owner>/<repo>/compare/<base_sha>...<head>" -H "Accept: application/vnd.github.diff" > "<W>/pr.diff"
   ```
+  Step 6.3 게시 직전에 PR의 현재 `head.sha`가 `<head>`와 다르면(리뷰 중 새 push) 사용자에게 알리고, 게시할지 새 head로 다시 리뷰할지 묻습니다.
 - 증분 리뷰: 먼저 `<prev>`가 `<head>`의 조상인지 확인합니다. compare는 세 점(`...`) 비교라, force-push로 갈라진 뒤에도 성공해서 "공통 조상 이후 전체"를 증분처럼 돌려줄 수 있기 때문입니다.
   ```bash
   gh api "repos/<owner>/<repo>/compare/<prev>...<head>" --jq .merge_base_commit.sha   # 결과가 <prev>와 같아야 증분
@@ -538,7 +550,7 @@ Claude 리뷰(Step 4~4.5)가 끝나면 Codex 결과를 받아 합칩니다. Step
 
 `confidence` < 0.5이면 한 단계 내립니다 (CRITICAL → WARNING → SUGGESTION, SUGGESTION은 유지). 변환 뒤 `--mode`·`--focus`·`--skip`을 Claude 지적과 똑같이 적용합니다.
 
-**5.3 Claude 검증** — Codex 지적을 그대로 싣지 않습니다. 지적마다 **해당 코드를 직접 읽고**(같은 레포는 `<DIR>`의 파일, 다른 레포는 diff 또는 `gh api "repos/{o}/{r}/contents/<path>?ref=<head>" -H "Accept: application/vnd.github.raw"`) 판정합니다.
+**5.3 Claude 검증** — Codex 지적을 그대로 싣지 않습니다. 지적마다 **해당 코드를 직접 읽고**(같은 레포는 `<DIR>`의 파일, 다른 레포는 diff 또는 `gh api "repos/{o}/{r}/contents/<path>?ref=<head>" -H "Accept: application/vnd.github.raw"`. fork PR에서 404면 `head.repo.full_name` 저장소로 다시 조회) 판정합니다.
 
 | 판정 | 기준 | 처리 |
 |---|---|---|
@@ -636,7 +648,7 @@ rm -rf "<W>"
      - `line`: 변경 후 파일의 줄 번호 (`side: "RIGHT"`). 삭제된 줄에 달 때는 `side: "LEFT"`와 변경 전 줄 번호
      - `start_line`: 여러 줄 범위일 때만 (`line`이 끝 줄)
      - `body`: The review comment (follow the comment format below, 출처 표식 포함)
-   - `event`: 아래 판정 매트릭스에 따라 결정:
+   - `event`: 아래 판정 매트릭스에 따라 결정합니다. **맨 아래 두 행(Draft PR, 자기 PR)은 다른 모든 행보다 우선합니다**(Secret 행 포함) — GitHub가 이 경우 APPROVE/REQUEST_CHANGES를 거부합니다:
 
      | 조건 | 판정 (event) |
      |------|-------------|
@@ -654,7 +666,11 @@ rm -rf "<W>"
    ```bash
    gh api -X POST "repos/{o}/{r}/pulls/N/reviews" --input "<review.json>"
    ```
-   - **422**(줄이 diff 밖 등)가 나면 문제가 된 코멘트를 `comments`에서 빼고 다시 시도합니다. 오류 메시지로 어느 코멘트인지 알 수 없으면 Step 2.3의 변경 파일 `patch`(diff hunk)와 대조해 diff 밖의 줄을 찾아 뺍니다. 뺀 코멘트는 PR의 변경 파일이면 파일 단위 코멘트(4번)로, 아니면 Summary의 "인라인 불가" 목록(Step 5.3)으로 옮깁니다. **조용히 버리지 않습니다.**
+   - **422**가 나면 응답의 `message`·`errors[]`를 읽고 원인에 따라 처리합니다. 재시도는 **최대 2번**입니다.
+     - `event` 문제(자기 PR·Draft에서 APPROVE/REQUEST_CHANGES 등): `event`를 `COMMENT`로 바꾸고 원래 판정을 Summary에 적어 다시 시도합니다.
+     - `body`가 너무 김(65,536자 초과): Summary를 줄여(세부 목록을 줄이고 건수만 남김) 다시 시도합니다.
+     - 줄·경로 문제(줄이 diff 밖 등): 아래처럼 해당 코멘트를 뺍니다.
+   - 줄·경로 문제의 422는 문제가 된 코멘트를 `comments`에서 빼고 다시 시도합니다. 오류 메시지로 어느 코멘트인지 알 수 없으면 Step 2.3의 변경 파일 `patch`(diff hunk)와 대조해 diff 밖의 줄을 찾아 뺍니다. 뺀 코멘트는 PR의 변경 파일이면 파일 단위 코멘트(4번)로, 아니면 Summary의 "인라인 불가" 목록(Step 5.3)으로 옮깁니다. **조용히 버리지 않습니다.**
 4. **파일 단위 코멘트 게시** — 리뷰 API의 `comments`는 파일 단위 코멘트를 지원하지 않으므로, 리뷰를 만든 뒤 지적마다 따로 답니다. 본문 끝에도 출처 표식(`dwk:reviewer`)을 반드시 넣습니다:
    ```bash
    gh api -X POST "repos/{o}/{r}/pulls/N/comments" \

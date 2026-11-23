@@ -175,7 +175,7 @@ guard let value = optionalValue else { return }
 - {observations: squash recommendation, WIP commits, formatting-only commits}
 
 ### Codex 교차 리뷰
-- 결과: 실행됨 (범위: {range} | diff만 — 저장소 원본 없음) | 생략({--no-codex | 미설치 | 미로그인 | 변경 없음 | 사용량 제한, {재시도 가능 시각} | 시간 초과 | 오류: {요약}})
+- 결과: 실행됨 (범위: {range} | diff만 — 저장소 원본 없음) | 생략({--no-codex | 실행 환경이 Codex | 미설치 | 미로그인 | 변경 없음 | 사용량 제한, {재시도 가능 시각} | 시간 초과 | 오류: {요약}})
 - 범위 변경: {증분 시작점이 조상이 아니거나 compare 실패로 전체 범위를 봄 — 있으면}
 - 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d} · 옵션 제외 {f}
 - 기각: {file:line} — {이유} (있으면)

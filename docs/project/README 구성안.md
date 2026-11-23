@@ -42,7 +42,7 @@ Claude Code에서 쓰는 개발 워크플로·보안 점검 플러그인 모음.
 /plugin install security@dev-workflow-kit
 
 ## 요구사항
-- workflow: GitHub MCP (examples/mcp.json.example), gh CLI(폴백)
+- workflow: gh CLI (GitHub MCP는 선택, examples/mcp.json.example)
 - security: Docker, 최초 1회 update.sh
 
 ## 커맨드 요약

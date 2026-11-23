@@ -136,20 +136,22 @@ gh issue list -R <owner>/<repo> --state open --json number,title,milestone
 
 ### 7. PR 생성 (`gh`)
 
+1. `gh auth status`로 인증을 확인한다.
+2. `mktemp`로 본문 파일을 만들고 **출력된 경로를 그대로** 기억한다. 셸 변수는 도구 호출 사이에 남지 않으므로 이후 명령에는 그 경로 문자열을 쓴다. 본문은 그 경로에 쓴다(파일 쓰기 도구, 또는 `'EOF'`처럼 인용한 heredoc — 본문에 그 구분자가 있으면 다른 구분자).
+3. PR을 만든다.
+
 ```bash
-gh auth status            # 인증 확인
-BODY_FILE=$(mktemp)
-# 본문을 $BODY_FILE에 쓴다 (heredoc은 'EOF'를 인용해 변수 치환을 막고, 본문에 EOF가 있으면 다른 구분자를 쓴다)
-gh pr create \
+gh pr create -R "<owner>/<repo>" \
   --base "<base>" \
   --head "<현재 브랜치>" \
   --title "<title>" \
-  --body-file "$BODY_FILE" \
+  --body-file "<본문 파일 경로>" \
   --label "<라벨1>" --label "<라벨2>" \
   --milestone "<마일스톤>" \
   --draft
-rm -f "$BODY_FILE"
 ```
+
+4. 본문 파일을 지운다(`rm -f "<본문 파일 경로>"`).
 
 - `--label`: 6-1에서 고른 라벨마다 하나씩. 고른 라벨이 없으면 뺀다.
 - `--milestone`: 6-2에서 정한 마일스톤이 있을 때만 넣는다.
@@ -158,8 +160,9 @@ rm -f "$BODY_FILE"
 
 - owner / repo는 `git remote get-url origin`에서 추출 (예: `git@github.com:foo/bar.git` 또는 `https://github.com/foo/bar.git`, 또는 `git@<alias>:foo/bar.git` 형태도 지원). 필요하면 `-R <owner>/<repo>`로 지정한다.
 - 연결 이슈는 본문의 `Closes #N`/`Refs #N`으로 연결한다(6-2). 라벨·마일스톤은 `gh pr create` 플래그로 한 번에 붙인다.
+- `gh pr create`는 라벨·마일스톤을 먼저 확인하므로, 이름이 틀렸거나 권한(triage)이 없으면 **PR까지 만들어지지 않는다.** 라벨·마일스톤·권한 오류로 실패하면 `--label`·`--milestone`을 빼고 다시 만든 뒤 `gh pr edit <번호> -R <owner>/<repo> --add-label "<라벨>" --milestone "<마일스톤>"`으로 붙이고, 붙이지 못한 것은 보고에 적는다.
 - `gh`가 미설치/미인증이면 그 상태를 알리고 중단. 절대 임의로 토큰을 만들거나 설정을 바꾸지 않는다.
-- 생성 성공 시 PR URL을 굵게 표시해 보고한다. 생성 후 `gh pr view <번호> --json labels,milestone,closingIssuesReferences`로 라벨·마일스톤·연결 이슈를 확인한다.
+- 생성 성공 시 PR URL을 굵게 표시해 보고한다. 생성 후 `gh pr view <번호> -R <owner>/<repo> --json labels,milestone,closingIssuesReferences`로 라벨·마일스톤·연결 이슈를 확인한다.
 
 ### 8. 사후 보고
 
@@ -180,7 +183,7 @@ PR 생성 결과를 다음 형식으로 요약 출력한다.
 ## 안전 규칙
 
 - **사용자 확인 없이는 force push, base 브랜치로의 직접 commit, 다른 브랜치 checkout, 기존 PR 수정/머지/클로즈를 절대 하지 않는다.**
-- 이미 같은 head→base 조합의 Open PR이 있으면 (`gh pr list --head <branch> --state open --json number,url,isDraft`로 확인) 신규 생성하지 않고 기존 PR URL을 안내한다.
+- 이미 같은 head→base 조합의 Open PR이 있으면 (`gh pr list -R <owner>/<repo> --head <branch> --base <base> --state open --json number,url,isDraft,baseRefName`로 확인 — head만으로 찾으면 다른 base로 향하는 PR을 중복으로 오인한다) 신규 생성하지 않고 기존 PR URL을 안내한다.
 - `.env`, `*.key`, `credentials*` 같은 민감 파일이 변경에 포함돼 있으면 본문 생성 전에 경고하고 진행 여부를 확인한다.
 - 본문 생성 시 사용자나 동료의 개인정보 / API 키 / 토큰을 절대 인용하지 않는다.
 
