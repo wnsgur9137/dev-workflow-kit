@@ -161,7 +161,7 @@ gh pr create -R "<owner>/<repo>" \
 - owner / repo는 `git remote get-url origin`에서 추출 (예: `git@github.com:foo/bar.git` 또는 `https://github.com/foo/bar.git`, 또는 `git@<alias>:foo/bar.git` 형태도 지원). 필요하면 `-R <owner>/<repo>`로 지정한다.
 - 연결 이슈는 본문의 `Closes #N`/`Refs #N`으로 연결한다(6-2). 라벨·마일스톤은 `gh pr create` 플래그로 한 번에 붙인다.
 - `gh pr create`는 라벨·마일스톤을 먼저 확인하므로, 이름이 틀렸거나 권한(triage)이 없으면 **PR까지 만들어지지 않는다.** 라벨·마일스톤·권한 오류로 실패하면 `--label`·`--milestone`을 빼고 다시 만든 뒤 `gh pr edit <번호> -R <owner>/<repo> --add-label "<라벨>" --milestone "<마일스톤>"`으로 붙이고, 붙이지 못한 것은 보고에 적는다.
-- `gh`가 미설치/미인증이면 그 상태를 알리고 중단. 절대 임의로 토큰을 만들거나 설정을 바꾸지 않는다.
+- `gh`가 미설치/미인증이면, GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 하고 그 사실을 보고한다. 둘 다 없으면 그 상태를 알리고 중단. 절대 임의로 토큰을 만들거나 설정을 바꾸지 않는다.
 - 생성 성공 시 PR URL을 굵게 표시해 보고한다. 생성 후 `gh pr view <번호> -R <owner>/<repo> --json labels,milestone,closingIssuesReferences`로 라벨·마일스톤·연결 이슈를 확인한다.
 
 ### 8. 사후 보고

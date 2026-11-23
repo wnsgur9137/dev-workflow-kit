@@ -71,7 +71,8 @@ Before starting, ALWAYS display the usage guide from `${CLAUDE_PLUGIN_ROOT}/temp
 
 **`gh` CLI 미설치 또는 미인증**:
 - `gh auth status` 실패 시 "`gh` CLI 인증이 필요합니다. `gh auth login` 후 다시 시도하세요." 출력
-- Step 1·3의 조회에서는 중단하고, Step 10 답글 게시에서는 답글만 건너뛰고 Step 11은 그대로 진행
+- GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 하고 그 사실을 보고한다(답글은 MCP에 대응 도구가 없을 수 있음)
+- 둘 다 없으면 Step 1·3의 조회에서는 중단하고, Step 10 답글 게시에서는 답글만 건너뛰고 Step 11은 그대로 진행
 
 **git remote 없음 (bare number 사용 시)**:
 - "현재 디렉토리에 git remote가 없습니다. 전체 PR URL을 입력하세요." 출력 후 중단
@@ -151,9 +152,9 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **3.1 리뷰 코멘트 수집:**
 
-- 리뷰 목록 조회: `gh api repos/{owner}/{repo}/pulls/{number}/reviews --paginate --slurp` (`id`, `user.login`, `body`, `submitted_at`, `commit_id`)
-- 인라인 코멘트 조회: `gh api repos/{owner}/{repo}/pulls/{number}/comments --paginate --slurp` (`id`, `in_reply_to_id`, `user.login`, `body`, `path`, `line`, `original_line`, `subject_type`, `pull_request_review_id`, `diff_hunk`, `created_at`)
-  - `--paginate`만 쓰면 페이지마다 JSON 배열이 따로 출력되므로 `--slurp`로 한 배열로 받습니다
+- 리뷰 목록 조회: `gh api repos/{owner}/{repo}/pulls/{number}/reviews --paginate --jq '.[]'` (`id`, `user.login`, `body`, `submitted_at`, `commit_id`)
+- 인라인 코멘트 조회: `gh api repos/{owner}/{repo}/pulls/{number}/comments --paginate --jq '.[]'` (`id`, `in_reply_to_id`, `user.login`, `body`, `path`, `line`, `original_line`, `subject_type`, `pull_request_review_id`, `diff_hunk`, `created_at`)
+  - `--paginate --jq '.[]'`는 항목을 한 줄에 하나씩(JSON) 출력합니다. `--paginate`만 쓰거나 `--slurp`를 쓰면 페이지 단위 배열이 나와 30건을 넘을 때 세거나 거르는 결과가 틀립니다
   - `subject_type`이 `"file"`이면 파일 단위 코멘트입니다(`/pr-review`가 diff 밖 지적에 씀). 이때 `line`은 의미 없는 값(`1`)이 오므로 줄 위치로 쓰지 않습니다(실측)
   - `subject_type`이 `"line"`인데 `line`이 `null`이면 코드가 바뀌어 위치를 잃은(outdated) 코멘트입니다. 위치는 `original_line`·`diff_hunk`로 찾습니다
 

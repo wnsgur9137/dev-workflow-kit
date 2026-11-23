@@ -72,7 +72,7 @@ Example: /pr-review https://github.com/owner/repo/pull/32
   🔹 NITPICK   : 매우 사소한 스타일 이슈
 
 -- Verdict Matrix --
-  🔒 Secret alert 발견      → REQUEST_CHANGES (무조건)
+  🔒 PR 변경 파일·본문의 Secret alert → REQUEST_CHANGES (Draft·자기 PR이면 COMMENT)
   🚨 CRITICAL >= 1          → REQUEST_CHANGES
   ⚠️ WARNING >= 3 (normal)  → REQUEST_CHANGES
   ⚠️ WARNING 1~2            → COMMENT
@@ -128,7 +128,7 @@ If a valid PR URL is provided, show the guide briefly then proceed below.
 
 **Not Found (404)**:
 - PR 조회 시: "PR을 찾을 수 없습니다. URL을 확인하세요." 출력 후 중단
-- 보안 도구 (Step 2.7): "보안 스캔 접근 권한 없음 - 건너뜀" 출력 후 계속 진행
+- 보안 도구 (Step 2.7): Step 2.7의 에러 핸들링을 따름 (code scanning의 404 `no analysis found`는 "분석 없음", 그 밖의 404·403은 "접근 권한 없음"으로 건너뜀)
 - 파일/이슈 조회: "리소스를 찾을 수 없음 - 건너뜀" 출력 후 계속 진행
 
 **Rate Limit (429, 또는 위에서 rate limit으로 판정한 403)**:
@@ -194,16 +194,16 @@ gh api "repos/{o}/{r}/pulls/N"
 
 **2.3 변경 파일 및 Diff:**
 
-- `gh api "repos/{o}/{r}/pulls/N/files" --paginate --slurp`로 변경 파일 목록 조회 (`--paginate`만 쓰면 페이지마다 JSON 배열이 따로 출력됩니다. 이 문서의 목록 조회는 모두 `--slurp`로 한 배열로 받거나 `--jq '.[] | …'`로 항목 단위로 처리합니다. `--slurp`와 `--jq`는 함께 쓸 수 없습니다)
+- `gh api "repos/{o}/{r}/pulls/N/files" --paginate --jq '.[]'`로 변경 파일 목록 조회 (목록 조회는 이 문서 전체에서 `--paginate --jq '.[]'`로 받습니다. 항목이 한 줄에 하나씩(JSON) 나와 페이지 경계가 없습니다. `--paginate`만 쓰면 페이지마다 배열이 따로 나오고, `--slurp`는 페이지 배열의 배열을 돌려주므로 둘 다 그대로 세거나 거르면 30건을 넘을 때 틀립니다. 필드만 고를 때는 `--jq '.[] | {id, path}'`처럼 씁니다)
 - `gh pr diff N -R {o}/{r}`로 전체 diff 조회
 
 **2.4 기존 리뷰 확인 (중복 방지 + 재리뷰 감지):**
 
-- `gh api "repos/{o}/{r}/pulls/N/reviews" --paginate --slurp`로 기존 리뷰 조회 (`id`, `user.login`, `state`, `body`, `submitted_at`, `commit_id`)
+- `gh api "repos/{o}/{r}/pulls/N/reviews" --paginate --jq '.[]'`로 기존 리뷰 조회 (`id`, `user.login`, `state`, `body`, `submitted_at`, `commit_id`)
   - 각 리뷰의 state (APPROVED, CHANGES_REQUESTED, COMMENTED)와 reviewer 기록
   - 이미 REQUEST_CHANGES 상태인 리뷰가 있으면 해당 리뷰어가 지적한 사항 파악
-- `gh api "repos/{o}/{r}/pulls/N/comments" --paginate --slurp`로 기존 인라인 코멘트 조회
-  - 기존 코멘트의 path, line, body를 파싱하여 이미 지적된 이슈 목록 생성
+- `gh api "repos/{o}/{r}/pulls/N/comments" --paginate --jq '.[]'`로 기존 인라인 코멘트 조회
+  - 기존 코멘트의 path, line, body, `subject_type`을 파싱하여 이미 지적된 이슈 목록 생성. `subject_type`이 `"file"`인 파일 단위 코멘트는 `line`이 의미 없는 `1`로 오므로 path와 내용으로만 비교합니다
 
 **재리뷰 감지:**
 
@@ -213,7 +213,7 @@ gh api "repos/{o}/{r}/pulls/N"
 
 이전 리뷰가 발견되면 `AskUserQuestion`으로 다음 옵션을 제시합니다:
 
-- **🔄 증분 리뷰 (Recommended)**: 이전 리뷰의 `submitted_at` 이후에 추가된 커밋만 리뷰합니다. `gh api "repos/{o}/{r}/pulls/N/commits" --paginate --slurp`의 결과에서 이전 리뷰 시점 이후의 커밋만(`commit.committer.date` 기준) 필터링하고, 해당 커밋에서 변경된 파일/라인만 리뷰 대상으로 합니다. 이전에 지적한 이슈가 수정되었는지도 확인합니다.
+- **🔄 증분 리뷰 (Recommended)**: 이전 리뷰의 `submitted_at` 이후에 추가된 커밋만 리뷰합니다. `gh api "repos/{o}/{r}/pulls/N/commits" --paginate --jq '.[]'`의 결과에서 이전 리뷰 시점 이후의 커밋만(`commit.committer.date` 기준) 필터링하고, 해당 커밋에서 변경된 파일/라인만 리뷰 대상으로 합니다. 이전에 지적한 이슈가 수정되었는지도 확인합니다.
 - **🔁 전체 리뷰**: 이전 리뷰를 무시하고 PR 전체를 처음부터 다시 리뷰합니다. 단, 동일 파일 + 동일 라인 + 유사 내용의 기존 코멘트는 여전히 건너뜁니다.
 
 **증분 리뷰 동작:**
@@ -242,7 +242,7 @@ PR description (body)에서 이슈 참조 패턴을 파싱합니다:
 
 **2.6 커밋 분석:**
 
-`gh api "repos/{o}/{r}/pulls/N/commits" --paginate --slurp`로 PR의 커밋 목록을 조회합니다 (메시지는 `commit.message`):
+`gh api "repos/{o}/{r}/pulls/N/commits" --paginate --jq '.[]'`로 PR의 커밋 목록을 조회합니다 (메시지는 `commit.message`):
 - 커밋 수가 20개 초과: Summary에 "스쿼시 머지를 권장합니다" SUGGESTION
 - 커밋 메시지 패턴 분석:
   - "fix typo", "formatting", "lint" 등 포매팅 전용 커밋이 전체의 50% 이상이면: "포매팅 변경과 로직 변경을 별도 PR로 분리하면 리뷰가 용이합니다" SUGGESTION
@@ -353,20 +353,20 @@ When local context is available (same repo or cached analysis), use it to:
 PR이 속한 레포지토리의 보안 경고를 확인합니다. 이 정보는 Step 4 리뷰와 Step 6 판정에서 참조됩니다.
 
 1. **Secret Scanning**: 시크릿 노출 경고 조회
-   - `gh api "repos/{o}/{r}/secret-scanning/alerts?state=open" --paginate --slurp`
-   - 목록 응답에는 파일 경로가 없습니다. 경고마다 `gh api "repos/{o}/{r}/secret-scanning/alerts/<number>/locations" --paginate --slurp`로 위치(`details.path`, `details.start_line`)를 받아 PR이 변경한 파일과 교차 확인합니다
-   - PR 변경 파일에 있는 경고: 해당 파일에 CRITICAL 코멘트 자동 생성 대상으로 마킹하고, **Step 6에서 무조건 REQUEST_CHANGES 판정**(단, 판정표의 Draft·자기 PR 행이 우선)
+   - `gh api "repos/{o}/{r}/secret-scanning/alerts?state=open" --paginate --jq '.[]'`
+   - 목록 응답에는 파일 경로가 없습니다. 경고마다 `gh api "repos/{o}/{r}/secret-scanning/alerts/<number>/locations" --paginate --jq '.[]'`로 위치를 받아 PR과 관계있는지 확인합니다. `type: "commit"` 위치는 `details.path`(·`start_line`)가 PR 변경 파일이면 관계있음, `pull_request_body`·`pull_request_comment`·`pull_request_review_comment`·`pull_request_title` 위치는 URL이 이 PR(N)을 가리키면 관계있음입니다
+   - PR과 관계있는 경고: 파일 위치면 해당 파일에 CRITICAL 코멘트 자동 생성 대상으로 마킹하고, **Step 6에서 무조건 REQUEST_CHANGES 판정**(단, 판정표의 Draft·자기 PR 행이 우선)
    - PR과 관계없는 위치의 경고: `[SECURITY SCAN]`에 목록으로만 적고 판정에는 넣지 않습니다
 
 2. **Code Scanning**: CodeQL 정적 분석 경고 조회
-   - `gh api "repos/{o}/{r}/code-scanning/alerts?state=open&ref=refs/pull/N/merge" --paginate --slurp` — PR에 대한 CodeQL 결과는 `refs/pull/N/merge`에 기록됩니다. 결과가 없고 PR이 같은 저장소의 브랜치(`head.repo.full_name` = `{o}/{r}`)이면 `ref=refs/heads/<head.ref>`로 한 번 더 조회합니다. fork의 브랜치 이름으로는 조회하지 않습니다
+   - `gh api "repos/{o}/{r}/code-scanning/alerts?state=open&ref=refs/pull/N/merge" --paginate --jq '.[]'` — PR에 대한 CodeQL 결과는 `refs/pull/N/merge`에 기록됩니다. 결과가 없고 PR이 같은 저장소의 브랜치(`head.repo.full_name` = `{o}/{r}`)이면 `ref=refs/heads/<head.ref>`로 한 번 더 조회합니다. fork의 브랜치 이름으로는 조회하지 않습니다
    - "분석 결과 없음"(빈 배열·`no analysis found`)과 "권한 없음"(403)을 구분해 Summary에 적습니다
    - PR 변경 파일과 교차 확인하여 관련 경고만 필터링
    - severity가 `critical` 또는 `high`인 경고는 CRITICAL 코멘트 대상
    - severity가 `medium`인 경고는 WARNING 코멘트 대상
 
 3. **Dependabot Alerts**: 의존성 취약점 조회
-   - `gh api "repos/{o}/{r}/dependabot/alerts?state=open" --paginate --slurp`
+   - `gh api "repos/{o}/{r}/dependabot/alerts?state=open" --paginate --jq '.[]'`
    - PR이 의존성 파일(`package.json`, `package-lock.json`, `Podfile`, `Podfile.lock`, `build.gradle`, `requirements.txt`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`)을 수정했을 때만 조회
    - 점수는 `security_advisory.cvss_severities.cvss_v4.score`, 없으면 `cvss_v3.score`를 씁니다(`cvss.score`는 폐기 예정)
    - CVSS 7.0 이상: CRITICAL 코멘트 대상
@@ -376,7 +376,7 @@ PR이 속한 레포지토리의 보안 경고를 확인합니다. 이 정보는 
    - 보안 경고가 1개 이상이면 Step 7 Summary에 `[SECURITY SCAN]` 섹션 포함
    - 각 경고의 상세 정보 (타입, severity, 영향 파일)를 기록
 
-**에러 핸들링**: 403/404 에러 시 "보안 스캔 접근 권한 없음 - 건너뜀" 출력 후 다음 Step으로 진행. 보안 스캔 실패가 전체 리뷰를 중단시키지 않습니다.
+**에러 핸들링**: code scanning의 404 `no analysis found`(또는 빈 결과)는 "분석 없음"이며 위의 `refs/heads` 재조회 조건에 들어갑니다. 그 밖의 403/404는 "보안 스캔 접근 권한 없음 - 건너뜀" 출력 후 다음 Step으로 진행합니다. 보안 스캔 실패가 전체 리뷰를 중단시키지 않습니다.
 
 ### Step 3: Detect PR Type
 
@@ -420,7 +420,7 @@ mktemp -d "${TMPDIR:-/tmp}/dwk-codex.XXXXXX"     # 이하 <W>
 ```
 
 PR 정보(Step 2.1의 `gh api "repos/{o}/{r}/pulls/N"` 응답)에서 `base.ref`(이하 `<base>`), `base.sha`(이하 `<base_sha>`), `head.sha`(이하 `<head>`)를 씁니다. 범위는 **PR 정보를 받은 시점의 SHA로 고정**합니다 — 리뷰 중 base 브랜치가 움직여도 Claude가 받은 diff와 Codex가 보는 범위가 어긋나지 않게 하기 위해서입니다.
-증분 리뷰(Step 2.4)를 골랐으면 시작점 `<prev>`는 **현재 사용자의 가장 최근 리뷰의 `commit_id`**입니다(Step 2.4의 `gh api "repos/{o}/{r}/pulls/N/reviews"` 응답의 필드).
+증분 리뷰(Step 2.4)를 골랐으면 시작점 `<prev>`는 **현재 사용자의 가장 최근 리뷰(본문이 있는 리뷰 — Step 2.4)의 `commit_id`**입니다(Step 2.4의 `gh api "repos/{o}/{r}/pulls/N/reviews"` 응답의 필드).
 
 | Step 2.5 결과 | 실행 위치(이하 `<DIR>`) | 범위 |
 |---|---|---|
@@ -444,7 +444,7 @@ git worktree add --detach "<W>/tree" "<head>"
   ```bash
   gh api "repos/<owner>/<repo>/compare/<base_sha>...<head>" -H "Accept: application/vnd.github.diff" > "<W>/pr.diff"
   ```
-  Step 6.3 게시 직전에 PR의 현재 `head.sha`가 `<head>`와 다르면(리뷰 중 새 push) 사용자에게 알리고, 게시할지 새 head로 다시 리뷰할지 묻습니다.
+  diff가 너무 커서 compare가 실패하면(406 등) Step 2.3과 같이 `/pulls/N/files`의 `patch`로 모아 `<W>/pr.diff`를 만들고, 그것도 안 되면 `오류: 준비 실패 — diff가 너무 큼`으로 생략합니다.
 - 증분 리뷰: 먼저 `<prev>`가 `<head>`의 조상인지 확인합니다. compare는 세 점(`...`) 비교라, force-push로 갈라진 뒤에도 성공해서 "공통 조상 이후 전체"를 증분처럼 돌려줄 수 있기 때문입니다.
   ```bash
   gh api "repos/<owner>/<repo>/compare/<prev>...<head>" --jq .merge_base_commit.sha   # 결과가 <prev>와 같아야 증분
@@ -626,6 +626,8 @@ rm -rf "<W>"
 
 **6.3 PR 코멘트 게시 (사용자 승인 시):**
 
+0. **head 확인** — 리뷰 방식(같은 레포·다른 레포·증분·`--no-codex`)과 관계없이, 게시 직전에 `gh api "repos/{o}/{r}/pulls/N" --jq .head.sha`가 Step 2.1에서 고정한 `head.sha`와 같은지 확인합니다. 다르면(리뷰 중 새 push) 리뷰한 diff와 줄 번호가 낡은 것이므로 사용자에게 알리고, 고정한 커밋 기준으로 게시할지 새 head로 다시 리뷰할지 묻습니다.
+
 리뷰는 **한 번의 요청**으로 만들고, 파일 단위 코멘트는 리뷰를 만든 뒤 따로 답니다. 긴 본문·JSON은 셸 따옴표 문제를 피하려고 `mktemp`로 만든 임시 파일에 쓰고(`Write` 또는 `jq -n`으로 써서 이스케이프를 맞춥니다) `--input`/`-F body=@<파일>`로 넘기며, 끝나면 지웁니다. `<head sha>`는 Step 2.1에서 고정한 `head.sha`입니다.
 
 1. **게시할 지적 나누기** (Step 6.2에서 확정한 목록):
@@ -652,7 +654,7 @@ rm -rf "<W>"
 
      | 조건 | 판정 (event) |
      |------|-------------|
-     | Secret scanning alert 발견 | `REQUEST_CHANGES` (무조건) |
+     | PR 변경 파일·본문·코멘트에 위치한 Secret scanning alert (Step 2.7) | `REQUEST_CHANGES` |
      | 🚨 CRITICAL >= 1 | `REQUEST_CHANGES` |
      | 🚨 CRITICAL 0, ⚠️ WARNING >= 3 | `REQUEST_CHANGES` |
      | 🚨 CRITICAL 0, ⚠️ WARNING 1~2 | `COMMENT` |

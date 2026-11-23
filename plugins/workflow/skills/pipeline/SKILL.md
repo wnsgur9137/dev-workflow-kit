@@ -159,7 +159,7 @@ env -u GITHUB_TOKEN GH_TOKEN="$OCTO_ORG_GITHUB_TOKEN" gh issue list --repo <owne
 
 - 그 밖의 저장소는 기본 `gh` 인증을 쓴다. 저장소의 `CLAUDE.md`·규약 문서에 인증 지시가 있으면 그것을 따른다.
 - `gh auth status`가 실패하면, GitHub MCP 도구가 연결돼 있으면 이후 GitHub 작업을 MCP로 하고 그 사실을 보고에 적는다. 둘 다 없으면 **중단**하고 `gh auth login`이 필요하다고 알린다.
-- PR 생성·Ready 전환·병합·CI 조회는 `gh`로 한다(`gh pr create --draft`, `gh pr ready`, `gh pr merge`, `gh run list`, `gh run view`).
+- PR 생성·Ready 전환·병합·CI 조회는 `gh`로 한다(`gh pr create --draft`, `gh pr ready`, `gh pr merge`, `gh run list`, `gh run view`). 위에서 MCP로 전환했으면 같은 작업을 MCP 도구로 한다.
 - Assignee는 `gh api user -q .login`으로 얻은 현재 인증 사용자다.
 
 ### 규약 문서 찾기
@@ -393,8 +393,8 @@ gh pr ready <N> -R <owner>/<repo>
 
 그 밖에는 CI를 기다린다.
 
-- `gh run list -R <owner>/<repo> --branch <branch> --commit <PR head SHA> --json databaseId,status,conclusion,headSha,event,workflowName`로 **PR head에 대한 실행들**의 run id(`databaseId`)를 확보한다. 최신 실행 하나만 보면 CI가 아닌 워크플로(라벨러 등)나 이전 head의 실행을 볼 수 있다. 그 head의 실행이 **모두** 성공해야 통과다(`gh pr checks <N> -R <owner>/<repo> --json bucket`으로 교차 확인).
-- 이후에는 `gh run view <run-id> -R <owner>/<repo> --json jobs`로 확인한다(필요하면 `gh pr checks <N>` 병행).
+- `gh run list -R <owner>/<repo> --branch <branch> --commit <PR head SHA> --json databaseId,status,conclusion,headSha,event,workflowName,createdAt`로 **PR head에 대한 실행들**을 받는다. 최신 실행 하나만 보면 CI가 아닌 워크플로(라벨러 등)나 이전 head의 실행을 볼 수 있다. 실행을 워크플로(`workflowName`)별로 묶어 **워크플로마다 가장 최근 실행**이 success여야 통과다. 같은 워크플로에 더 최근 실행이 있는 cancelled 실행은 무시한다(Ready·push 실행이 concurrency로 서로 취소한 경우). `gh pr checks <N> -R <owner>/<repo> --json bucket`으로 교차 확인한다.
+- 이후에는 워크플로마다 가장 최근 실행의 run id(`databaseId`)에 대해 `gh run view <run-id> -R <owner>/<repo> --json jobs`로 확인한다.
 - **백그라운드 대기 후 조회**한다. 짧은 간격 폴링은 비싸다. 첫 확인은 그 저장소의 과거 실행 시간에 맞춰(모르면 10분), 이후 2분 간격.
 - `conclusion: cancelled`면 다른 실행이 concurrency로 취소한 것이다. 같은 브랜치의 더 최신 실행이 있으면 그것을 보고, 없으면 `gh run rerun <run-id>`로 다시 돌린 뒤 기다린다. 취소된 실행의 체크(`fail`)가 PR 체크 목록에 남을 수 있으니 판정은 **최신 실행의 job 결론**으로 한다.
 - 그 밖에 `conclusion: success`가 아니면 **중단**하고 실패한 스텝과 로그를 보고한다.

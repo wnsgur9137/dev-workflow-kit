@@ -99,7 +99,7 @@ Claude 리뷰에 **Codex 리뷰를 더합니다.** Claude 리뷰를 대신하지
 
 | 조건 | 판정 |
 |------|------|
-| Secret alert 발견 | REQUEST_CHANGES (무조건) |
+| PR 변경 파일·본문의 Secret alert | REQUEST_CHANGES (Draft·자기 PR이면 COMMENT) |
 | CRITICAL >= 1 | REQUEST_CHANGES |
 | WARNING >= 3 (normal) / >= 2 (strict) | REQUEST_CHANGES |
 | WARNING 1~2 | COMMENT |
