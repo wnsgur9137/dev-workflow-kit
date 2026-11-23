@@ -27,11 +27,8 @@
 - `pr-review`: secret scanning 경고는 위치를 확인해 PR과 관계있는 것만 REQUEST_CHANGES 판정에 넣습니다. code scanning은 `refs/pull/N/merge`로 조회합니다.
 - `create-pr`: MCP 경로와 `gh` 폴백을 `gh pr create` 하나로 합쳤습니다. 라벨·마일스톤 오류로 생성이 실패하면 그것을 빼고 만든 뒤 붙입니다.
 - `pipeline`: 병합에 `--match-head-commit`을 써서 CI가 확인한 head만 병합합니다. CI는 PR head의 워크플로마다 가장 최근 실행으로 판정합니다.
-
-### 수정
-- 목록 조회가 30건을 넘으면 페이지 경계 때문에 세거나 거르는 결과가 틀릴 수 있던 문제(`--paginate --jq '.[]'`로 통일).
-- fork 구성에서 답글·PR 생성이 다른 저장소의 같은 번호 PR로 갈 수 있던 문제(`-R` 명시).
-- 같은 브랜치에서 다른 base로 향하는 PR을 중복으로 오인하던 문제.
+- `gh` 호출은 모두 저장소를 `-R`로 명시하고(fork 구성에서 다른 저장소로 가지 않게), 목록은 `--paginate --jq '.[]'`로 끝까지 받습니다. `create-pr`의 중복 확인은 head와 base를 함께 봅니다.
+- **GitHub MCP를 쓰던 clone 사용자**: 예전에는 `.mcp.json`을 저장소에서 추적했습니다. 그 시절 clone이라면 `git pull` 때 로컬 `.mcp.json`이 지워지니 먼저 백업하세요(`cp .mcp.json .mcp.json.bak`).
 
 ## [1.1.0] - 2026-11-23
 

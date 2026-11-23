@@ -19,7 +19,7 @@
 | 기능 추가 | 마이너 |
 | 버그 수정, 문서·안내 문구 | 패치 |
 
-플러그인 폴더(`plugins/<이름>/`) 안의 파일을 바꾸면 **반드시 버전을 올립니다.** 버전이 그대로면 사용자의 업데이트가 새 내용을 받지 못할 수 있습니다. 저장소 루트 README·`docs/`만 바꾼 경우는 올리지 않습니다.
+플러그인 폴더(`plugins/<이름>/`) 안의 파일을 바꾸면 플러그인 README·CHANGELOG만 바꿨더라도 **반드시 버전을 올립니다**(설치본에 함께 들어가기 때문). 버전이 그대로면 사용자의 업데이트가 새 내용을 받지 못할 수 있습니다. 저장소 루트 README·`docs/`만 바꾼 경우는 올리지 않습니다.
 
 ## 릴리스 절차
 
@@ -31,13 +31,16 @@
 
    ```bash
    git checkout master && git pull --ff-only
-   claude plugin tag plugins/<이름> --push        # <이름>--v<버전> 태그. 두 파일의 버전 일치도 검사
-   gh release create <이름>--v<버전> \
+   claude plugin tag plugins/<이름> --dry-run      # 만들 태그와 버전 일치를 먼저 확인
+   claude plugin tag plugins/<이름> --push         # <이름>--v<버전> 태그
+   gh release create <이름>--v<버전> --verify-tag --latest=false \
      --title "<이름> v<버전>" \
      --notes "$(scripts/release-notes.sh <이름> <버전>)"
    ```
 
-   - 0.x 플러그인은 `--prerelease`를 붙이지 않습니다(0.x 자체가 불안정 표시).
-   - 저장소 전체를 대표하는 "Latest" 릴리스는 의미가 없으므로 `--latest=false`를 붙여도 됩니다.
+   - `--verify-tag`: 태그를 잘못 적었을 때 새 태그를 만들지 않고 실패합니다.
+   - `--latest=false`: 플러그인 두 개가 한 저장소에 있어 "Latest" 표시는 의미가 없습니다.
+   - 0.x 플러그인도 `--prerelease`를 붙이지 않습니다(0.x 자체가 불안정 표시).
+   - 지난 버전에 태그가 없으면 그 버전을 올린 커밋에 붙입니다: `git log --format='%h %s' -G'"version"' -- plugins/<이름>/.claude-plugin/plugin.json`으로 커밋을 찾고 `git tag -a <이름>--v<버전> <커밋> -m "<이름> <버전>"` 후 push합니다.
 
 README의 버전 배지는 각 플러그인의 `plugin.json`을 읽으므로 따로 고치지 않습니다.

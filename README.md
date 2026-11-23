@@ -46,7 +46,7 @@
 - APK·AAB·IPA 정적 분석 (`scan-app`)
 - 허용목록 웹 대상의 수동 점검, 공격 요청 없음 (`scan-web`)
 
-모든 도구는 네트워크가 차단된 컨테이너에서 돕니다.
+모든 도구는 네트워크가 차단되거나 허용목록 프록시로만 나가는 컨테이너에서 돕니다.
 
 [사용법](plugins/security/README.md) · [설계](docs/security/보안%20툴킷.md) · [변경 이력](plugins/security/CHANGELOG.md)
 
@@ -72,7 +72,7 @@ codex plugin add workflow@dev-workflow-kit
 codex plugin add security@dev-workflow-kit
 ```
 
-필요한 플러그인만 설치해도 됩니다. Claude Code에서는 `/workflow:commit`, Codex에서는 `$workflow:commit`처럼 부르고, 모든 명령은 `--help`로 옵션을 볼 수 있습니다.
+필요한 플러그인만 설치해도 됩니다. 터미널에서는 `claude plugin marketplace add …`, `claude plugin install …`로 같은 일을 할 수 있습니다. Claude Code에서는 `/workflow:commit`, Codex에서는 `$workflow:commit`처럼 부르고, 모든 명령은 `--help`로 옵션을 볼 수 있습니다.
 
 > [!IMPORTANT]
 > **업데이트할 때는 마켓플레이스를 먼저 갱신하세요.** 갱신하지 않으면 새 버전을 받지 못합니다.
@@ -81,6 +81,8 @@ codex plugin add security@dev-workflow-kit
 > |---|---|---|
 > | Claude Code | `/plugin marketplace update dev-workflow-kit` | `/plugin update workflow@dev-workflow-kit` |
 > | Codex CLI | `codex plugin marketplace upgrade dev-workflow-kit` | `codex plugin add workflow@dev-workflow-kit` |
+>
+> security도 같은 방식이고, 올린 뒤 터미널에서 `update.sh`로 도구 데이터를 갱신합니다. [security 업데이트](plugins/security/README.md#업데이트)
 
 security는 처음 한 번 도구 이미지·규칙을 받아야 합니다(`update.sh`). [설치와 준비](plugins/security/README.md#설치와-준비)를 보세요.
 
@@ -93,7 +95,7 @@ security는 처음 한 번 도구 이미지·규칙을 받아야 합니다(`upda
 
 - 검증한 버전: Claude Code 2.1, Codex CLI 0.171, `gh` 2.96 (2026-11 기준).
 - security는 아직 0.x라 마이너 버전에서도 동작이 바뀔 수 있습니다.
-- Codex에서 다른 점: 선택지를 번호 목록으로 묻고, `codex exec`처럼 대화할 수 없는 실행에서는 확인이 필요한 지점에서 멈춥니다. `gh`·`git push`·Docker는 sandbox 때문에 권한 승인을 요청합니다. 실행 주체가 Codex이면 `pr-review`의 Codex 교차 리뷰는 생략합니다.
+- Codex에서 다른 점: 선택지를 번호 목록으로 묻고, `codex exec`처럼 대화할 수 없는 실행에서는 확인이 필요한 지점에서 멈춥니다. Codex는 플러그인의 `skills/`만 읽습니다. `gh`·`git push`·Docker는 sandbox 때문에 권한 승인을 요청하니, 승인 창에서 필요한 명령만 계속 허용하세요. 실행 주체가 Codex이면 `pr-review`의 Codex 교차 리뷰는 생략합니다.
 
 ## 명령
 
@@ -150,7 +152,7 @@ mv ~/.claude/templates/{review,review-criteria,apply-review} ~/.claude/backup/te
 <details>
 <summary><b>GitHub MCP를 계속 쓰려면 (선택)</b></summary>
 
-`gh`를 쓸 수 없는 환경에서만 GitHub MCP로 대신할 수 있습니다. `examples/mcp.json.example`을 `.mcp.json`으로 복사하고 `GITHUB_PERSONAL_ACCESS_TOKEN` 환경 변수를 설정하세요(Docker 필요). 바꾼 이유: [GitHub MCP에서 gh로](docs/workflow/GitHub%20MCP.md)
+`gh`를 쓸 수 없는 환경에서만 GitHub MCP로 대신할 수 있습니다. `examples/mcp.json.example`을 `.mcp.json`으로 복사하고 `GITHUB_PERSONAL_ACCESS_TOKEN` 환경 변수를 설정하세요(Docker 필요). `.mcp.json`은 커밋하지 않습니다. 예전에는 저장소가 이 파일을 추적했으므로, 그 시절 clone이라면 `git pull` 전에 백업하세요(`cp .mcp.json .mcp.json.bak`). 바꾼 이유: [GitHub MCP에서 gh로](docs/workflow/GitHub%20MCP.md)
 
 </details>
 
@@ -163,7 +165,7 @@ mv ~/.claude/templates/{review,review-criteria,apply-review} ~/.claude/backup/te
 
 ## 커스터마이징
 
-- **리뷰 기준**: `plugins/workflow/templates/review-criteria/`의 플랫폼별 파일. 새 파일을 더하면 새 플랫폼으로 인식합니다.
+- **리뷰 기준**: `plugins/workflow/templates/review-criteria/`의 플랫폼별 파일(ios, android, frontend, backend, general). 새 파일을 더하면 새 플랫폼으로 인식합니다.
 - **출력 형식**: `plugins/workflow/templates/review/`, `plugins/workflow/templates/apply-review/`
 - 설치된 플러그인 폴더를 고치면 업데이트 때 덮어써집니다. **저장소를 fork해 고친 뒤 fork를 마켓플레이스로 추가**하세요. [자세히](docs/workflow/커스터마이징.md)
 

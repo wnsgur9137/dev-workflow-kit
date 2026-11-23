@@ -178,6 +178,8 @@ docker info && docker compose version
 `docker compose`를 찾을 수 없다고 나오면 Homebrew의 compose 플러그인 경로를 등록하세요: `~/.docker/config.json`에 `"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]` 추가 (Intel Mac은 `/usr/local/lib/docker/cli-plugins`).
 
 
+Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple Silicon 주의사항: [Docker 런타임](../../docs/security/01%20개요/Docker%20런타임.md)
+
 ## Codex에서 쓰기
 
 설치는 [저장소 README > 빠른 시작](../../README.md#빠른-시작)을 보세요. Codex에서는 `$security:scan-code <경로>` 형식으로 부릅니다.
