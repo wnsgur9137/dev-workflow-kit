@@ -1,48 +1,44 @@
 ---
-title: Why GitHub MCP?
+title: GitHub MCP에서 gh로
 tags: [workflow, setup]
 ---
 
-# Why GitHub MCP?
+# GitHub MCP에서 gh로
 
 상위: [Home](../Home.md) · [README](../../README.md)
 
-이 프로젝트는 `gh` CLI 대신 **GitHub MCP (Model Context Protocol)** 서버를 사용합니다.
+workflow 플러그인은 1.x까지 GitHub 작업에 **GitHub MCP 서버**를 썼고, **2.0.0부터 `gh` CLI를 기본으로** 씁니다. GitHub MCP는 `gh`를 쓸 수 없을 때만 대신 쓰는 선택 사항입니다.
 
-|            | `gh` CLI                         | GitHub MCP                                      |
-| ---------- | -------------------------------- | ----------------------------------------------- |
-| **동작 방식**  | Claude가 Bash로 `gh` 명령어 실행        | Claude가 MCP 도구를 직접 호출                           |
-| **인증**     | `gh auth login` 필요 (interactive) | 환경변수 토큰으로 자동 인증                                 |
-| **데이터 접근** | CLI 출력 텍스트를 파싱해야 함               | 구조화된 JSON 데이터 직접 수신                             |
-| **권한 관리**  | 사용자 세션 전체 권한                     | 토큰 scope로 세밀한 제어                                |
-| **리뷰 게시**  | `gh api`로 복잡한 REST 호출 필요         | `create_pending_pull_request_review` 등 전용 도구 제공 |
-| **안정성**    | 셸 실행 → 출력 파싱 → 오류 가능성 높음         | 타입이 보장된 도구 호출 → 안정적                             |
+## 왜 바꿨나
 
-핵심 이유: GitHub MCP는 PR 리뷰 생성, 인라인 코멘트 게시, pending review 관리 등 **리뷰 워크플로우에 특화된 도구**를 제공하여, `gh` CLI로는 여러 단계의 API 호출이 필요한 작업을 단일 도구 호출로 처리할 수 있습니다.
+| | GitHub MCP (1.x) | `gh` CLI (2.0.0~) |
+|---|---|---|
+| 준비 | Docker 런타임 + `GITHUB_PERSONAL_ACCESS_TOKEN` + 프로젝트별 `.mcp.json` | `gh auth login` 한 번 |
+| Codex 지원 | 도구 이름(`mcp__github__*`)이 Claude Code 방식이라 Codex에서는 맞지 않음 | Claude Code·Codex 모두 셸에서 같은 명령 |
+| 장애 | MCP 서버 연결이 실패하면 리뷰·반영이 멈춤 (예: 인증 헤더 오류) | `gh` 인증만 유지하면 됨 |
+| 이미 쓰던 곳 | — | `/apply-review` 답글, `/create-pr` 폴백, `/pipeline`은 1.x에서도 `gh`가 필요했음 |
 
-## 인라인 코멘트와 Pending Review
+1.x 문서는 "인라인 코멘트를 리뷰 하나로 묶어 게시하려면 MCP의 pending review 도구가 필수"라고 적었습니다. 이 설명은 정확하지 않았습니다. REST API의 [Create a review](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request)는 `comments` 배열을 받아 **요청 한 번으로** 인라인 코멘트가 묶인 리뷰를 만들고, 줄 위치는 diff position이 아니라 `line`·`side`로 지정합니다.
 
-`/pr-review`의 코멘트 게시(Step 6.3)는 GitHub MCP의 pending review 워크플로우를 사용합니다:
-
-```
-1. create_pending_pull_request_review  → 리뷰 세션 시작
-2. add_comment_to_pending_review       → 인라인 코멘트 N개 추가 (반복)
-3. submit_pending_pull_request_review  → 리뷰 한 번에 제출 (APPROVE/COMMENT/REQUEST_CHANGES)
+```bash
+gh api -X POST "repos/{owner}/{repo}/pulls/{N}/reviews" --input review.json
 ```
 
-이 3단계 패턴은 **GitHub MCP만 전용 도구로 제공**하며, `gh` CLI에는 `add_comment_to_pending_review`에 대응하는 명령이 없습니다. `gh api`로 REST API를 직접 호출할 수는 있지만, pending review ID 추적과 diff position 계산이 필요하여 복잡하고 오류 확률이 높습니다.
+```json
+{
+  "commit_id": "<head sha>",
+  "event": "COMMENT",
+  "body": "<Summary>",
+  "comments": [{ "path": "src/a.ts", "line": 42, "side": "RIGHT", "body": "..." }]
+}
+```
 
-| 기능 | GitHub MCP | gh CLI |
-|------|-----------|--------|
-| PR 정보 조회 | `get_pull_request` | `gh pr view --json` |
-| diff/파일 목록 | `get_pull_request_diff` | `gh pr diff` |
-| 기존 리뷰 조회 | `get_pull_request_reviews` | `gh api .../reviews` |
-| 보안 스캔 | `list_secret_scanning_alerts` 등 | `gh api .../alerts` |
-| **인라인 코멘트 묶음 게시** | **전용 도구 3개** | **직접 대응 없음** |
+## 달라진 점
 
-> **결론**: PR 데이터 조회는 원리상 `gh` CLI로 대체 가능하지만, **인라인 코멘트를 리뷰로 묶어서 게시하는 기능은 GitHub MCP가 필수**입니다.
->
-> 현재 구현 기준 GitHub MCP 의존도는 커맨드마다 다릅니다:
-> - **`/create-pr`**: GitHub MCP 우선, 실패 시 `gh pr create`로 폴백 (MCP 없이도 동작 가능)
-> - **`/apply-review`**: 코멘트 조회는 `mcp__github__*` 도구 사용 (**MCP 필수**). 리뷰 코멘트 스레드 답글은 MCP에 대응 도구가 없어 `gh api .../comments/{id}/replies`로 게시 (**`gh` CLI 필요**)
-> - **`/pr-review`**: pending review 워크플로우와 보안 스캔에 GitHub MCP 전용 도구 사용 (**MCP 필수**)
+- 파일 단위 코멘트(줄이 diff 밖)는 리뷰 API의 `comments`에 넣을 수 없습니다. 리뷰를 만든 뒤 `POST /pulls/{N}/comments`에 `subject_type=file`로 따로 답니다.
+- 조회 결과는 REST 필드 이름(`base.sha`, `commit_id`, `submitted_at` 등)을 그대로 씁니다. 목록은 `--paginate`로 끝까지 받습니다.
+- 보안 알림(secret scanning·code scanning·Dependabot) 조회는 권한이 없으면 403/404가 납니다. 이전과 같이 "확인할 수 없음"으로 적고 건너뜁니다.
+
+## GitHub MCP를 계속 쓰려면
+
+`gh`를 쓸 수 없는 환경이면 [설정 > GitHub MCP (선택)](설정.md#github-mcp-선택)대로 `.mcp.json`을 두세요. 각 skill은 "`gh`를 쓸 수 없고 GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 해도 된다"고 안내합니다.

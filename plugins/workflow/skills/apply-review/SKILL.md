@@ -1,9 +1,19 @@
 ---
+name: apply-review
 description: PR 리뷰 코멘트를 코드에 반영하고, 리뷰 코멘트 스레드마다 반영 결과를 답글로 남깁니다.
 argument-hint: "<PR_NUMBER_OR_URL> [--reviewer=username] [--auto-commit] [--branch=name] [--help]"
 ---
 
 # Apply Review Command
+
+> **실행 환경** — 이 절차는 Claude Code와 Codex 모두에서 따른다. Claude Code가 아닌 환경(Codex 등)에서는:
+> - 인자: 본문에서 인자 자리가 `$`로 시작하는 자리표시자 그대로 보이면, 사용자가 이 skill을 부른 메시지에서 skill 이름 뒤의 내용을 인자로 쓴다.
+> - 경로: `$`로 시작하는 플러그인 루트 변수가 그대로 보이면, 이 `SKILL.md`가 있는 폴더의 두 단계 위(`../..`)를 플러그인 루트로 쓴다.
+> - 사용자에게 묻기: `AskUserQuestion`이 없으면 같은 질문과 선택지를 번호 목록으로 보여 주고 답을 기다린다. 대화할 수 없는 실행(예: `codex exec`)이면 확인이 필요한 지점에서 멈추고 무엇을 확인해야 하는지 보고한다 — 임의로 기본값을 골라 진행하지 않는다.
+> - 백그라운드 실행(`run_in_background`)이 없으면 명령 실행 도구의 시간 제한을 늘려 끝날 때까지 기다린다. 서브에이전트(`Task`)가 없으면 직접 수행한다.
+> - GitHub·`git fetch`/`push`는 네트워크가 필요하다. sandbox 때문에 실패하면 권한 상승 승인을 요청한다.
+
+GitHub 작업은 `gh` CLI로 한다(`gh auth status`로 인증 확인). `gh`를 쓸 수 없고 GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 해도 된다.
 
 PR 리뷰 코멘트를 코드에 반영합니다.
 
@@ -44,10 +54,10 @@ Before starting, ALWAYS display the usage guide from `${CLAUDE_PLUGIN_ROOT}/temp
 
 ## Error Handling Policy
 
-모든 GitHub MCP 호출에 대해 다음 에러 핸들링을 적용합니다:
+모든 GitHub 호출(`gh`)에 대해 다음 에러 핸들링을 적용합니다. GitHub의 기본 rate limit은 403으로 옵니다 — 403 응답 본문에 `rate limit`이 있거나 `gh api rate_limit --jq .rate.remaining`이 0이면 권한 오류가 아니라 rate limit으로 처리합니다:
 
 **인증/권한 오류 (401/403)**:
-- "GitHub 토큰 권한이 부족합니다. GITHUB_PERSONAL_ACCESS_TOKEN을 확인하세요." 출력 후 중단
+- "GitHub 토큰 권한이 부족합니다. `gh auth status`로 인증·권한을 확인하세요." 출력 후 중단
 
 **Not Found (404)**:
 - "PR을 찾을 수 없습니다. 번호/URL을 확인하세요." 출력 후 중단
@@ -59,9 +69,10 @@ Before starting, ALWAYS display the usage guide from `${CLAUDE_PLUGIN_ROOT}/temp
 **코멘트 0개**:
 - "반영할 리뷰 코멘트가 없습니다." 출력 후 종료
 
-**`gh` CLI 미설치 또는 미인증 (Step 10 답글 게시 시)**:
-- `gh auth status` 실패 시 "답글 게시에 `gh` CLI 인증이 필요합니다. `gh auth login` 후 다시 시도하세요." 출력
-- 답글만 건너뛰고 Step 11은 그대로 진행
+**`gh` CLI 미설치 또는 미인증**:
+- `gh auth status` 실패 시 "`gh` CLI 인증이 필요합니다. `gh auth login` 후 다시 시도하세요." 출력
+- GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 하고 그 사실을 보고한다(답글은 MCP에 대응 도구가 없을 수 있음)
+- 둘 다 없으면 Step 1·3의 조회에서는 중단하고, Step 10 답글 게시에서는 답글만 건너뛰고 Step 11은 그대로 진행
 
 **git remote 없음 (bare number 사용 시)**:
 - "현재 디렉토리에 git remote가 없습니다. 전체 PR URL을 입력하세요." 출력 후 중단
@@ -81,9 +92,9 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **1.2 PR 정보 수집:**
 
-`mcp__github__get_pull_request`로 PR 정보를 가져옵니다:
-- PR title, state, draft, merged, head.ref, base.ref, author
-- `mcp__github__get_me`로 현재 사용자 확인
+`gh`로 PR 정보를 가져옵니다:
+- `gh api repos/{owner}/{repo}/pulls/{number}`로 PR title, state, draft, merged, head.ref, base.ref, user.login(author)
+- `gh api user --jq .login`으로 현재 사용자 확인
 
 **레포지토리 일치 검증:**
 
@@ -141,8 +152,11 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **3.1 리뷰 코멘트 수집:**
 
-- `mcp__github__get_pull_request_reviews`로 리뷰 목록 조회
-- `mcp__github__get_pull_request_review_comments`로 인라인 코멘트 조회
+- 리뷰 목록 조회: `gh api repos/{owner}/{repo}/pulls/{number}/reviews --paginate --jq '.[]'` (`id`, `user.login`, `body`, `submitted_at`, `commit_id`)
+- 인라인 코멘트 조회: `gh api repos/{owner}/{repo}/pulls/{number}/comments --paginate --jq '.[]'` (`id`, `in_reply_to_id`, `user.login`, `body`, `path`, `line`, `original_line`, `subject_type`, `pull_request_review_id`, `diff_hunk`, `created_at`)
+  - `--paginate --jq '.[]'`는 항목을 한 줄에 하나씩(JSON) 출력합니다. `--paginate`만 쓰거나 `--slurp`를 쓰면 페이지 단위 배열이 나와 30건을 넘을 때 세거나 거르는 결과가 틀립니다
+  - `subject_type`이 `"file"`이면 파일 단위 코멘트입니다(`/pr-review`가 diff 밖 지적에 씀). 이때 `line`은 의미 없는 값(`1`)이 오므로 줄 위치로 쓰지 않습니다(실측)
+  - `subject_type`이 `"line"`인데 `line`이 `null`이면 코드가 바뀌어 위치를 잃은(outdated) 코멘트입니다. 위치는 `original_line`·`diff_hunk`로 찾습니다
 
 **3.2 코멘트 필터링:**
 
@@ -302,7 +316,7 @@ You are a senior developer applying PR review feedback. Read the review comments
 
 **9.3 새 브랜치에서 작업한 경우 — PR 생성 여부** (Push한 경우에만):
 
-- **PR 생성**: `mcp__github__create_pull_request` 사용
+- **PR 생성**: `gh pr create -R {owner}/{repo} --base <base> --head <branch> --title "<제목>" --body-file <파일>` 사용 (본문은 `mktemp`로 만든 임시 파일에 쓰고 끝나면 지움)
 - **PR 생성하지 않음**: 건너뜀
 
 PR 생성 시:
@@ -327,9 +341,9 @@ PR 생성 시:
 
 PR 전체 코멘트 하나로 모아 쓰지 않고, **원래 리뷰 코멘트에 답글로** 작성합니다.
 
-- 인라인 리뷰 코멘트: `gh api -X POST repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies -f body=...`
+- 인라인 리뷰 코멘트: `gh api -X POST repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies -f body=...` (긴 본문은 임시 파일에 쓰고 `-F body=@<파일>`)
   - 답글에 대한 답글은 불가하므로 스레드의 최상위 코멘트 ID(`in_reply_to_id`가 없으면 자기 ID)를 사용
-- 리뷰 본문·일반 PR 코멘트처럼 답글 스레드가 없는 경우에만 `mcp__github__add_issue_comment`로 게시하고, 첫 줄에 원 코멘트 링크와 인용(`> ...`)을 붙여 어떤 코멘트에 대한 답인지 표시
+- 리뷰 본문·일반 PR 코멘트처럼 답글 스레드가 없는 경우에만 `gh pr comment {number} -R {owner}/{repo} --body-file <파일>`로 게시(fork 구성에서 다른 저장소의 같은 번호 PR에 달리지 않도록 저장소를 명시)하고, 첫 줄에 원 코멘트 링크와 인용(`> ...`)을 붙여 어떤 코멘트에 대한 답인지 표시
 
 **10.2 답글 내용:**
 

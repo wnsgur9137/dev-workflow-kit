@@ -17,7 +17,7 @@ tags: [moc]
 | `/workflow:apply-review` | [[apply-review]] |
 | `/workflow:pipeline` | [[pipeline]] |
 
-- 설정·의존성: [[설정]] · 왜 GitHub MCP인가: [[GitHub MCP]] · 리뷰 기준·출력 형식: [[커스터마이징]]
+- 설정·의존성: [[설정]] · GitHub MCP에서 gh로: [[GitHub MCP]] · 리뷰 기준·출력 형식: [[커스터마이징]]
 
 ## 🛡️ security 플러그인 (설계 단계)
 

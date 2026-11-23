@@ -1,10 +1,18 @@
 ---
+name: create-pr
 description: 현재 브랜치 변경사항을 분석해 PR 템플릿에 맞춰 Draft PR을 생성합니다 (옵션으로 Open 상태 생성).
 argument-hint: "[--open] [base=<branch>]"
-allowed-tools: Bash, Read, Glob, Grep, AskUserQuestion, mcp__github__create_pull_request, mcp__github__get_pull_request, mcp__github__list_pull_requests, mcp__github__get_me
+allowed-tools: Bash, Read, Glob, Grep, AskUserQuestion
 ---
 
 # /create-pr
+
+> **실행 환경** — 이 절차는 Claude Code와 Codex 모두에서 따른다. Claude Code가 아닌 환경(Codex 등)에서는:
+> - 인자: 본문에서 인자 자리가 `$`로 시작하는 자리표시자 그대로 보이면, 사용자가 이 skill을 부른 메시지에서 skill 이름 뒤의 내용을 인자로 쓴다.
+> - 사용자에게 묻기: `AskUserQuestion`이 없으면 같은 질문과 선택지를 번호 목록으로 보여 주고 답을 기다린다. 대화할 수 없는 실행(예: `codex exec`)이면 확인이 필요한 지점에서 멈추고 무엇을 확인해야 하는지 보고한다 — 임의로 기본값을 골라 진행하지 않는다.
+> - GitHub·`git fetch`/`push`는 네트워크가 필요하다. sandbox 때문에 실패하면 권한 상승 승인을 요청한다.
+
+GitHub 작업은 `gh` CLI로 한다(`gh auth status`로 인증 확인). `gh`를 쓸 수 없고 GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 해도 된다.
 
 현재 브랜치의 작업 내용을 파악해 프로젝트 PR 템플릿에 맞춰 PR을 생성한다.
 기본은 **Draft**, 인자에 `--open`이 포함되면 **Open** 상태로 생성한다.
@@ -126,47 +134,35 @@ gh issue list -R <owner>/<repo> --state open --json number,title,milestone
 - PR 마일스톤은 연결 이슈의 마일스톤을 그대로 쓴다. 연결 이슈가 없으면 작업 ID 접두사(`M0`)로 시작하는 열린 마일스톤을 쓴다.
 - 연결 이슈를 못 찾았는데 마일스톤이 있는 저장소면, 이슈 없이 진행할지 사용자에게 확인한다(AskUserQuestion). 이슈·마일스톤을 임의로 새로 만들지 않는다.
 
-### 7. PR 생성 (GitHub MCP 우선)
+### 7. PR 생성 (`gh`)
 
-다음 순서로 시도한다.
-
-#### 7-A. GitHub MCP 사용 (기본 경로)
-
-`mcp__github__create_pull_request` 도구가 사용 가능하면 그것을 사용한다.
-
-- owner / repo는 `git remote get-url origin`에서 추출 (예: `git@github.com:foo/bar.git` 또는 `https://github.com/foo/bar.git`, 또는 `git@<alias>:foo/bar.git` 형태도 지원).
-- `draft`: 인자에 `--open`이 없으면 `true`, 있으면 `false`.
-- `title`, `body`, `head`, `base`는 위에서 결정한 값.
-
-생성 성공 시 PR URL을 굵게 표시해 보고한다.
-
-MCP의 PR 생성 도구는 라벨·마일스톤을 받지 않으므로, 생성 직후 6-1의 라벨과 6-2의 마일스톤을 붙인다(`mcp__github__update_issue`의 `labels`·`milestone`, 없으면 `gh pr edit <번호> --add-label "<라벨>" --milestone "<마일스톤>"`). 붙인 뒤 `gh pr view <번호> --json labels,milestone,closingIssuesReferences`로 확인한다.
-
-#### 7-B. MCP 불가 시 폴백
-
-`mcp__github__create_pull_request`가 도구 목록에 없거나 호출이 실패하면, 사용자에게 다음과 같이 확인한다 (AskUserQuestion):
-
-> "GitHub MCP를 사용할 수 없어. `gh` CLI로 대체 진행할까?"
-
-승인되면 다음을 수행한다.
+1. `gh auth status`로 인증을 확인한다.
+2. `mktemp`로 본문 파일을 만들고 **출력된 경로를 그대로** 기억한다. 셸 변수는 도구 호출 사이에 남지 않으므로 이후 명령에는 그 경로 문자열을 쓴다. 본문은 그 경로에 쓴다(파일 쓰기 도구, 또는 `'EOF'`처럼 인용한 heredoc — 본문에 그 구분자가 있으면 다른 구분자).
+3. PR을 만든다.
 
 ```bash
-gh auth status            # 인증 확인
-gh pr create \
+gh pr create -R "<owner>/<repo>" \
   --base "<base>" \
   --head "<현재 브랜치>" \
   --title "<title>" \
-  --body-file <(cat <<'EOF'
-<본문>
-EOF
-) \
-  --label "<라벨1>" --label "<라벨2>" \   # 6-1에서 고른 라벨
-  [--milestone "<마일스톤>"] \              # 6-2에서 정한 마일스톤(있을 때)
-  [--draft]                # --open 인자가 없을 때만 --draft 추가
+  --body-file "<본문 파일 경로>" \
+  --label "<라벨1>" --label "<라벨2>" \
+  --milestone "<마일스톤>" \
+  --draft
 ```
 
-- 본문은 HEREDOC으로 안전하게 전달한다. 본문에 `'EOF'`가 포함되면 별도 구분자(`'OMC_PR_EOF'` 등)로 바꾼다.
-- `gh`가 미설치/미인증이면 그 상태를 알리고 중단. 절대 임의로 토큰을 만들거나 설정을 바꾸지 않는다.
+4. 본문 파일을 지운다(`rm -f "<본문 파일 경로>"`).
+
+- `--label`: 6-1에서 고른 라벨마다 하나씩. 고른 라벨이 없으면 뺀다.
+- `--milestone`: 6-2에서 정한 마일스톤이 있을 때만 넣는다.
+- `--draft`: `--open` 인자가 없을 때만 넣는다.
+- 줄 끝 `\` 뒤에는 주석을 붙이지 않는다(줄 이어짐이 끊긴다).
+
+- owner / repo는 `git remote get-url origin`에서 추출 (예: `git@github.com:foo/bar.git` 또는 `https://github.com/foo/bar.git`, 또는 `git@<alias>:foo/bar.git` 형태도 지원). 필요하면 `-R <owner>/<repo>`로 지정한다.
+- 연결 이슈는 본문의 `Closes #N`/`Refs #N`으로 연결한다(6-2). 라벨·마일스톤은 `gh pr create` 플래그로 한 번에 붙인다.
+- `gh pr create`는 라벨·마일스톤을 먼저 확인하므로, 이름이 틀렸거나 권한(triage)이 없으면 **PR까지 만들어지지 않는다.** 라벨·마일스톤·권한 오류로 실패하면 `--label`·`--milestone`을 빼고 다시 만든 뒤 `gh pr edit <번호> -R <owner>/<repo> --add-label "<라벨>" --milestone "<마일스톤>"`으로 붙이고, 붙이지 못한 것은 보고에 적는다.
+- `gh`가 미설치/미인증이면, GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 하고 그 사실을 보고한다. 둘 다 없으면 그 상태를 알리고 중단. 절대 임의로 토큰을 만들거나 설정을 바꾸지 않는다.
+- 생성 성공 시 PR URL을 굵게 표시해 보고한다. 생성 후 `gh pr view <번호> -R <owner>/<repo> --json labels,milestone,closingIssuesReferences`로 라벨·마일스톤·연결 이슈를 확인한다.
 
 ### 8. 사후 보고
 
@@ -187,7 +183,7 @@ PR 생성 결과를 다음 형식으로 요약 출력한다.
 ## 안전 규칙
 
 - **사용자 확인 없이는 force push, base 브랜치로의 직접 commit, 다른 브랜치 checkout, 기존 PR 수정/머지/클로즈를 절대 하지 않는다.**
-- 이미 같은 head→base 조합의 Open PR이 있으면 (`mcp__github__list_pull_requests` 또는 `gh pr list --head <branch>`로 확인) 신규 생성하지 않고 기존 PR URL을 안내한다.
+- 이미 같은 head→base 조합의 Open PR이 있으면 (`gh pr list -R <owner>/<repo> --head <branch> --base <base> --state open --json number,url,isDraft,baseRefName`로 확인 — head만으로 찾으면 다른 base로 향하는 PR을 중복으로 오인한다) 신규 생성하지 않고 기존 PR URL을 안내한다.
 - `.env`, `*.key`, `credentials*` 같은 민감 파일이 변경에 포함돼 있으면 본문 생성 전에 경고하고 진행 여부를 확인한다.
 - 본문 생성 시 사용자나 동료의 개인정보 / API 키 / 토큰을 절대 인용하지 않는다.
 

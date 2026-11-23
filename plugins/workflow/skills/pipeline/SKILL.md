@@ -1,10 +1,20 @@
 ---
+name: pipeline
 description: 작업 파악부터 병합까지 14단계 파이프라인을 수행합니다 (이슈 선택 → 설계 확인 → 기획서·디자인 → 개발 → commit → Draft PR → 리뷰 → 반영 → Ready·CI → 병합). --no-issue로 이슈 없이 구현~병합만 할 수 있습니다.
 argument-hint: "[이슈번호 | --no-issue \"작업 설명\"] [--from=N] [--stop-at=N] [--merge=critical|auto|confirm] [--type=<라벨>] [--area=<라벨>] [--base=<branch>] [--branch=<name>] [--no-cleanup] [--post] [--no-codex] [-h|--help]"
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion, Task, Skill, WebFetch, mcp__github__create_pull_request, mcp__github__get_pull_request, mcp__github__list_pull_requests, mcp__github__update_pull_request, mcp__github__merge_pull_request, mcp__github__add_issue_comment, mcp__github__list_workflow_runs, mcp__github__list_workflow_jobs, mcp__github__get_pull_request_files
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion, Task, Skill, WebFetch
 ---
 
 # /pipeline
+
+> **실행 환경** — 이 절차는 Claude Code와 Codex 모두에서 따른다. Claude Code가 아닌 환경(Codex 등)에서는:
+> - 인자: 본문에서 인자 자리가 `$`로 시작하는 자리표시자 그대로 보이면, 사용자가 이 skill을 부른 메시지에서 skill 이름 뒤의 내용을 인자로 쓴다.
+> - 경로: `$`로 시작하는 플러그인 루트 변수가 그대로 보이면, 이 `SKILL.md`가 있는 폴더의 두 단계 위(`../..`)를 플러그인 루트로 쓴다.
+> - 사용자에게 묻기: `AskUserQuestion`이 없으면 같은 질문과 선택지를 번호 목록으로 보여 주고 답을 기다린다. 대화할 수 없는 실행(예: `codex exec`)이면 확인이 필요한 지점에서 멈추고 무엇을 확인해야 하는지 보고한다 — 임의로 기본값을 골라 진행하지 않는다.
+> - 백그라운드 실행(`run_in_background`)이 없으면 명령 실행 도구의 시간 제한을 늘려 끝날 때까지 기다린다. 서브에이전트(`Task`)가 없으면 직접 수행한다.
+> - GitHub·`git fetch`/`push`는 네트워크가 필요하다. sandbox 때문에 실패하면 권한 상승 승인을 요청한다.
+
+GitHub 작업은 `gh` CLI로 한다(`gh auth status`로 인증 확인). `gh`를 쓸 수 없고 GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 해도 된다.
 
 작업 파악부터 병합까지 14단계를 순서대로 수행한다. (옛 `/ship`의 역할을 9~14단계로 흡수했다.)
 
@@ -102,11 +112,11 @@ CI가 Draft를 건너뛰는 설정이면, Ready 전환 후의 모든 push가 CI�
 | 진행 작업 확정 | 이슈에 "진행 중" 라벨 + 이슈 번호가 든 작업 브랜치 |
 | 기획서 병합됨 | base에 기획서 파일 존재 |
 | 개발·커밋 완료 | 워킹트리 clean **그리고** `<base>..HEAD`에 커밋 존재 |
-| PR 생성됨 | `list_pull_requests(head: 현재 브랜치, state: open)` |
+| PR 생성됨 | `gh pr list -R <owner>/<repo> --head <현재 브랜치> --state open --json number,url,isDraft` |
 | 리뷰 완료 | 그 PR에 자체 리뷰 결과 코멘트 존재 (Codex 실행·생략 여부는 그 Summary의 "Codex 교차 리뷰" 섹션) |
 | 반영 완료 | 리뷰 코멘트 이후 반영 내역 코멘트 존재 |
-| Ready 상태 | PR의 `draft` 필드 |
-| CI 결과 | `list_workflow_jobs(run_id)`의 `conclusion` |
+| Ready 상태 | PR의 `isDraft` 필드 (`gh pr view <N> -R <owner>/<repo> --json isDraft`) |
+| CI 결과 | `gh run view <run-id> --json jobs`의 각 job `conclusion` (`gh pr checks <N>` 병행) |
 
 `--from`이 주어지면 그 단계부터, 없으면 판정 결과의 **다음 단계**부터 시작한다. 이미 끝난 단계는 건너뛰고 한 줄로 알린다.
 
@@ -148,8 +158,8 @@ env -u GITHUB_TOKEN GH_TOKEN="$OCTO_ORG_GITHUB_TOKEN" gh issue list --repo <owne
 ```
 
 - 그 밖의 저장소는 기본 `gh` 인증을 쓴다. 저장소의 `CLAUDE.md`·규약 문서에 인증 지시가 있으면 그것을 따른다.
-- `gh auth status`가 실패하면 **중단**하고 `gh auth login`이 필요하다고 알린다.
-- GitHub MCP 도구가 연결되지 않았으면 같은 일을 `gh` CLI로 한다(`gh pr create --draft`, `gh pr ready`, `gh pr merge`, `gh run list`, `gh run view`).
+- `gh auth status`가 실패하면, GitHub MCP 도구가 연결돼 있으면 이후 GitHub 작업을 MCP로 하고 그 사실을 보고에 적는다. 둘 다 없으면 **중단**하고 `gh auth login`이 필요하다고 알린다.
+- PR 생성·Ready 전환·병합·CI 조회는 `gh`로 한다(`gh pr create --draft`, `gh pr ready`, `gh pr merge`, `gh run list`, `gh run view`). 위에서 MCP로 전환했으면 같은 작업을 MCP 도구로 한다.
 - Assignee는 `gh api user -q .login`으로 얻은 현재 인증 사용자다.
 
 ### 규약 문서 찾기
@@ -319,7 +329,7 @@ git add <기획서 경로>
 
 ## 9단계: /commit
 
-`${CLAUDE_PLUGIN_ROOT}/commands/commit.md`의 절차를 따른다. 재구현하지 마라.
+`${CLAUDE_PLUGIN_ROOT}/skills/commit/SKILL.md`의 절차를 따른다. 재구현하지 마라.
 
 - **관심사·계층별로 커밋을 나눈다.** 도메인/데이터/화면/테스트/문서를 한 덩어리로 묶지 않는다.
 - **순수 파일 이동은 독립 커밋**으로 둔다. `git mv`만 하고 내용을 고치지 않는다.
@@ -329,7 +339,7 @@ git add <기획서 경로>
 
 ## 10단계: Draft PR
 
-`${CLAUDE_PLUGIN_ROOT}/commands/create-pr.md`의 절차를 따르되, **PR은 항상 Draft로 생성한다**(`draft: true`, `--open` 금지). Ready 전환은 13단계의 일이다(원칙 A).
+`${CLAUDE_PLUGIN_ROOT}/skills/create-pr/SKILL.md`의 절차를 따르되, **PR은 항상 Draft로 생성한다**(`gh pr create --draft`, `--open` 금지). Ready 전환은 13단계의 일이다(원칙 A).
 
 본문에 다음을 반드시 포함한다.
 
@@ -351,9 +361,9 @@ git add <기획서 경로>
 
 ## 11단계: /pr-review
 
-`${CLAUDE_PLUGIN_ROOT}/commands/pr-review.md`의 절차를 따른다. 대상은 10단계에서 만든 PR 번호. `--no-codex`가 있으면 그대로 넘긴다.
+`${CLAUDE_PLUGIN_ROOT}/skills/pr-review/SKILL.md`의 절차를 따른다. 대상은 10단계에서 만든 PR 번호. `--no-codex`가 있으면 그대로 넘긴다.
 
-- **Codex 교차 리뷰가 함께 돈다**(pr-review Step 3.5·5). Claude 리뷰를 대신하지 않고 더해진다. 사용량 제한·미설치·미로그인·오류면 Codex만 생략하고 진행한다 — **Codex 생략은 정지 조건이 아니다.**
+- **Codex 교차 리뷰가 함께 돈다**(pr-review Step 3.5·5). Claude 리뷰를 대신하지 않고 더해진다. 사용량 제한·미설치·미로그인·오류면 Codex만 생략하고 진행한다 — **Codex 생략은 정지 조건이 아니다.** 이 파이프라인 자체가 Codex에서 실행되는 경우에도 교차 리뷰는 생략된다(`실행 환경이 Codex`, pr-review가 처리) — 이것도 정지 조건이 아니다.
 - 이 파이프라인에서는 **작성자와 리뷰어가 동일**하다. 리뷰 결과와 PR 코멘트에 그 사실을 명시한다. 구조적 사각이 남는다는 점을 숨기지 마라. Codex 리뷰가 실행됐으면 사각이 줄지만, 채택 판단은 여전히 작성자(Claude)가 한다는 점도 함께 적는다. Codex를 생략했으면 그 사유를 적는다.
 - 변경 500줄 초과면 외부 리뷰어를 권고하는 문장을 넣는다.
 - 위임한 리뷰 에이전트가 **빈 응답으로 끝나면 그 결과를 리뷰로 취급하지 마라.** 직접 검토하고, 위임이 실패했다는 사실을 보고한다.
@@ -363,32 +373,32 @@ git add <기획서 경로>
 
 ## 12단계: /apply-review
 
-`${CLAUDE_PLUGIN_ROOT}/commands/apply-review.md`의 절차를 따른다.
+`${CLAUDE_PLUGIN_ROOT}/skills/apply-review/SKILL.md`의 절차를 따른다.
 
 - CRITICAL·WARNING은 반영한다. SUGGESTION은 판단하되 **미반영 사유를 남긴다**. 출처(Claude·Codex)와 관계없이 같은 기준이다.
 - 11단계 코멘트는 작성자 본인 계정으로 달리지만, `dwk:reviewer` 표식이 있어 `/apply-review`가 반영 대상에 넣는다.
 - 반영 후 **게이트를 다시 통과**해야 한다(8단계와 동일한 검증 명령).
 - 반영분을 커밋하고 push한다. **이 시점까지 PR은 Draft다.**
-- 반영 내역을 PR 코멘트로 남긴다. 무엇을 왜 안 고쳤는지도 함께.
+- 반영 내역을 PR 코멘트로 남긴다(`gh pr comment <N> -R <owner>/<repo> --body-file <파일>`, 본문은 `mktemp` 임시 파일에 써서 넘기고 끝나면 지운다). 무엇을 왜 안 고쳤는지도 함께.
 
 리뷰에서 지적한 내용이 **잘못된 것으로 드러나면** 고치지 말고 정정을 공개한다. 자기 리뷰의 오진을 그대로 코드에 반영하면 더 나빠진다.
 
 ## 13단계: Ready 전환 + CI
 
-```
-mcp__github__update_pull_request(draft: false)    # 또는 gh pr ready <N>
+```bash
+gh pr ready <N> -R <owner>/<repo>
 ```
 
-**docs-only이고 CI가 그 경로를 건너뛰면** `list_workflow_runs(branch)`로 실행 0건을 확인하고 14단계로 간다.
+**docs-only이고 CI가 그 경로를 건너뛰면** `gh run list -R <owner>/<repo> --branch <branch> --json databaseId,status,conclusion,headSha,event,workflowName`로 실행 0건을 확인하고 14단계로 간다.
 
 그 밖에는 CI를 기다린다.
 
-- `list_workflow_runs(branch, perPage: 1)`로 run id를 확보한다(응답이 크므로 1회만).
-- 이후에는 `list_workflow_jobs(run_id)`로 확인한다(응답이 작다).
+- `gh run list -R <owner>/<repo> --branch <branch> --commit <PR head SHA> --json databaseId,status,conclusion,headSha,event,workflowName,createdAt`로 **PR head에 대한 실행들**을 받는다. 최신 실행 하나만 보면 CI가 아닌 워크플로(라벨러 등)나 이전 head의 실행을 볼 수 있다. 실행을 워크플로(`workflowName`)별로 묶어 **워크플로마다 가장 최근 실행**이 success여야 통과다. 같은 워크플로에 더 최근 실행이 있는 cancelled 실행은 무시한다(Ready·push 실행이 concurrency로 서로 취소한 경우). `gh pr checks <N> -R <owner>/<repo> --json bucket`으로 교차 확인한다.
+- 이후에는 워크플로마다 가장 최근 실행의 run id(`databaseId`)에 대해 `gh run view <run-id> -R <owner>/<repo> --json jobs`로 확인한다.
 - **백그라운드 대기 후 조회**한다. 짧은 간격 폴링은 비싸다. 첫 확인은 그 저장소의 과거 실행 시간에 맞춰(모르면 10분), 이후 2분 간격.
 - `conclusion: cancelled`면 다른 실행이 concurrency로 취소한 것이다. 같은 브랜치의 더 최신 실행이 있으면 그것을 보고, 없으면 `gh run rerun <run-id>`로 다시 돌린 뒤 기다린다. 취소된 실행의 체크(`fail`)가 PR 체크 목록에 남을 수 있으니 판정은 **최신 실행의 job 결론**으로 한다.
 - 그 밖에 `conclusion: success`가 아니면 **중단**하고 실패한 스텝과 로그를 보고한다.
-- **push와 Ready 전환을 같은 명령 줄로 잇지 않는다.** 같은 초에 겹치면 Ready 실행이 push 전 head로 돌고 새 커밋은 검사받지 못한다. 성공한 실행의 `head_sha`가 PR head와 다르면 `gh pr ready --undo <N> && gh pr ready <N>`으로 현재 head에 다시 돌린다.
+- **push와 Ready 전환을 같은 명령 줄로 잇지 않는다.** 같은 초에 겹치면 Ready 실행이 push 전 head로 돌고 새 커밋은 검사받지 못한다. 성공한 실행의 `headSha`가 PR head와 다르면 `gh pr ready --undo <N> && gh pr ready <N>`으로 현재 head에 다시 돌린다.
 
 ## 14단계: 병합
 
@@ -402,7 +412,7 @@ mcp__github__update_pull_request(draft: false)    # 또는 gh pr ready <N>
 
 확인할 때는 PR 번호·제목, CI 결과, 커밋 수, 변경 규모, 미반영 리뷰 지적, 미수행 검증(실기기 등)을 함께 제시한다.
 
-- 병합 방식은 저장소 관례를 따른다(`git log --merges`로 기존 병합 커밋 형태를 확인).
+- 병합 방식은 저장소 관례를 따른다(`git log --merges`로 기존 병합 커밋 형태를 확인). 병합은 `gh pr merge <N> -R <owner>/<repo> --merge|--squash|--rebase --match-head-commit <sha>` 중 그 관례의 방식으로 한다. `<sha>`는 13단계에서 CI 성공을 확인한 head SHA다 — 확인 뒤(사용자 승인 대기 중 등)에 새 커밋이 push됐으면 병합이 거부되고, 그때는 새 head로 13단계를 다시 한다.
 - **merge conflict가 있으면 병합하지 말고 중단**한다.
 - 병합 후: base 동기화 → 병합된 브랜치 원격·로컬 삭제(`--no-cleanup`이면 생략).
 - 이슈에서 "진행 중" 라벨을 제거한다 (`Closes #N`으로 자동 종료되지 않는 경우).
@@ -429,7 +439,7 @@ mcp__github__update_pull_request(draft: false)    # 또는 gh pr ready <N>
 - 커밋      : N개
 - 게이트    : 통과 | 게이트 없음(경고)
 - 리뷰      : CRITICAL n / WARNING n / SUGGESTION n → 반영 n건
-- Codex     : 지적 N → 채택 a (Claude와 겹침 m) · 기각 r · 기존 중복 d · 옵션 제외 f | 생략(--no-codex · 미설치 · 미로그인 · 변경 없음 · 사용량 제한 · 시간 초과 · 오류)
+- Codex     : 지적 N → 채택 a (Claude와 겹침 m) · 기각 r · 기존 중복 d · 옵션 제외 f | 생략(--no-codex · 실행 환경이 Codex · 미설치 · 미로그인 · 변경 없음 · 사용량 제한 · 시간 초과 · 오류)
 - CI        : success (M분 SS초) | 스킵(docs-only) | 미실행
 - PR        : #NN <URL> (병합됨 | Ready | Draft)
 - 병합      : <sha> | 미수행(사유)

@@ -42,7 +42,7 @@ tags: [workflow, command]
 6. 본문 작성: 커밋 prefix(`feat:`/`fix:`/`refactor:`/`update:`) 기반 분류, HTML 주석 유지, 데모 자리 비움
    - **라벨**: 저장소에 이미 있는 라벨 중 커밋 prefix·diff에 맞는 것을 모두 고른다 (새 라벨은 만들지 않음, 맞는 라벨이 없으면 생략하고 보고)
    - **연결 이슈·마일스톤**: 브랜치의 이슈 번호·작업 ID로 연결 이슈를 찾아 `Closes #N`, PR 마일스톤은 연결 이슈의 것을 사용 (임의 생성 금지)
-7. PR 생성 (`mcp__github__create_pull_request` 우선, 실패 시 사용자 승인 후 `gh pr create` 폴백). MCP는 라벨·마일스톤을 받지 않으므로 생성 직후 붙이고 확인
+7. PR 생성 (`gh pr create --body-file`, 라벨·마일스톤도 같은 명령의 플래그로 붙이고 생성 후 확인. 라벨·마일스톤·권한 오류로 실패하면 그것을 빼고 만든 뒤 `gh pr edit`으로 붙임. `gh`를 쓸 수 없고 GitHub MCP가 연결돼 있으면 MCP로 대신)
 8. URL / Draft·Open 상태 / base ← head / 커밋 수 / 변경 파일 / 라벨 / 마일스톤·연결 이슈 / 다음 단계 보고
 
 ## Base 브랜치 자동 추론
@@ -70,7 +70,7 @@ tags: [workflow, command]
 ## 안전 규칙
 
 - 현재 브랜치가 `main` / `master` / `develop` 같은 보호 브랜치면 PR 생성을 중단
-- 동일 head→base 조합으로 이미 Open된 PR이 있으면 (`mcp__github__list_pull_requests` 또는 `gh pr list --head`) 신규 생성 대신 기존 URL을 안내
+- 동일 head→base 조합으로 이미 Open된 PR이 있으면 (`gh pr list --head`) 신규 생성 대신 기존 URL을 안내
 - `.env`, `*.key`, `credentials*` 등 민감 파일이 변경에 포함되면 사용자에게 경고 후 진행 여부 확인
 - force push, base 브랜치 직접 commit, 다른 브랜치 checkout, 기존 PR 수정/머지/클로즈는 사용자 확인 없이 절대 수행하지 않음
 - 본문에 사용자/동료의 개인정보 · API 키 · 토큰을 인용하지 않음

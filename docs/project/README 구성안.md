@@ -42,7 +42,7 @@ Claude Code에서 쓰는 개발 워크플로·보안 점검 플러그인 모음.
 /plugin install security@dev-workflow-kit
 
 ## 요구사항
-- workflow: GitHub MCP (examples/mcp.json.example), gh CLI(폴백)
+- workflow: gh CLI (GitHub MCP는 선택, examples/mcp.json.example)
 - security: Docker, 최초 1회 update.sh
 
 ## 커맨드 요약
@@ -63,7 +63,7 @@ docs/는 Obsidian vault. docs/00 Home/Home.md에서 시작
 ## 기존 README에서 옮길 내용
 | 기존 섹션 | 이동 위치 |
 |---|---|
-| Why GitHub MCP? | `docs/workflow/GitHub MCP.md` |
+| GitHub MCP에서 gh로 | `docs/workflow/GitHub MCP.md` |
 | /commit ~ /ship 상세 | `docs/workflow/<커맨드>.md` |
 | 의존성, 설정 | README 요약 + `docs/workflow/설정.md` |
 | 커스터마이징 | README 요약 + `docs/workflow/커스터마이징.md` |

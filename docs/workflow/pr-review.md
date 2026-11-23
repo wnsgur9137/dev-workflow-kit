@@ -38,7 +38,7 @@ PR의 변경 사항을 분석하고, GitHub에 인라인 리뷰 코멘트를 자
 ## 리뷰 프로세스
 
 1. PR URL 파싱 + 상태 확인 (draft/merged/CI)
-2. GitHub MCP를 통해 PR 정보 수집 (기존 리뷰 중복 방지, 재리뷰 감지)
+2. `gh` CLI로 PR 정보 수집 (기존 리뷰 중복 방지, 재리뷰 감지)
 3. 보안 스캔 (Secret/Code/Dependabot alerts)
 4. 레포지토리 컨텍스트 분석 (로컬 일치 시 자동, 외부 레포 시 사용자 선택)
 5. 변경 파일 확장자로 PR 타입 감지 (iOS/Android/FrontEnd/BackEnd)
@@ -78,7 +78,7 @@ Claude 리뷰에 **Codex 리뷰를 더합니다.** Claude 리뷰를 대신하지
 
 | 경우 | 처리 |
 |---|---|
-| `--no-codex` · 미설치 · 미로그인(API 키 환경 변수도 없음) · 준비 실패 · 리뷰할 변경 없음 | 시작하지 않음 |
+| `--no-codex` · 실행 환경이 Codex(Codex가 Codex를 부르면 교차 리뷰가 아님) · 미설치 · 미로그인(API 키 환경 변수도 없음) · 준비 실패 · 리뷰할 변경 없음 | 시작하지 않음 |
 | 사용량 제한 | 재시도하지 않고 생략, 재시도 가능 시각이 있으면 기록 |
 | 오류(종료 코드 ≠ 0, 결과 없음·JSON 깨짐) | 1회 재시도 후 생략 |
 | 15분 초과 | 명령에 걸린 시간 제한으로 끝나고 생략 (재시도 없음) |
@@ -99,7 +99,7 @@ Claude 리뷰에 **Codex 리뷰를 더합니다.** Claude 리뷰를 대신하지
 
 | 조건 | 판정 |
 |------|------|
-| Secret alert 발견 | REQUEST_CHANGES (무조건) |
+| PR 변경 파일·본문의 Secret alert | REQUEST_CHANGES (Draft·자기 PR이면 COMMENT) |
 | CRITICAL >= 1 | REQUEST_CHANGES |
 | WARNING >= 3 (normal) / >= 2 (strict) | REQUEST_CHANGES |
 | WARNING 1~2 | COMMENT |

@@ -25,7 +25,7 @@ Example: /pr-review https://github.com/owner/repo/pull/123
 
 -- Review Process --
 1. PR URL 파싱 + 상태 확인 (draft/merged/CI)
-2. GitHub MCP를 통해 PR 정보를 수집합니다.
+2. `gh` CLI로 PR 정보를 수집합니다.
 3. 보안 스캔 (Secret/Code/Dependabot alerts)
 4. 변경 파일 확장자로 PR 타입을 감지합니다.
    - iOS (.swift, .m, .xib, .pbxproj ...)
@@ -149,7 +149,7 @@ guard let value = optionalValue else { return }
 ### Verdict Matrix
 | 조건 | 판정 |
 |------|------|
-| 🔒 Secret alert 발견 | REQUEST_CHANGES (무조건) |
+| 🔒 PR 변경 파일·본문의 Secret alert | REQUEST_CHANGES (Draft·자기 PR이면 COMMENT) |
 | 🚨 CRITICAL >= 1 | REQUEST_CHANGES |
 | ⚠️ WARNING >= 3 (normal) / >= 2 (strict) | REQUEST_CHANGES |
 | ⚠️ WARNING 1~2 | COMMENT |
@@ -175,7 +175,7 @@ guard let value = optionalValue else { return }
 - {observations: squash recommendation, WIP commits, formatting-only commits}
 
 ### Codex 교차 리뷰
-- 결과: 실행됨 (범위: {range} | diff만 — 저장소 원본 없음) | 생략({--no-codex | 미설치 | 미로그인 | 변경 없음 | 사용량 제한, {재시도 가능 시각} | 시간 초과 | 오류: {요약}})
+- 결과: 실행됨 (범위: {range} | diff만 — 저장소 원본 없음) | 생략({--no-codex | 실행 환경이 Codex | 미설치 | 미로그인 | 변경 없음 | 사용량 제한, {재시도 가능 시각} | 시간 초과 | 오류: {요약}})
 - 범위 변경: {증분 시작점이 조상이 아니거나 compare 실패로 전체 범위를 봄 — 있으면}
 - 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d} · 옵션 제외 {f}
 - 기각: {file:line} — {이유} (있으면)
