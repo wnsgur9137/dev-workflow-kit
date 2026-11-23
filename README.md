@@ -16,6 +16,7 @@ Claude Code에서 쓰는 개발 워크플로 플러그인 모음입니다. 커�
 - [플러그인](#플러그인)
 - [설치](#설치)
   - [이전 설치 방식(복사)에서 옮겨오기](#이전-설치-방식복사에서-옮겨오기)
+  - [Codex에서 쓰기](#codex에서-쓰기)
 - [요구사항](#요구사항)
   - [Docker 런타임](#docker-런타임)
 - [커맨드](#커맨드)
@@ -64,6 +65,32 @@ mv ~/.claude/templates/{review,review-criteria,apply-review} ~/.claude/backup/te
 ```
 
 리뷰 이력(`~/.claude/review-history/`)과 외부 레포 캐시(`~/.claude/repo-cache/`)는 플러그인과 무관하므로 그대로 두면 됩니다.
+
+### Codex에서 쓰기
+
+[Codex CLI](https://github.com/openai/codex)도 이 마켓플레이스를 그대로 설치할 수 있습니다. Codex는 플러그인의 `skills/`만 읽습니다.
+
+| 플러그인 | Codex 지원 |
+|---|---|
+| `security` | ✅ `$security:scan-code <경로>` 형식으로 부릅니다 |
+| `workflow` | ❌ 아직 지원하지 않습니다 (Claude Code 전용 `commands/` 형식) |
+
+```bash
+codex plugin marketplace add wnsgur9137/dev-workflow-kit
+codex plugin add security@dev-workflow-kit
+```
+
+- 업데이트: `codex plugin marketplace upgrade dev-workflow-kit` 후 `codex plugin add security@dev-workflow-kit`
+- **sandbox 권한**: security는 Docker로 도구를 돌리고 `~/.local/share/dev-workflow-kit/security/reports/`에 리포트를 씁니다. Codex 기본 sandbox(workspace-write)는 둘 다 막아서, 스캔할 때 Codex가 권한 상승 승인을 요청합니다.
+  - **권장**: 설정 파일은 고치지 않습니다. 승인 창에서 **스캔 스크립트(`…/scripts/scan-code.sh` 등)로 시작하는 명령을 계속 허용**하는 선택지를 고르세요. 그 스크립트만 sandbox 밖에서 돌고, 다음부터는 묻지 않습니다. 스크립트는 정해진 도구 컨테이너만 네트워크를 끊고 실행합니다.
+  - **비권장 — sandbox 설정을 넓히는 방법**: 아래 설정으로도 승인 없이 동작합니다(실측한 최소 설정). 다만 `network_access = true`는 Codex가 실행하는 **모든 명령**에 네트워크와 Docker 데몬 접근을 열어 줍니다. Docker 데몬에 접근할 수 있으면 호스트 폴더를 마운트한 컨테이너를 띄울 수 있으므로 **sandbox를 사실상 끄는 것**과 같습니다. 이 세션에서 신뢰할 수 없는 코드나 문서를 다룬다면 쓰지 마세요.
+
+    ```toml
+    [sandbox_workspace_write]
+    network_access = true    # Docker 소켓 연결에 필요 (위 경고 참고)
+    writable_roots = ["/Users/<사용자>/.local/share/dev-workflow-kit/security/reports"]   # 절대 경로. 리포트 폴더만. DWK_SECURITY_DATA_DIR을 바꿨으면 <그 경로>/reports
+    ```
+- Claude Code의 [권한 설정](#권한-설정)(`allowed-tools`, `settings.json`)은 Codex에 적용되지 않습니다.
 
 ---
 
