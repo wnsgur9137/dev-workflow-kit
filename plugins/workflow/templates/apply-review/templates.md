@@ -269,6 +269,14 @@ PR #{original_pr_number} 리뷰 피드백 반영
       "category": "CODE_CHANGE",
       "verdict": "AGREE",
       "summary": "null check 추가"
+    },
+    {
+      "comment_id": "review-2468#1",
+      "file": "src/api/client.ts",
+      "line": 10,
+      "category": "CODE_CHANGE",
+      "verdict": "AGREE",
+      "summary": "리뷰 본문 '인라인 불가' 지적 반영"
     }
   ],
   "skipped_comments": [
@@ -291,3 +299,5 @@ PR #{original_pr_number} 리뷰 피드백 반영
   ]
 }
 ```
+
+`comment_id`는 인라인 코멘트면 숫자 ID, 리뷰 본문의 "인라인 불가" 지적이면 `review-{리뷰 id}#{item 번호}` 문자열입니다. 문자열을 숫자로 바꾸지 않습니다.

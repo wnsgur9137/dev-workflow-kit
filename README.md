@@ -75,6 +75,7 @@ mv ~/.claude/templates/{review,review-criteria,apply-review} ~/.claude/backup/te
 | **`GITHUB_PERSONAL_ACCESS_TOKEN`** | GitHub MCP 사용 시 | 환경 변수로만 주입 |
 | **Docker 호환 런타임** | GitHub MCP 사용 시, `security` 플러그인 전체 | GitHub MCP 서버와 보안 도구를 모두 컨테이너로 실행. 아래 [Docker 런타임](#docker-런타임) 참고 |
 | **`gh` CLI** | `apply-review` 답글, `create-pr` 폴백, `pipeline` | `gh auth login` 필요 |
+| **Codex CLI** (선택) | `pr-review` (`pipeline` 11단계 포함) | 있으면 Claude 리뷰에 Codex 교차 리뷰를 더합니다. `codex login` 필요. 없거나 사용량 제한이면 생략. **PR 코드·diff가 OpenAI로 전송**되므로 원치 않으면 `--no-codex` ([상세](docs/workflow/pr-review.md#codex-교차-리뷰)) |
 
 ### Docker 런타임
 
@@ -109,7 +110,7 @@ Podman은 아직 지원하지 않습니다. 런타임 비교·리소스·Apple S
 |---|---|---|
 | `/workflow:commit [옵션]` | 변경사항과 기존 커밋 컨벤션을 분석해 Conventional Commits(+gitmoji) 커밋 생성. push는 하지 않음 | [commit](docs/workflow/commit.md) |
 | `/workflow:create-pr [--open] [base=<branch>]` | 변경 내용을 분석해 PR 템플릿에 맞춰 Draft PR 생성, 라벨·연결 이슈·마일스톤 지정 | [create-pr](docs/workflow/create-pr.md) |
-| `/workflow:pr-review <PR_URL>` | 플랫폼별 기준으로 코드 리뷰, 확인 후 GitHub 인라인 코멘트 게시 | [pr-review](docs/workflow/pr-review.md) |
+| `/workflow:pr-review <PR_URL>` | 플랫폼별 기준으로 코드 리뷰(+ Codex 교차 리뷰), 확인 후 GitHub 인라인 코멘트 게시 | [pr-review](docs/workflow/pr-review.md) |
 | `/workflow:apply-review <PR>` | 리뷰 코멘트를 코드에 반영하고 코멘트 스레드마다 답글 | [apply-review](docs/workflow/apply-review.md) |
 | `/workflow:pipeline [이슈번호]` | 작업 파악부터 병합까지 14단계 (`--no-issue`로 구현~병합만, 이전 `/ship`) | [pipeline](docs/workflow/pipeline.md) |
 
