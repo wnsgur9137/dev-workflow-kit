@@ -154,7 +154,8 @@ You are a senior developer applying PR review feedback. Read the review comments
 - 리뷰 목록 조회: `gh api repos/{owner}/{repo}/pulls/{number}/reviews --paginate --slurp` (`id`, `user.login`, `body`, `submitted_at`, `commit_id`)
 - 인라인 코멘트 조회: `gh api repos/{owner}/{repo}/pulls/{number}/comments --paginate --slurp` (`id`, `in_reply_to_id`, `user.login`, `body`, `path`, `line`, `original_line`, `subject_type`, `pull_request_review_id`, `diff_hunk`, `created_at`)
   - `--paginate`만 쓰면 페이지마다 JSON 배열이 따로 출력되므로 `--slurp`로 한 배열로 받습니다
-  - `line`이 `null`이면 파일 단위 코멘트(`subject_type: "file"`, `/pr-review`가 diff 밖 지적에 씀)이거나 코드가 바뀌어 위치를 잃은(outdated) 코멘트입니다. 위치는 `original_line`·`diff_hunk`로 찾습니다
+  - `subject_type`이 `"file"`이면 파일 단위 코멘트입니다(`/pr-review`가 diff 밖 지적에 씀). 이때 `line`은 의미 없는 값(`1`)이 오므로 줄 위치로 쓰지 않습니다(실측)
+  - `subject_type`이 `"line"`인데 `line`이 `null`이면 코드가 바뀌어 위치를 잃은(outdated) 코멘트입니다. 위치는 `original_line`·`diff_hunk`로 찾습니다
 
 **3.2 코멘트 필터링:**
 
