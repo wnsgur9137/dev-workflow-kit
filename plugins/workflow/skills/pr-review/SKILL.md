@@ -27,9 +27,9 @@ Before starting, ALWAYS display the usage guide from `${CLAUDE_PLUGIN_ROOT}/temp
 1. `--help`가 포함되어 있거나 인자가 비어 있으면 → 도움말 출력 후 종료 (아래 **Help Mode** 참조)
 2. `https://github.com/{owner}/{repo}/pull/{number}` 패턴이면 URL에서 추출
 3. URL이 없고 숫자만인 토큰(`32`, `#32`)이 하나 있으면 PR 번호로 보고, `owner`/`repo`를 현재 폴더의 저장소에서 정합니다. 숫자 토큰이 둘 이상이면 사용법을 출력하고 중단합니다. URL과 숫자가 함께 있으면 URL을 씁니다.
-   1. **후보 확인** — `git remote -v`의 각 remote URL에서 호스트와 `owner/repo`를 뽑습니다(`git@<호스트>:owner/repo(.git)`, `ssh://git@<호스트>/owner/repo(.git)`, `https://<호스트>/owner/repo(.git)`). 호스트가 `github.com`이거나, `~/.ssh/config` 별칭(예: `github.com-<계정>`)이라 `ssh -G <호스트>`의 `hostname` 줄이 `github.com`이면 GitHub remote 후보로 셉니다(`ssh -G`는 설정만 읽고 접속하지 않습니다). 계정을 여러 개 쓰는 구성은 별칭이 흔하므로 호스트 문자열만 비교하지 않습니다.
-      - git 저장소가 아니거나 GitHub remote 후보가 없으면 "현재 폴더에서 GitHub 저장소를 찾지 못했습니다. PR URL 전체를 입력하세요." 출력 후 중단
-      - 후보 중 서로 다른 `owner/repo`가 둘 이상이고(fork 구성 등) `git config --get-regexp '^remote\..*\.gh-resolved$'`가 비어 있으면(`gh repo set-default`로 정한 적 없음. 이 명령은 설정이 없으면 출력 없이 종료 코드 1로 끝나는데, 오류가 아니라 "설정 없음"입니다) **`AskUserQuestion`으로 어느 저장소의 PR인지 고르게** 하고 그 저장소를 씁니다. `gh`는 이때 실패하지 않고 remote 이름 순서(`upstream` > `github` > `origin`)로 조용히 하나를 고르므로, 그대로 쓰면 다른 저장소의 PR을 볼 수 있습니다
+   1. **후보 확인** — `git remote -v`의 각 remote URL에서 호스트와 `owner/repo`를 뽑습니다(`git@<호스트>:owner/repo(.git)`, `ssh://git@<호스트>/owner/repo(.git)`, `https://<호스트>/owner/repo(.git)`). 호스트가 `github.com`이거나, ssh 형식 remote의 호스트가 `~/.ssh/config` 별칭(예: `github.com-<계정>`)이라 `ssh -G <호스트>`의 `hostname` 줄이 `github.com`·`ssh.github.com`이면 GitHub remote 후보로 셉니다(`ssh -G`는 설정만 읽고 접속하지 않습니다). 계정을 여러 개 쓰는 구성은 별칭이 흔하므로 호스트 문자열만 비교하지 않습니다. `ssh -G`를 실행할 수 없으면(ssh 없음·거부) 그 ssh remote는 **판정 불가**로 둡니다. `owner/repo`는 대소문자를 무시하고 `.git`을 뗀 뒤 비교합니다.
+      - git 저장소가 아니거나 GitHub remote 후보도 판정 불가 remote도 없으면 "현재 폴더에서 GitHub 저장소를 찾지 못했습니다. PR URL 전체를 입력하세요." 출력 후 중단
+      - 후보와 판정 불가 remote를 합쳐 서로 다른 `owner/repo`가 둘 이상이고(fork 구성 등) `git config --get-regexp '^remote\..*\.gh-resolved$'`가 비어 있으면(`gh repo set-default`로 정한 적 없음. 이 명령은 설정이 없으면 출력 없이 종료 코드 1로 끝나는데, 오류가 아니라 "설정 없음"입니다) **`AskUserQuestion`으로 어느 저장소의 PR인지 고르게** 하고 그 저장소를 씁니다. `gh`는 이때 실패하지 않고 remote 이름 순서(`upstream` > `github` > `origin`)로 조용히 하나를 고르므로, 그대로 쓰면 다른 저장소의 PR을 볼 수 있습니다
    2. **저장소 결정** — 위에서 고르지 않았으면 `gh`가 정한 저장소를 씁니다(`origin`이라고 가정하지 않습니다):
       ```bash
       gh repo view --json nameWithOwner,url -q '.nameWithOwner + " " + .url'
