@@ -12,13 +12,16 @@ PR의 변경 사항을 분석하고, GitHub에 인라인 리뷰 코멘트를 자
 ## 사용법
 
 ```
-/pr-review <PR_URL> [options]
+/pr-review <PR_URL | PR_NUMBER> [options]
 ```
+
+PR 번호(`32`, `#32`)만 넘기면 현재 폴더의 GitHub 저장소(`gh repo view`가 고르는 저장소, fork면 `gh repo set-default`로 정한 쪽)의 PR로 봅니다. 찾지 못하면 URL 전체를 입력하라고 안내하고 멈춥니다.
 
 ## 예시
 
 ```
 /pr-review https://github.com/owner/repo/pull/123
+/pr-review 123
 /pr-review https://github.com/owner/repo/pull/123 --mode=strict
 /pr-review https://github.com/owner/repo/pull/123 --focus=security,performance
 ```
@@ -37,17 +40,28 @@ PR의 변경 사항을 분석하고, GitHub에 인라인 리뷰 코멘트를 자
 
 ## 리뷰 프로세스
 
-1. PR URL 파싱 + 상태 확인 (draft/merged/CI)
+1. PR URL·번호 파싱 + 상태 확인 (draft/merged/CI)
 2. `gh` CLI로 PR 정보 수집 (기존 리뷰 중복 방지, 재리뷰 감지)
-3. 보안 스캔 (Secret/Code/Dependabot alerts)
+3. 보안 스캔 (Secret/Code/Dependabot alerts를 동시에 조회)
 4. 레포지토리 컨텍스트 분석 (로컬 일치 시 자동, 외부 레포 시 사용자 선택)
 5. 변경 파일 확장자로 PR 타입 감지 (iOS/Android/FrontEnd/BackEnd)
 6. Codex 교차 리뷰를 백그라운드로 시작
 7. 타입별 우선순위에 따라 코드 리뷰 (Claude)
-8. Codex 결과를 검증해 Claude 리뷰와 합침
-9. CLI에 리뷰 결과 출력 → 사용자가 게시할 코멘트를 선택
-10. GitHub PR에 선택된 인라인 코멘트 게시
-11. 리뷰 결과 기록
+8. 보안 민감 변경이 있으면 [보안 관점 패스](#보안-관점-패스)
+9. Codex 결과를 검증해 Claude 리뷰와 합침
+10. CLI에 리뷰 결과 출력 → 사용자가 게시할 코멘트를 선택
+11. GitHub PR에 선택된 인라인 코멘트 게시
+12. 리뷰 결과 기록
+
+## 보안 관점 패스
+
+플랫폼 기준 리뷰(7번)는 전체를 훑느라 보안 문제를 얕게 볼 수 있어, 보안에 민감한 변경이 있으면 **그 파일만 보안 관점으로 한 번 더** 봅니다.
+
+- **실행 조건**: 경로·파일 이름(`auth`, `token`, `crypto`, `payment` 등), diff 내용(비밀번호·키 처리, 암호화, SQL·셸 문자열 조립, 역직렬화, 쿠키·CORS·TLS 설정 등), 플랫폼 설정(`Info.plist` ATS, `AndroidManifest.xml` exported 등), 보안 경고, `--focus=security` 중 하나라도 해당하면 실행합니다. `--skip=security`로 끕니다.
+- **점검 항목**: 주입, 인증·인가, 시크릿, 데이터 노출, 암호, 입력 검증, 플랫폼별 항목(iOS·Android·Web·Backend)
+- **판정**: 실제 보안 문제만 지적합니다. 악용 가능하면 CRITICAL, 추가 조건이 필요한 약점이면 WARNING. 앞선 리뷰와 겹치면 새로 만들지 않고 보강합니다.
+- 대상 diff가 크면 서브에이전트에 맡길 수 있습니다. 앞선 리뷰의 결론은 넘기지 않고, 빈 응답이면 직접 수행합니다.
+- 결과는 Summary의 `Security Pass` 섹션에 실행 여부와 근거로 남습니다.
 
 ## Codex 교차 리뷰
 

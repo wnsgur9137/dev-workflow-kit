@@ -9,8 +9,9 @@
 ```
 === PR Review Command ===
 
-Usage: /pr-review <PR_URL> [options]
+Usage: /pr-review <PR_URL | PR_NUMBER> [options]
 Example: /pr-review https://github.com/owner/repo/pull/123
+         /pr-review 123                (현재 폴더의 GitHub 저장소 기준)
          /pr-review https://github.com/owner/repo/pull/123 --mode=strict
          /pr-review https://github.com/owner/repo/pull/123 --focus=security --skip=nitpick
 
@@ -24,9 +25,9 @@ Example: /pr-review https://github.com/owner/repo/pull/123
   --help           도움말을 표시합니다
 
 -- Review Process --
-1. PR URL 파싱 + 상태 확인 (draft/merged/CI)
+1. PR URL·번호 파싱 + 상태 확인 (draft/merged/CI)
 2. `gh` CLI로 PR 정보를 수집합니다.
-3. 보안 스캔 (Secret/Code/Dependabot alerts)
+3. 보안 스캔 (Secret/Code/Dependabot alerts, 동시 조회)
 4. 변경 파일 확장자로 PR 타입을 감지합니다.
    - iOS (.swift, .m, .xib, .pbxproj ...)
    - Android (.kt, .java, build.gradle ...)
@@ -34,9 +35,10 @@ Example: /pr-review https://github.com/owner/repo/pull/123
    - BackEnd (.go, .py, .rs, Dockerfile ...)
 5. Codex 교차 리뷰를 백그라운드로 시작합니다. (PR 코드·diff가 OpenAI로 전송됩니다)
 6. 타입별 우선순위에 따라 코드를 리뷰합니다.
-7. Codex 결과를 검증해 합칩니다. (사용량 제한·미설치 등이면 생략)
-8. GitHub PR에 라인별 인라인 코멘트를 생성합니다.
-9. 리뷰 결과를 기록합니다.
+7. 보안 민감 변경이 있으면 보안 관점 패스를 한 번 더 합니다.
+8. Codex 결과를 검증해 합칩니다. (사용량 제한·미설치 등이면 생략)
+9. GitHub PR에 라인별 인라인 코멘트를 생성합니다.
+10. 리뷰 결과를 기록합니다.
 
 -- Severity Levels --
   🚨 CRITICAL  : 머지 전 반드시 수정 (버그, 보안, 데이터 손실)
@@ -163,6 +165,10 @@ guard let value = optionalValue else { return }
 - Secret Scanning: {count} alerts
 - Code Scanning: {count} alerts ({critical} critical, {high} high)
 - Dependabot: {count} alerts (CVSS {max_score})
+
+### Security Pass
+- 결과: 실행됨 (대상 파일 {count}, 근거: {경로 | diff 내용 | 플랫폼 설정 | 보안 민감 영역 | 보안 경고 | --focus=security}) | 생략({해당 변경 없음 | --skip | --focus})
+- 지적: 🚨 {critical} · ⚠️ {warning} (Step 4 지적 보강 {m}건 포함)
 
 ### Key Findings
 - {bullet points of most important findings}
