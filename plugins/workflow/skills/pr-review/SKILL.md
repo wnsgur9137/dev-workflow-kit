@@ -27,16 +27,16 @@ Before starting, ALWAYS display the usage guide from `${CLAUDE_PLUGIN_ROOT}/temp
 1. `--help`가 포함되어 있거나 인자가 비어 있으면 → 도움말 출력 후 종료 (아래 **Help Mode** 참조)
 2. `https://github.com/{owner}/{repo}/pull/{number}` 패턴이면 URL에서 추출
 3. URL이 없고 숫자만인 토큰(`32`, `#32`)이 하나 있으면 PR 번호로 보고, `owner`/`repo`를 현재 폴더의 저장소에서 정합니다. 숫자 토큰이 둘 이상이면 사용법을 출력하고 중단합니다. URL과 숫자가 함께 있으면 URL을 씁니다.
-   1. **후보 확인** — `git remote -v`에서 GitHub 저장소(`github.com`) remote를 모읍니다.
-      - git 저장소가 아니거나 GitHub remote가 없으면 "현재 폴더에서 GitHub 저장소를 찾지 못했습니다. PR URL 전체를 입력하세요." 출력 후 중단
-      - 서로 다른 저장소가 둘 이상이고(fork 구성 등) `git config --get-regexp '^remote\..*\.gh-resolved$'`가 비어 있으면(`gh repo set-default`로 정한 적 없음) **`AskUserQuestion`으로 어느 저장소의 PR인지 고르게** 하고 그 저장소를 씁니다. `gh`는 이때 실패하지 않고 remote 이름 순서(`upstream` > `github` > `origin`)로 조용히 하나를 고르므로, 그대로 쓰면 다른 저장소의 PR을 볼 수 있습니다
+   1. **후보 확인** — `git remote -v`의 각 remote URL에서 호스트와 `owner/repo`를 뽑습니다(`git@<호스트>:owner/repo(.git)`, `ssh://git@<호스트>/owner/repo(.git)`, `https://<호스트>/owner/repo(.git)`). 호스트가 `github.com`이거나, `~/.ssh/config` 별칭(예: `github.com-<계정>`)이라 `ssh -G <호스트>`의 `hostname` 줄이 `github.com`이면 GitHub remote 후보로 셉니다(`ssh -G`는 설정만 읽고 접속하지 않습니다). 계정을 여러 개 쓰는 구성은 별칭이 흔하므로 호스트 문자열만 비교하지 않습니다.
+      - git 저장소가 아니거나 GitHub remote 후보가 없으면 "현재 폴더에서 GitHub 저장소를 찾지 못했습니다. PR URL 전체를 입력하세요." 출력 후 중단
+      - 후보 중 서로 다른 `owner/repo`가 둘 이상이고(fork 구성 등) `git config --get-regexp '^remote\..*\.gh-resolved$'`가 비어 있으면(`gh repo set-default`로 정한 적 없음. 이 명령은 설정이 없으면 출력 없이 종료 코드 1로 끝나는데, 오류가 아니라 "설정 없음"입니다) **`AskUserQuestion`으로 어느 저장소의 PR인지 고르게** 하고 그 저장소를 씁니다. `gh`는 이때 실패하지 않고 remote 이름 순서(`upstream` > `github` > `origin`)로 조용히 하나를 고르므로, 그대로 쓰면 다른 저장소의 PR을 볼 수 있습니다
    2. **저장소 결정** — 위에서 고르지 않았으면 `gh`가 정한 저장소를 씁니다(`origin`이라고 가정하지 않습니다):
       ```bash
       gh repo view --json nameWithOwner,url -q '.nameWithOwner + " " + .url'
       ```
       - `url`의 호스트가 `github.com`이 아니면(GitHub Enterprise) "github.com 저장소만 번호로 받습니다. PR URL 전체를 입력하세요." 출력 후 중단
-      - 명령이 실패하면 stderr로 원인을 나눕니다: 인증 오류(`gh auth login`·`HTTP 401`)는 Error Handling Policy의 인증 문구, 연결 실패는 네트워크 문구(sandbox면 권한 상승 요청)로 중단합니다
-      - `gh`를 쓸 수 없고 GitHub MCP만 있으면 1에서 고른(또는 하나뿐인) remote의 URL(`git@github.com:owner/repo.git`, `https://github.com/owner/repo(.git)`)에서 `owner`/`repo`를 잘라 씁니다
+      - 명령이 실패하면 stderr로 원인을 나눕니다: 인증 오류(`gh auth login`·`HTTP 401`)는 Error Handling Policy의 인증 문구, 연결 실패는 네트워크 문구(sandbox면 권한 상승 요청)로 중단합니다. 그 밖의 실패(`HTTP 404` 등 저장소 삭제·이름 변경·접근 불가, `none of the git remotes … known GitHub host`)는 stderr 첫 줄을 함께 보여 주고 1의 "찾지 못했습니다" 문구로 중단합니다
+      - `gh`를 쓸 수 없고 GitHub MCP만 있으면 1에서 고른(또는 하나뿐인) 후보의 `owner/repo`를 그대로 씁니다(별칭 호스트 `git@github.com-<계정>:owner/repo.git`도 같은 방식)
    3. 대상 URL(`https://github.com/{owner}/{repo}/pull/{number}`)을 한 번 출력해 사용자가 대상을 확인할 수 있게 합니다
 4. `--`로 시작하는 토큰을 옵션으로 파싱
 5. 인식 불가 옵션은 무시하되 "알 수 없는 옵션: {option}" 경고 출력
@@ -181,7 +181,7 @@ You are a senior code reviewer. Review the given GitHub Pull Request and provide
 Extract `owner`, `repo`, and `pr_number` from the PR URL.
 The URL format is: `https://github.com/{owner}/{repo}/pull/{pr_number}`
 
-For a bare number, `pr_number` is the argument and `owner`/`repo` come from Step 0 (`gh repo view`). The rest of the review is the same as for a URL — Step 2.5 still compares remotes and finds the matching remote name.
+For a bare number, `pr_number` is the argument and `owner`/`repo` come from the repository decided in Step 0 (user choice, `gh repo view`, or the remote URL). The rest of the review is the same as for a URL — Step 2.5 still compares remotes and finds the matching remote name.
 
 ### Step 2: Fetch PR Information & Pre-check
 
@@ -372,7 +372,7 @@ PR이 속한 레포지토리의 보안 경고를 확인합니다. 이 정보는 
 **아래 세 목록 조회(1~3의 첫 조회)는 서로 독립이므로 동시에 시작합니다.** 도구 호출을 한 번에 여러 개 보내거나, 한 셸 명령에서 띄울 때는 **조회마다 출력·오류·종료 코드를 따로** 받습니다. 인자 없는 `wait`는 항상 0을 돌려주므로 에러 핸들링(종료 코드와 stderr의 `HTTP <코드>`로 판정)을 할 수 없습니다.
 
 ```bash
-T=$(mktemp -d "${TMPDIR:-/tmp}/dwk-alerts.XXXXXX")     # 이후 명령에는 출력된 경로를 그대로 쓴다
+T=$(mktemp -d "${TMPDIR:-/tmp}/dwk-alerts.XXXXXX") && echo "$T"     # 셸 상태는 호출 사이에 남지 않으므로, 이후 명령에는 출력된 경로를 그대로 쓴다
 gh api "repos/{o}/{r}/secret-scanning/alerts?state=open" --paginate --jq '.[]' >"$T/secret.out" 2>"$T/secret.err" & p1=$!
 gh api "repos/{o}/{r}/code-scanning/alerts?state=open&ref=refs/pull/N/merge" --paginate --jq '.[]' >"$T/code.out" 2>"$T/code.err" & p2=$!
 gh api "repos/{o}/{r}/dependabot/alerts?state=open" --paginate --jq '.[]' >"$T/dep.out" 2>"$T/dep.err" & p3=$!   # 3번 조건일 때만
@@ -793,7 +793,7 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/templates/review-criteria/` directory for type-s
 
 After posting all comments, provide a summary in the review body using `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `review_summary` 템플릿.
 
-Summary에는 **Security Pass**(Step 4.2)와 **Codex 교차 리뷰** 섹션을 항상 넣습니다. Security Pass는 실행 여부·대상 파일 수·근거를 적습니다. 실행했으면 범위·집계(Step 5.4)·기각(이유)·인라인 불가 목록(Step 6.2에서 게시하기로 한 것만)을, 생략했으면 사유(사용량 제한이면 재시도 가능 시각)를 적습니다. 다른 레포라 diff만 넘겼으면 그 한계도 적습니다.
+Summary에는 **Security Pass**(Step 4.2)와 **Codex 교차 리뷰** 섹션을 항상 넣습니다. Security Pass는 실행 여부·대상 파일 수·근거를 적습니다. Codex 교차 리뷰는 실행했으면 범위·집계(Step 5.4)·기각(이유)·인라인 불가 목록(Step 6.2에서 게시하기로 한 것만)을, 생략했으면 사유(사용량 제한이면 재시도 가능 시각)를 적습니다. 다른 레포라 diff만 넘겼으면 그 한계도 적습니다.
 
 ### Step 8: Review Pattern Recording
 

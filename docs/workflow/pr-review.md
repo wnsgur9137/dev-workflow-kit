@@ -15,7 +15,7 @@ PR의 변경 사항을 분석하고, GitHub에 인라인 리뷰 코멘트를 자
 /pr-review <PR_URL | PR_NUMBER> [options]
 ```
 
-PR 번호(`32`, `#32`)만 넘기면 현재 폴더의 GitHub 저장소의 PR로 봅니다. fork처럼 GitHub remote가 둘 이상이고 `gh repo set-default`로 정한 적이 없으면 어느 저장소인지 묻습니다. github.com 저장소만 번호로 받고, 저장소를 찾지 못하면 URL 전체를 입력하라고 안내하고 멈춥니다.
+PR 번호(`32`, `#32`)만 넘기면 현재 폴더의 GitHub 저장소의 PR로 봅니다. fork처럼 remote가 가리키는 GitHub 저장소가 둘 이상이고 `gh repo set-default`로 정한 적이 없으면 어느 저장소인지 묻습니다. SSH 별칭 remote(`github.com-<계정>`)도 인식합니다. github.com 저장소만 번호로 받고, 저장소를 찾지 못하면 URL 전체를 입력하라고 안내하고 멈춥니다.
 
 ## 예시
 
