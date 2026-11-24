@@ -279,7 +279,7 @@ Step 2의 정보 수집이 완료되면, CLI에 PR 요약을 출력합니다:
 Check if the PR's repository matches the current working directory's git remote:
 
 1. Run `git remote -v` to get the current project's remote URL.
-2. Compare **each** remote's `owner/repo` with the PR's `owner/repo` (fork 구성이면 remote가 여럿입니다). 일치한 remote 이름을 기억합니다(Step 3.5의 fetch에서 씁니다).
+2. Compare **each** remote's `owner/repo` with the PR's `owner/repo` (fork 구성이면 remote가 여럿입니다). Step 0과 같은 규칙으로 비교합니다: SSH 별칭 호스트도 GitHub로 보고, 대소문자를 무시하고 `.git`을 뗀 뒤 비교합니다. 일치한 remote 이름을 기억합니다(Step 3.5의 fetch에서 씁니다).
 3. **If they match** (same repository), gather local project context:
    - **CLAUDE.md**: Read the project root `CLAUDE.md` and any `CLAUDE.md` files in subdirectories. These contain project conventions, coding standards, and architecture decisions that the review MUST respect.
    - **PR 관련 문서**: Identify which directories/modules the PR touches, then read relevant documentation:
