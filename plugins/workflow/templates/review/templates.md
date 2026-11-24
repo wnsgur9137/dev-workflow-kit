@@ -93,6 +93,7 @@ Example: /pr-review https://github.com/owner/repo/pull/123
 --- 판정 ---
 {verdict}: {판정 근거}
 🚨 {critical} / ⚠️ {warning} / 💡 {suggestion} / ❓ {question} / 🔹 {nitpick}
+🔐 Security Pass: 실행됨 (대상 파일 {count}) | 생략({해당 변경 없음 | --skip | --focus})
 🤖 Codex: 지적 {N} → 채택 {a} (Claude와 겹침 {m}) · 기각 {r} · 기존 중복 {d} · 옵션 제외 {f} | 생략({사유})
 ```
 
@@ -168,7 +169,8 @@ guard let value = optionalValue else { return }
 
 ### Security Pass
 - 결과: 실행됨 (대상 파일 {count}, 근거: {경로 | diff 내용 | 플랫폼 설정 | 보안 민감 영역 | 보안 경고 | --focus=security}) | 생략({해당 변경 없음 | --skip | --focus})
-- 지적: 🚨 {critical} · ⚠️ {warning} (Step 4 지적 보강 {m}건 포함)
+- 지적: 🚨 {critical} · ⚠️ {warning} · ❓ {question} (기존 지적에 합침 {merged}건)
+- 한계: {다른 레포라 호출자를 읽지 못함 — 있으면}
 
 ### Key Findings
 - {bullet points of most important findings}

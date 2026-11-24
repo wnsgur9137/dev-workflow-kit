@@ -15,7 +15,7 @@ PR의 변경 사항을 분석하고, GitHub에 인라인 리뷰 코멘트를 자
 /pr-review <PR_URL | PR_NUMBER> [options]
 ```
 
-PR 번호(`32`, `#32`)만 넘기면 현재 폴더의 GitHub 저장소(`gh repo view`가 고르는 저장소, fork면 `gh repo set-default`로 정한 쪽)의 PR로 봅니다. 찾지 못하면 URL 전체를 입력하라고 안내하고 멈춥니다.
+PR 번호(`32`, `#32`)만 넘기면 현재 폴더의 GitHub 저장소의 PR로 봅니다. fork처럼 GitHub remote가 둘 이상이고 `gh repo set-default`로 정한 적이 없으면 어느 저장소인지 묻습니다. github.com 저장소만 번호로 받고, 저장소를 찾지 못하면 URL 전체를 입력하라고 안내하고 멈춥니다.
 
 ## 예시
 
@@ -57,9 +57,9 @@ PR 번호(`32`, `#32`)만 넘기면 현재 폴더의 GitHub 저장소(`gh repo v
 
 플랫폼 기준 리뷰(7번)는 전체를 훑느라 보안 문제를 얕게 볼 수 있어, 보안에 민감한 변경이 있으면 **그 파일만 보안 관점으로 한 번 더** 봅니다.
 
-- **실행 조건**: 경로·파일 이름(`auth`, `token`, `crypto`, `payment` 등), diff 내용(비밀번호·키 처리, 암호화, SQL·셸 문자열 조립, 역직렬화, 쿠키·CORS·TLS 설정 등), 플랫폼 설정(`Info.plist` ATS, `AndroidManifest.xml` exported 등), 보안 경고, `--focus=security` 중 하나라도 해당하면 실행합니다. `--skip=security`로 끕니다.
+- **실행 조건**: 경로·파일 이름(`auth`, `token`, `crypto`, `payment` 등), diff 내용(비밀번호·키 처리, 암호화, SQL·셸 문자열 조립, 역직렬화, 쿠키·CORS·TLS 설정, `innerHTML` 같은 HTML 주입 지점 등), 플랫폼 설정(`Info.plist` ATS, `AndroidManifest.xml` exported 등), 보안 경고, `--focus=security` 중 하나라도 해당하면 실행합니다. `--focus=security`면 변경 파일 전체를 봅니다. `--skip=security`로 끕니다.
 - **점검 항목**: 주입, 인증·인가, 시크릿, 데이터 노출, 암호, 입력 검증, 플랫폼별 항목(iOS·Android·Web·Backend)
-- **판정**: 실제 보안 문제만 지적합니다. 악용 가능하면 CRITICAL, 추가 조건이 필요한 약점이면 WARNING. 앞선 리뷰와 겹치면 새로 만들지 않고 보강합니다.
+- **판정**: 실제 보안 문제만 지적합니다. 악용 가능하면 CRITICAL, 추가 조건이 필요한 약점이면 WARNING, 다른 저장소라 입력 출처를 확인할 수 없으면 QUESTION. 앞선 리뷰·보안 경고와 겹치면 새로 만들지 않고 합칩니다.
 - 대상 diff가 크면 서브에이전트에 맡길 수 있습니다. 앞선 리뷰의 결론은 넘기지 않고, 빈 응답이면 직접 수행합니다.
 - 결과는 Summary의 `Security Pass` 섹션에 실행 여부와 근거로 남습니다.
 
