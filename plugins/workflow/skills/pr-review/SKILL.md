@@ -1,7 +1,7 @@
 ---
 name: pr-review
 description: PR을 플랫폼별 기준으로 코드 리뷰하고, 확인 후 GitHub 인라인 코멘트로 게시합니다.
-argument-hint: "<PR_URL> [--mode=strict|normal|relaxed] [--focus=항목,...] [--skip=항목,...] [--no-codex] [--help]"
+argument-hint: "<PR_URL | PR_NUMBER> [--mode=strict|normal|relaxed] [--focus=항목,...] [--skip=항목,...] [--no-codex] [--help]"
 ---
 
 # PR Review Command
@@ -15,7 +15,7 @@ argument-hint: "<PR_URL> [--mode=strict|normal|relaxed] [--focus=항목,...] [--
 
 GitHub 작업은 `gh` CLI로 한다(`gh auth status`로 인증 확인). `gh`를 쓸 수 없고 GitHub MCP 도구가 연결돼 있으면 같은 작업을 MCP로 해도 된다.
 
-PR URL: $ARGUMENTS
+PR URL or Number: $ARGUMENTS
 
 ## Step 0: Usage Guide
 
@@ -23,11 +23,23 @@ Before starting, ALWAYS display the usage guide from `${CLAUDE_PLUGIN_ROOT}/temp
 
 **Argument Parsing:**
 
-`$ARGUMENTS`를 다음과 같이 파싱합니다:
-1. `--help`가 포함되어 있거나 `$ARGUMENTS`가 비어 있으면 → 도움말 출력 후 종료 (아래 **Help Mode** 참조)
-2. `https://github.com/...` 패턴으로 PR URL 추출
-3. `--`로 시작하는 토큰을 옵션으로 파싱
-4. 인식 불가 옵션은 무시하되 "알 수 없는 옵션: {option}" 경고 출력
+넘겨받은 인자를 다음과 같이 파싱합니다:
+1. `--help`가 포함되어 있거나 인자가 비어 있으면 → 도움말 출력 후 종료 (아래 **Help Mode** 참조)
+2. `https://github.com/{owner}/{repo}/pull/{number}` 패턴이면 URL에서 추출
+3. URL이 없고 숫자만인 토큰(`32`, `#32`)이 하나 있으면 PR 번호로 보고, `owner`/`repo`를 현재 폴더의 저장소에서 정합니다. 숫자 토큰이 둘 이상이면 사용법을 출력하고 중단합니다. URL과 숫자가 함께 있으면 URL을 씁니다.
+   1. **후보 확인** — `git remote -v`의 각 remote URL에서 호스트와 `owner/repo`를 뽑습니다(`git@<호스트>:owner/repo(.git)`, `ssh://git@<호스트>/owner/repo(.git)`, `https://<호스트>/owner/repo(.git)`). 호스트가 `github.com`이거나, ssh 형식 remote의 호스트가 `~/.ssh/config` 별칭(예: `github.com-<계정>`)이라 `ssh -G <호스트>`의 `hostname` 줄이 `github.com`·`ssh.github.com`이면 GitHub remote 후보로 셉니다(`ssh -G`는 설정만 읽고 접속하지 않습니다). 계정을 여러 개 쓰는 구성은 별칭이 흔하므로 호스트 문자열만 비교하지 않습니다. `ssh -G`를 실행할 수 없으면(ssh 없음·거부) 그 ssh remote는 **판정 불가**로 둡니다. `owner/repo`는 대소문자를 무시하고 `.git`을 뗀 뒤 비교합니다.
+      - git 저장소가 아니거나 GitHub remote 후보도 판정 불가 remote도 없으면 "현재 폴더에서 GitHub 저장소를 찾지 못했습니다. PR URL 전체를 입력하세요." 출력 후 중단
+      - 후보와 판정 불가 remote를 합쳐 서로 다른 `owner/repo`가 둘 이상이고(fork 구성 등) `git config --get-regexp '^remote\..*\.gh-resolved$'`가 비어 있으면(`gh repo set-default`로 정한 적 없음. 이 명령은 설정이 없으면 출력 없이 종료 코드 1로 끝나는데, 오류가 아니라 "설정 없음"입니다) **`AskUserQuestion`으로 어느 저장소의 PR인지 고르게** 하고 그 저장소를 씁니다. `gh`는 이때 실패하지 않고 remote 이름 순서(`upstream` > `github` > `origin`)로 조용히 하나를 고르므로, 그대로 쓰면 다른 저장소의 PR을 볼 수 있습니다
+   2. **저장소 결정** — 위에서 고르지 않았으면 `gh`가 정한 저장소를 씁니다(`origin`이라고 가정하지 않습니다):
+      ```bash
+      gh repo view --json nameWithOwner,url -q '.nameWithOwner + " " + .url'
+      ```
+      - `url`의 호스트가 `github.com`이 아니면(GitHub Enterprise) "github.com 저장소만 번호로 받습니다. PR URL 전체를 입력하세요." 출력 후 중단
+      - 명령이 실패하면 stderr로 원인을 나눕니다: 인증 오류(`gh auth login`·`HTTP 401`)는 Error Handling Policy의 인증 문구, 연결 실패는 네트워크 문구(sandbox면 권한 상승 요청)로 중단합니다. 그 밖의 실패(`HTTP 404` 등 저장소 삭제·이름 변경·접근 불가, `none of the git remotes … known GitHub host`)는 stderr 첫 줄을 함께 보여 주고 1의 "찾지 못했습니다" 문구로 중단합니다
+      - `gh`를 쓸 수 없고 GitHub MCP만 있으면 1에서 고른(또는 하나뿐인) 후보의 `owner/repo`를 그대로 씁니다(별칭 호스트 `git@github.com-<계정>:owner/repo.git`도 같은 방식)
+   3. 대상 URL(`https://github.com/{owner}/{repo}/pull/{number}`)을 한 번 출력해 사용자가 대상을 확인할 수 있게 합니다
+4. `--`로 시작하는 토큰을 옵션으로 파싱
+5. 인식 불가 옵션은 무시하되 "알 수 없는 옵션: {option}" 경고 출력
 
 **Help Mode (`--help` 또는 인자 없음):**
 
@@ -36,8 +48,9 @@ Before starting, ALWAYS display the usage guide from `${CLAUDE_PLUGIN_ROOT}/temp
 ```
 === /pr-review 도움말 ===
 
-Usage: /pr-review <PR_URL> [options]
+Usage: /pr-review <PR_URL | PR_NUMBER> [options]
 Example: /pr-review https://github.com/owner/repo/pull/32
+         /pr-review 32                (현재 폴더의 GitHub 저장소 기준)
          /pr-review https://github.com/owner/repo/pull/32 --mode=strict
 
 -- Options --
@@ -50,15 +63,16 @@ Example: /pr-review https://github.com/owner/repo/pull/32
   --help           이 도움말을 표시합니다
 
 -- Review Process --
-1. PR URL 파싱 + 상태 확인 (draft/merged/CI)
+1. PR URL·번호 파싱 + 상태 확인 (draft/merged/CI)
 2. `gh` CLI로 PR 정보 수집
-3. 보안 스캔 (Secret/Code/Dependabot alerts)
+3. 보안 스캔 (Secret/Code/Dependabot alerts, 동시 조회)
 4. 변경 파일 확장자로 PR 타입 감지 (iOS/Android/FrontEnd/BackEnd)
 5. Codex 교차 리뷰를 백그라운드로 시작 (사용량 제한·미설치 등이면 생략)
 6. 타입별 우선순위에 따라 코드 리뷰 (Claude)
-7. Codex 결과를 검증해 Claude 리뷰와 합침
-8. 리뷰 결과 CLI 출력 → 사용자 확인 후 PR에 인라인 코멘트 게시
-9. 리뷰 결과 기록
+7. 보안 민감 변경(인증·암호·시크릿·입력 처리 등)이 있으면 보안 관점 패스를 한 번 더
+8. Codex 결과를 검증해 Claude 리뷰와 합침
+9. 리뷰 결과 CLI 출력 → 사용자 확인 후 PR에 인라인 코멘트 게시
+10. 리뷰 결과 기록
 
 -- Codex 교차 리뷰 --
   기본으로 실행합니다. PR의 코드·diff가 Codex(OpenAI)로 전송됩니다.
@@ -98,15 +112,16 @@ Example: /pr-review https://github.com/owner/repo/pull/32
 
 `--mode`·`--focus`·`--skip`은 Codex 지적에도 똑같이 적용합니다.
 
-If `$ARGUMENTS` is empty or does not contain a valid PR URL (`https://github.com/{owner}/{repo}/pull/{number}`), show the usage guide and stop. Do NOT proceed.
+If the arguments are empty or contain neither a valid PR URL (`https://github.com/{owner}/{repo}/pull/{number}`) nor a bare PR number (`32`, `#32`), show the usage guide and stop. Do NOT proceed.
 
-If a valid PR URL is provided, show the guide briefly then proceed below.
+If a valid PR URL or number is provided, show the guide briefly then proceed below.
 
 ## Mandatory User Interaction Policy
 
 **CRITICAL**: 아래 Step에서 사용자 선택이 필요한 부분은 반드시 `AskUserQuestion`을 사용하여 사용자에게 옵션을 제시하고 응답을 받아야 합니다. 절대로 임의 판단으로 생략하거나 기본값을 가정하지 마세요.
 
 **필수 사용자 선택 지점:**
+- Step 0: PR 번호로 받았는데 GitHub 저장소 후보가 둘 이상이고 기본 저장소가 정해지지 않았을 때 대상 저장소 선택
 - Step 2.1: PR이 closed/merged 상태일 때 계속 여부
 - Step 2.4: 재리뷰 감지 시 증분/전체 리뷰 선택
 - Step 2.5: 다른 레포지토리일 때 분석 옵션 선택
@@ -127,7 +142,7 @@ If a valid PR URL is provided, show the guide briefly then proceed below.
 - "GitHub 토큰 권한이 부족합니다. `gh auth status`로 인증·권한(scope)을 확인하세요." 출력 후 리뷰 중단
 
 **Not Found (404)**:
-- PR 조회 시: "PR을 찾을 수 없습니다. URL을 확인하세요." 출력 후 중단
+- PR 조회 시: "PR을 찾을 수 없습니다. URL·번호를 확인하세요." 출력 후 중단 (번호로 받았으면 Step 0에서 정한 `owner/repo`도 함께 출력)
 - 보안 도구 (Step 2.7): Step 2.7의 에러 핸들링을 따름 (code scanning의 404 `no analysis found`는 "분석 없음", 그 밖의 404·403은 "접근 권한 없음"으로 건너뜀)
 - 파일/이슈 조회: "리소스를 찾을 수 없음 - 건너뜀" 출력 후 계속 진행
 
@@ -161,10 +176,12 @@ If a valid PR URL is provided, show the guide briefly then proceed below.
 
 You are a senior code reviewer. Review the given GitHub Pull Request and provide detailed, actionable feedback as line-by-line comments.
 
-### Step 1: Parse PR URL
+### Step 1: Parse PR URL / Number
 
 Extract `owner`, `repo`, and `pr_number` from the PR URL.
 The URL format is: `https://github.com/{owner}/{repo}/pull/{pr_number}`
+
+For a bare number, `pr_number` is the argument and `owner`/`repo` come from the repository decided in Step 0 (user choice, `gh repo view`, or the remote URL). The rest of the review is the same as for a URL — Step 2.5 still compares remotes and finds the matching remote name.
 
 ### Step 2: Fetch PR Information & Pre-check
 
@@ -262,7 +279,7 @@ Step 2의 정보 수집이 완료되면, CLI에 PR 요약을 출력합니다:
 Check if the PR's repository matches the current working directory's git remote:
 
 1. Run `git remote -v` to get the current project's remote URL.
-2. Compare the remote's `owner/repo` with the PR's `owner/repo`.
+2. Compare **each** remote's `owner/repo` with the PR's `owner/repo` (fork 구성이면 remote가 여럿입니다). Step 0과 같은 규칙으로 비교합니다: SSH 별칭 호스트도 GitHub로 보고, 대소문자를 무시하고 `.git`을 뗀 뒤 비교합니다. 일치한 remote 이름을 기억합니다(Step 3.5의 fetch에서 씁니다).
 3. **If they match** (same repository), gather local project context:
    - **CLAUDE.md**: Read the project root `CLAUDE.md` and any `CLAUDE.md` files in subdirectories. These contain project conventions, coding standards, and architecture decisions that the review MUST respect.
    - **PR 관련 문서**: Identify which directories/modules the PR touches, then read relevant documentation:
@@ -352,6 +369,20 @@ When local context is available (same repo or cached analysis), use it to:
 
 PR이 속한 레포지토리의 보안 경고를 확인합니다. 이 정보는 Step 4 리뷰와 Step 6 판정에서 참조됩니다.
 
+**아래 세 목록 조회(1~3의 첫 조회)는 서로 독립이므로 동시에 시작합니다.** 도구 호출을 한 번에 여러 개 보내거나, 한 셸 명령에서 띄울 때는 **조회마다 출력·오류·종료 코드를 따로** 받습니다. 인자 없는 `wait`는 항상 0을 돌려주므로 에러 핸들링(종료 코드와 stderr의 `HTTP <코드>`로 판정)을 할 수 없습니다.
+
+```bash
+T=$(mktemp -d "${TMPDIR:-/tmp}/dwk-alerts.XXXXXX") && echo "$T"     # 셸 상태는 호출 사이에 남지 않으므로, 이후 명령에는 출력된 경로를 그대로 쓴다
+gh api "repos/{o}/{r}/secret-scanning/alerts?state=open" --paginate --jq '.[]' >"$T/secret.out" 2>"$T/secret.err" & p1=$!
+gh api "repos/{o}/{r}/code-scanning/alerts?state=open&ref=refs/pull/N/merge" --paginate --jq '.[]' >"$T/code.out" 2>"$T/code.err" & p2=$!
+gh api "repos/{o}/{r}/dependabot/alerts?state=open" --paginate --jq '.[]' >"$T/dep.out" 2>"$T/dep.err" & p3=$!   # 3번 조건일 때만
+wait $p1; echo $? >"$T/secret.rc"; wait $p2; echo $? >"$T/code.rc"; wait $p3; echo $? >"$T/dep.rc"
+```
+
+- Dependabot 조건(3번)이 아니면 `p3` 줄과 `wait $p3`를 뺍니다.
+- 조회마다 `.rc`·`.err`로 아래 에러 핸들링을 적용합니다. 하나가 실패해도 나머지 결과는 그대로 씁니다. 다 읽으면 `$T`를 지웁니다.
+- **첫 결과에 의존하는 후속 조회는 순차로** 합니다: Secret 경고의 위치 조회(1번 둘째 줄), Code Scanning의 `refs/heads/<head.ref>` 재조회(2번).
+
 1. **Secret Scanning**: 시크릿 노출 경고 조회
    - `gh api "repos/{o}/{r}/secret-scanning/alerts?state=open" --paginate --jq '.[]'`
    - 목록 응답에는 파일 경로가 없습니다. 경고마다 `gh api "repos/{o}/{r}/secret-scanning/alerts/<number>/locations" --paginate --jq '.[]'`로 위치를 받아 PR과 관계있는지 확인합니다. `type: "commit"` 위치는 `details.path`(·`start_line`)가 PR 변경 파일이면 관계있음, `pull_request_body`·`pull_request_comment`·`pull_request_review_comment`·`pull_request_title` 위치는 URL이 이 PR(N)을 가리키면 관계있음입니다
@@ -376,7 +407,7 @@ PR이 속한 레포지토리의 보안 경고를 확인합니다. 이 정보는 
    - 보안 경고가 1개 이상이면 Step 7 Summary에 `[SECURITY SCAN]` 섹션 포함
    - 각 경고의 상세 정보 (타입, severity, 영향 파일)를 기록
 
-**에러 핸들링**: code scanning의 404 `no analysis found`(또는 빈 결과)는 "분석 없음"이며 위의 `refs/heads` 재조회 조건에 들어갑니다. 그 밖의 403/404는 "보안 스캔 접근 권한 없음 - 건너뜀" 출력 후 다음 Step으로 진행합니다. 보안 스캔 실패가 전체 리뷰를 중단시키지 않습니다.
+**에러 핸들링**: code scanning의 404 `no analysis found`(또는 빈 결과)는 "분석 없음"이며 위의 `refs/heads` 재조회 조건에 들어갑니다. 그 밖의 403/404는 "보안 스캔 접근 권한 없음 - 건너뜀" 출력 후 다음 Step으로 진행합니다. 단 rate limit으로 판정한 403(Error Handling Policy)은 건너뛰지 않고 전역 Rate Limit 처리를 따릅니다. 보안 스캔 실패가 전체 리뷰를 중단시키지 않습니다.
 
 ### Step 3: Detect PR Type
 
@@ -484,6 +515,42 @@ perl -e 'alarm 900; exec @ARGV' codex exec --json -C "<DIR>" -s read-only --ephe
 ### Step 4: Apply Review Priorities by Type
 
 Read the review templates from `${CLAUDE_PLUGIN_ROOT}/templates/review-criteria/` directory — load the matching platform file(s) based on detected PR type (e.g., `ios.md`, `frontend.md`). If no type is detected, use `general.md`. Apply the review criteria following the priority order defined in each template.
+
+### Step 4.2: Security Pass (보안 민감 변경이 있을 때만)
+
+Step 4의 리뷰는 플랫폼 기준 전체를 훑느라 보안 문제를 얕게 볼 수 있습니다. 보안에 민감한 변경이 있으면 **그 부분만 보안 관점으로 한 번 더** 봅니다.
+
+**실행 조건** — 하나라도 해당하면 실행합니다. 모두 아니면 건너뛰고 Summary에 `생략(해당 변경 없음)`을 적습니다.
+
+| 근거 | 예 |
+|------|----|
+| 경로·파일 이름 | `auth`, `login`, `session`, `token`, `oauth`, `jwt`, `password`, `credential`, `crypto`, `cert`, `security`, `permission`, `payment`, `keychain`, `secret`, `.env` |
+| diff 내용 | 비밀번호·토큰·API 키 처리, 암호화·해시·난수, SQL·셸 명령 문자열 조립, `eval`·동적 코드 실행, 파일 경로 조립, 역직렬화, 쿠키·CORS·CSP·TLS 설정, WebView JS 브리지, HTML 주입 지점(`innerHTML`·`dangerouslySetInnerHTML`·`v-html`) |
+| 플랫폼 설정 | iOS `Info.plist`의 ATS·URL scheme, `*.entitlements` / Android `AndroidManifest.xml`의 `exported`·권한, `network_security_config.xml` / 서버 `Dockerfile`·CORS·rate limit 설정 |
+| 다른 Step의 결과 | Step 2.5 레포 분석에서 식별한 보안 민감 영역(repo-cache `review-priorities.md`의 핵심 리뷰 영역 중 보안 항목)에 든 파일, Step 2.7에서 PR과 관계있는 경고, `--focus=security` |
+
+`--skip=security`면 건너뛰고 Summary에 `생략(--skip)`을 적습니다. `--focus`가 있는데 `security`가 없으면 건너뜁니다(`생략(--focus)`).
+
+**대상**: 조건에 걸린 파일의 diff를 봅니다. **`--focus=security`면 변경 파일 전체**(바이너리·자동 생성 파일 제외)를 대상으로 합니다. 증분 리뷰(Step 2.4)면 증분 범위 안의 diff만 봅니다. 같은 레포(Step 2.5)면 그 파일에서 바뀐 함수의 직접 호출자까지 읽어, 값이 어디서 들어오고(신뢰 경계) 어디로 나가는지 확인합니다. 대상 파일이 0개면 "실행됨"으로 적지 않고 `생략(해당 변경 없음)`으로 적습니다.
+
+**점검 항목**:
+1. **주입**: SQL·명령·XSS·경로 조작(path traversal)·템플릿 주입
+2. **인증·인가**: 우회, 권한 상승, 세션·토큰 수명과 무효화
+3. **시크릿**: 하드코딩된 키·토큰·비밀번호, 로그·에러 메시지·클라이언트 번들로 새는 값
+4. **데이터 노출**: 로그·클립보드·평문 저장·캐시·백업에 남는 민감 정보
+5. **암호**: 약한 알고리즘·모드, 고정 IV·솔트, 안전하지 않은 난수, 키 관리
+6. **입력 검증**: 누락된 검증, 경계값, 타입 혼동, 크기 제한 없는 입력(DoS)
+7. **플랫폼별**:
+   - iOS: Keychain 접근성 등급, ATS 예외, 생체 인증 우회, TLS 피닝
+   - Android: exported 컴포넌트, WebView `addJavascriptInterface`, 평문 트래픽 허용, ProGuard 규칙
+   - Web: CSP, CORS, 쿠키 플래그(`HttpOnly`·`Secure`·`SameSite`), `localStorage` 토큰
+   - Backend: 파라미터 바인딩, rate limit, CORS 와일드카드, SSRF
+
+**판정 기준**: 스타일이 아니라 실제 보안 문제만 지적합니다. 악용할 수 있어 데이터 유출·무단 접근으로 이어지면 `CRITICAL`, 공격 면을 넓히지만 추가 조건이 필요하면 `WARNING`입니다. 카테고리는 `Security - <세부>`로 적고, 고칠 방법이 분명하면 `suggestion_block`을 붙입니다. Step 4의 지적이나 Step 2.7에서 코멘트 대상으로 마킹한 경고와 위치·원인이 같으면 새로 만들지 않고 그쪽에 합칩니다. 다른 레포라 호출자를 읽지 못해 입력이 신뢰되는지 알 수 없으면 등급을 올리지 말고 `QUESTION`으로 묻고, 그 한계를 Summary에 적습니다.
+
+**위임(선택)**: 대상 diff가 크고 서브에이전트(`Task`)를 쓸 수 있으면, 이 패스를 별도 에이전트에 맡겨도 됩니다. 넘기는 것은 **대상 파일의 diff·호출자 코드·위 점검 항목**뿐입니다(Step 4의 결론은 넘기지 않습니다 — 같은 결론으로 끌려가지 않게). 에이전트가 빈 응답이나 판정 한 줄만 돌려주면 그 결과를 쓰지 말고 직접 수행합니다. 돌려받은 지적도 코드로 확인한 뒤 채택합니다.
+
+Summary의 `Security Pass` 줄에 실행 여부와 근거(대상 파일 수, 걸린 조건)를 적습니다.
 
 ### Step 4.5: Impact Analysis (로컬 레포 일치 시 또는 원격 레포)
 
@@ -726,7 +793,7 @@ Refer to `${CLAUDE_PLUGIN_ROOT}/templates/review-criteria/` directory for type-s
 
 After posting all comments, provide a summary in the review body using `${CLAUDE_PLUGIN_ROOT}/templates/review/templates.md` > `review_summary` 템플릿.
 
-Summary에는 **Codex 교차 리뷰** 섹션을 항상 넣습니다. 실행했으면 범위·집계(Step 5.4)·기각(이유)·인라인 불가 목록(Step 6.2에서 게시하기로 한 것만)을, 생략했으면 사유(사용량 제한이면 재시도 가능 시각)를 적습니다. 다른 레포라 diff만 넘겼으면 그 한계도 적습니다.
+Summary에는 **Security Pass**(Step 4.2)와 **Codex 교차 리뷰** 섹션을 항상 넣습니다. Security Pass는 실행 여부·대상 파일 수·근거를 적습니다. Codex 교차 리뷰는 실행했으면 범위·집계(Step 5.4)·기각(이유)·인라인 불가 목록(Step 6.2에서 게시하기로 한 것만)을, 생략했으면 사유(사용량 제한이면 재시도 가능 시각)를 적습니다. 다른 레포라 diff만 넘겼으면 그 한계도 적습니다.
 
 ### Step 8: Review Pattern Recording
 

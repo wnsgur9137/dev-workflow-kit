@@ -105,9 +105,10 @@ security는 처음 한 번 도구 이미지·규칙을 받아야 합니다(`upda
 |---|---|---|
 | `commit` | 변경과 기존 커밋 컨벤션을 분석해 Conventional Commits(+gitmoji) 커밋 생성. push는 하지 않음 | [commit](docs/workflow/commit.md) |
 | `create-pr` | PR 템플릿에 맞춰 Draft PR 생성, 라벨·연결 이슈·마일스톤 지정 | [create-pr](docs/workflow/create-pr.md) |
-| `pr-review <PR_URL>` | 플랫폼별 기준 리뷰 + Codex 교차 리뷰, 확인 후 인라인 코멘트 게시 | [pr-review](docs/workflow/pr-review.md) |
+| `pr-review <PR_URL\|번호>` | 플랫폼별 기준 리뷰 + Codex 교차 리뷰, 확인 후 인라인 코멘트 게시 | [pr-review](docs/workflow/pr-review.md) |
 | `apply-review <PR>` | 리뷰 코멘트를 코드에 반영하고 스레드마다 답글 | [apply-review](docs/workflow/apply-review.md) |
 | `pipeline [이슈번호]` | 작업 파악부터 병합까지 14단계 (`--no-issue`로 구현~병합만) | [pipeline](docs/workflow/pipeline.md) |
+| `analyze-prd <PDF>` | PDF 기획서를 읽어 개발 설계서 초안(기능 분해·태스크·확인할 질문) 작성 | [analyze-prd](docs/workflow/analyze-prd.md) |
 
 > [!NOTE]
 > `pr-review`의 Codex 교차 리뷰는 **PR 코드·diff를 OpenAI로 보냅니다.** Codex CLI가 설치·로그인돼 있으면 기본으로 켜지고, 원치 않으면 `--no-codex`를 쓰세요. [자세히](docs/workflow/pr-review.md#codex-교차-리뷰)
