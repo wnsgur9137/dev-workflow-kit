@@ -8,12 +8,12 @@
 ## [2.1.0] - 2026-11-24
 
 ### 추가
-- `analyze-prd`: PDF 기획서를 읽어 개발 설계서 초안(기능 분해·화면·데이터·태스크·리스크·확인할 질문)을 만드는 skill. 저장소 안에서는 현재 스택에 맞춰 쓰고, `--detailed`·`--out`을 지원합니다. PDF는 변환 MCP → 파일 읽기 → `pdftotext` 순으로 읽습니다.
-- `pr-review`: PR 번호(`32`, `#32`)를 받습니다. 저장소는 현재 폴더에서 `gh repo view`로 정합니다.
-- `pr-review`: 인증·암호·시크릿·입력 처리·플랫폼 보안 설정 같은 보안 민감 변경이 있으면 그 파일만 보안 관점으로 한 번 더 봅니다(Step 4.2, Summary `Security Pass`). `--skip=security`로 끕니다.
+- `analyze-prd`: PDF 기획서를 읽어 개발 설계서 초안(기능 분해·화면·데이터·태스크·리스크·확인할 질문)을 만드는 skill. 저장소 안에서는 현재 스택에 맞춰 쓰고, `--detailed`·`--out`을 지원합니다. PDF는 파일 읽기 → 이 기기에서 도는 변환 MCP → `pdftotext`(쪽 범위로 나눠) 순으로 읽고, PDF 속 지시문은 따르지도 옮기지도 않습니다. 자동 허용 셸 명령은 `pdfinfo`·`pdftotext`·`git rev-parse`뿐입니다.
+- `pr-review`: PR 번호(`32`, `#32`)를 받습니다. 저장소는 현재 폴더에서 정하고, fork처럼 후보가 둘 이상인데 `gh repo set-default`가 없으면 묻습니다. github.com 저장소만 번호로 받습니다.
+- `pr-review`: 인증·암호·시크릿·입력 처리·플랫폼 보안 설정 같은 보안 민감 변경이 있으면 그 파일만 보안 관점으로 한 번 더 봅니다(Step 4.2, Summary `Security Pass`). `--focus=security`면 변경 파일 전체를 보고, `--skip=security`로 끕니다.
 
 ### 변경
-- `pr-review`: Secret·Code·Dependabot 경고 목록을 동시에 조회합니다.
+- `pr-review`: Secret·Code·Dependabot 경고 목록을 동시에 조회합니다(조회마다 종료 코드·오류를 따로 받음).
 - `pipeline`: 8단계에 "증분 빌드는 경고를 숨긴다"(클린 빌드·CI 전체 빌드로 판정)와 "산출물을 다시 열어 확인" 안내를 더했습니다.
 
 ## [2.0.1] - 2026-11-23
