@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-25
+
+### 추가
+- `status`: 세션을 다시 시작해 작업을 이어 갈 때 쓰는 "이전 작업 파악" skill. 메모리·문서에 남은 결정·남은 일과 git·GitHub 실제 상태(현재 브랜치·커밋 안 한 변경·worktree·병합된 브랜치·열린 PR의 리뷰·CI·이어 갈 `/pipeline` 단계·최근 병합·열린 이슈 진행률·태그 누락·설치 버전 차이)를 맞대어 **어긋남**과 다음 할 일을 정해진 형식으로 보여 줍니다. 조회만 하며, 브랜치 삭제·이슈 닫기·메모리 갱신은 제안만 합니다. "이전 작업 파악"처럼 말로 요청해도 모델이 호출합니다. `--local`(GitHub 생략)·`--days=N`을 지원합니다.
+
 ## [2.1.0] - 2026-11-24
 
 ### 추가
@@ -66,7 +71,8 @@
 ### 추가
 - Claude Code 플러그인 마켓플레이스로 첫 배포. `commit`, `create-pr`, `pr-review`, `apply-review`, `pipeline` 커맨드.
 
-[Unreleased]: https://github.com/wnsgur9137/dev-workflow-kit/compare/workflow--v2.1.0...HEAD
+[Unreleased]: https://github.com/wnsgur9137/dev-workflow-kit/compare/workflow--v2.2.0...HEAD
+[2.2.0]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v2.2.0
 [2.1.0]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v2.1.0
 [2.0.1]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v2.0.1
 [2.0.0]: https://github.com/wnsgur9137/dev-workflow-kit/releases/tag/workflow--v2.0.0
