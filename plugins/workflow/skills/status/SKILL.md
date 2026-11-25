@@ -2,7 +2,7 @@
 name: status
 description: 이전 작업을 파악합니다. 메모리·문서에 남은 결정·남은 일과 git·GitHub의 실제 상태(브랜치·PR·CI·리뷰·이슈·릴리스)를 맞대어 어긋난 점과 다음 할 일을 정리합니다. "이전 작업 파악", "이어서 진행", "어디까지 했지"처럼 세션을 다시 시작해 작업을 이어 갈 때 씁니다. 조회만 하고 아무것도 바꾸지 않습니다.
 argument-hint: "[--local] [--days=N] [-h|--help]"
-allowed-tools: Read, Glob, Grep, Bash(git rev-parse:*), Bash(git status --porcelain=v1 --branch), Bash(git branch --merged:*), Bash(git branch -r --merged:*), Bash(git branch --no-merged:*), Bash(git log -5 --format='%h %ad %s' --date=short), Bash(git worktree list), Bash(git stash list), Bash(git remote -v), Bash(git for-each-ref:*), Bash(git cat-file -p origin/:*), Bash(date:*), Bash(gh auth status), Bash(gh repo view:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue list:*), Bash(gh issue view:*)
+allowed-tools: Read, Glob, Grep, Bash(git rev-parse:*), Bash(git status --porcelain=v1 --branch), Bash(git branch --merged:*), Bash(git branch -r --merged:*), Bash(git branch --no-merged:*), Bash(git log -5 --format='%h %ad %s' --date=short), Bash(git worktree list), Bash(git stash list), Bash(git remote -v), Bash(git for-each-ref:*), Bash(git cat-file -p origin/:*), Bash(date +%F), Bash(date -v-:*), Bash(date -d:*), Bash(gh auth status), Bash(gh repo view:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue list:*), Bash(gh issue view:*)
 ---
 
 # /workflow:status
@@ -26,7 +26,7 @@ allowed-tools: Read, Glob, Grep, Bash(git rev-parse:*), Bash(git status --porcel
 사용자가 넘긴 인자: `$ARGUMENTS`
 
 - `--local`: GitHub 조회와 `git fetch`를 건너뛴다(오프라인·빠른 확인). 3단계 항목은 "조회 생략(--local)"으로 표시한다
-- `--days=N`: 최근 병합 PR을 볼 기간(기본 7, 1~90). 범위 밖이면 기본값을 쓰고 경고한다. 오늘 날짜는 컨텍스트에 있으면 그것을, 없으면 `date +%F`로 얻는다
+- `--days=N`: 최근 병합 PR을 볼 기간(기본 7, 1~90). 범위 밖이면 기본값을 쓰고 경고한다. 오늘 날짜는 컨텍스트에 있으면 그것을, 없으면 `date +%F`로 얻는다. `date`는 본문에 적힌 형태로만 실행한다(시각 인자를 붙이면 시계 설정 형태가 된다 — root가 아니면 실패하지만 쓰지 않는다)
 - `-h`, `--help`: 도움말 출력 후 종료
 - 그 밖의 `--` 옵션은 무시하되 "알 수 없는 옵션: {option}" 경고를 출력한다
 
@@ -122,7 +122,7 @@ git branch --no-merged origin/<base> --format='%(refname:short) %(upstream:short
 - **stash·worktree**: 남아 있으면 목록. worktree는 경로와 브랜치
 - **병합된 브랜치**: 로컬은 base와 **현재 체크아웃된 브랜치**(커밋 전이라 base와 같은 커밋이면 병합된 것처럼 나온다)와 다른 worktree에 체크아웃된 브랜치를 뺀다. 원격은 `origin/HEAD`·`origin/<base>`를 뺀다. 로컬·원격을 나눠 적는다
 - **병합 안 된 브랜치**: 열린 PR의 `headRefName`이면 "진행 중"이다. 그 밖에 30일 넘게 커밋이 없는 브랜치는 (`--local`이면 "PR 미확인(--local)"으로 묶고) `gh pr list -R <owner>/<repo> --head <브랜치> --state all --json number,state`로 PR을 찾아(5개 브랜치까지) PR 없음·닫힘이면 "확인 필요"로 적는다. 5개를 넘으면 나머지는 "PR 미확인"으로 묶는다
-- 스쿼시·리베이스 병합은 `--merged`에 잡히지 않는다 — 3단계의 병합 PR로 보완하되 **이름만으로 판정하지 않는다.** 병합 PR의 `headRefOid`가 `git rev-parse <브랜치>`(원격은 `git rev-parse origin/<브랜치>`)와 같을 때만 "병합됨"이고, 다르면 "병합 뒤 커밋 있음 — 확인 필요"로 적는다(병합 뒤 더 쌓은 커밋이나 이름을 다시 쓴 브랜치를 지우면 커밋을 잃는다)
+- 스쿼시·리베이스 병합은 `--merged`에 잡히지 않는다 — 3단계의 병합 PR 중 `baseRefName`이 base인 것으로 보완하되 **이름만으로 판정하지 않는다.** 병합 PR의 `headRefOid`가 `git rev-parse <브랜치>`(원격은 `git rev-parse origin/<브랜치>`)와 같을 때만 "병합됨"이고, 다르면 "병합 뒤 커밋 있음 — 확인 필요"로 적는다(병합 뒤 더 쌓은 커밋이나 이름을 다시 쓴 브랜치를 지우면 커밋을 잃는다)
 
 ## 3단계: GitHub
 
@@ -130,10 +130,10 @@ git branch --no-merged origin/<base> --format='%(refname:short) %(upstream:short
 
 ```bash
 gh pr list -R <owner>/<repo> --author @me --state open --limit 30 \
-  --json number,title,headRefName,isDraft,reviewDecision,statusCheckRollup,updatedAt,url
+  --json number,title,author,headRefName,isDraft,reviewDecision,statusCheckRollup,updatedAt,url
 gh pr list -R <owner>/<repo> --state merged --search "merged:>=<since>" --limit 100 \
-  --json number,title,headRefName,headRefOid,mergedAt,closingIssuesReferences,body \
-  --jq '.[] | {number,title,headRefName,headRefOid,mergedAt,closes:[.closingIssuesReferences[].number],refs:([.body|scan("#[0-9]+")]|unique)}'
+  --json number,title,baseRefName,headRefName,headRefOid,mergedAt,closingIssuesReferences,body \
+  --jq '.[] | {number,title,baseRefName,headRefName,headRefOid,mergedAt,closes:[.closingIssuesReferences[].number],refs:([.body|scan("#[0-9]+")]|unique)}'
 gh issue list -R <owner>/<repo> --state open --limit 50 \
   --json number,title,labels,updatedAt,body \
   --jq '.[] | {number,title,labels:[.labels[].name],updatedAt,open:(.body|[scan("(?m)^\\s*[-*] \\[ \\]")]|length),done:(.body|[scan("(?m)^\\s*[-*] \\[[xX]\\]")]|length)}'
@@ -147,18 +147,25 @@ gh issue list -R <owner>/<repo> --state open --limit 50 \
 
 PR마다 `gh pr view <N> -R <owner>/<repo> --json reviews,comments,commits`로 `/pipeline` 설계 원칙 B와 같은 기준으로 판정한다. **pipeline으로 이어 간다면 몇 단계부터인지**를 계산한다.
 
-- **자체 리뷰** = 본문이 `## Review Summary`로 시작하는 리뷰(`/pr-review`의 요약 형식. 그 리뷰의 인라인 코멘트에는 `dwk:reviewer` 표식이 붙는다). 다른 사람·봇의 리뷰는 자체 리뷰로 치지 않는다(`reviewDecision`으로 따로 적는다).
-- **반영 내역** = 가장 최근 자체 리뷰 뒤에 남은 PR 일반 코멘트(pipeline 12단계의 반영 내역) 또는 본문이 빈 리뷰(`/apply-review`가 리뷰 스레드에 단 답글은 본문 없는 COMMENTED 리뷰로 기록된다). 리뷰 뒤 커밋만 있고 둘 다 없으면 아직 반영 중으로 본다.
+판정에 쓰는 리뷰·코멘트는 **작성자(`author.login`)가 PR 작성자(위 `author`, `--author @me`이므로 현재 사용자)와 같은 것만** 센다. 봇·다른 사람의 리뷰와 코멘트는 `reviewDecision`으로만 따로 적는다.
+
+- **자체 리뷰** = 본문이 `## Review Summary`로 시작하는 리뷰(`/pr-review`의 요약 형식. 그 리뷰의 인라인 코멘트에는 `dwk:reviewer` 표식이 붙는다). 그 본문의 `**Comments**:` 줄에서 등급별 지적 수를 읽는다.
+- **반영 내역** = 가장 최근 자체 리뷰 뒤에 남은 다음 중 하나.
+  - 첫 줄에 "반영"이 들어간 PR 일반 코멘트(pipeline 12단계의 반영 내역)
+  - 본문이 빈 리뷰 중 `commit.oid`가 그 자체 리뷰의 `commit.oid`와 **다른** 것(반영 커밋을 push한 뒤 `/apply-review`가 리뷰 스레드에 단 답글). 같은 커밋의 본문 빈 리뷰는 `/pr-review`가 diff 밖 지적을 파일 단위 코멘트로 단 것일 수 있어 반영으로 치지 않는다
+
+  리뷰 뒤 커밋만 있고 반영 내역이 없으면 아직 반영 중으로 본다.
 
 아래 표를 **위에서부터 보고 처음 맞는 행**을 쓴다.
 
 | 상태 | 판정 근거 | 이어 갈 단계 |
 |---|---|---|
 | 리뷰 전 | 자체 리뷰가 없음 | 11 (`/pr-review`) |
-| 반영 전 | 가장 최근 자체 리뷰 뒤에 반영 내역 코멘트가 없음 | 12 (`/apply-review`) |
-| Ready 전 | 반영 끝, `isDraft: true` | 13 |
+| 반영할 지적 없음 | 가장 최근 자체 리뷰의 `**Comments**:`가 CRITICAL·WARNING·SUGGESTION·QUESTION 모두 0 (NITPICK만 있거나 없음) | 다음 행부터 계속 판정 |
+| 반영 전 | 가장 최근 자체 리뷰 뒤에 반영 내역이 없음 (SUGGESTION만 있어도 pipeline 12단계가 미반영 사유를 남기므로 여기에 든다) | 12 (`/apply-review`) |
+| Ready 전 | 반영 끝(또는 반영할 지적 없음), `isDraft: true` | 13 |
 | CI 실패 | `statusCheckRollup`에 실패 | 13 (실패한 체크 이름) |
-| CI 대기 | `statusCheckRollup`에 진행 중, 또는 빈 배열인데 저장소에 `.github/workflows/*.yml`이 있음(Ready 직후 체크가 아직 등록되지 않음) | 13 |
+| CI 대기 | `statusCheckRollup`에 진행 중, 또는 빈 배열인데 저장소에 `.github/workflows/*.yml`이 있음 — "체크 미등록"으로 적고, Ready 전환 뒤 시간이 지났으면 "경로 필터·트리거 때문에 실행되지 않았을 수 있음"을 덧붙인다 | 13 |
 | 병합 대기 | Ready, CI 통과(또는 워크플로 파일이 없고 `statusCheckRollup`이 빈 배열) | 14 |
 
 재리뷰가 필요한지(반영 뒤 증분 리뷰)는 저장소 관례에 따른다. 메모리·규약에 "반영 후 재리뷰" 규칙이 있고 반영 커밋 뒤에 자체 리뷰가 없으면 "Ready 전" 대신 "재리뷰 필요 → 11 (증분 리뷰)"로 적는다.
