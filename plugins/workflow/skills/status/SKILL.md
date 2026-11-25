@@ -2,7 +2,7 @@
 name: status
 description: 이전 작업을 파악합니다. 메모리·문서에 남은 결정·남은 일과 git·GitHub의 실제 상태(브랜치·PR·CI·리뷰·이슈·릴리스)를 맞대어 어긋난 점과 다음 할 일을 정리합니다. "이전 작업 파악", "이어서 진행", "어디까지 했지"처럼 세션을 다시 시작해 작업을 이어 갈 때 씁니다. 조회만 하고 아무것도 바꾸지 않습니다.
 argument-hint: "[--local] [--days=N] [-h|--help]"
-allowed-tools: Read, Glob, Grep, Bash(git rev-parse:*), Bash(git status --porcelain=v1 --branch), Bash(git branch --merged:*), Bash(git branch -r --merged:*), Bash(git branch --no-merged:*), Bash(git log -5 --format='%h %ad %s' --date=short), Bash(git worktree list), Bash(git stash list), Bash(git remote -v), Bash(git for-each-ref:*), Bash(git cat-file -p origin/:*), Bash(date +%F), Bash(date -v-:*), Bash(date -d:*), Bash(gh auth status), Bash(gh repo view:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue list:*), Bash(gh issue view:*)
+allowed-tools: Read, Glob, Grep, Bash(git rev-parse:*), Bash(git status --porcelain=v1 --branch), Bash(git branch --merged:*), Bash(git branch -r --merged:*), Bash(git branch --no-merged:*), Bash(git log -5 --format='%h %ad %s' --date=short), Bash(git worktree list), Bash(git stash list), Bash(git remote -v), Bash(git for-each-ref:*), Bash(git cat-file -p origin/*), Bash(date +%F), Bash(date -v-*), Bash(date -d:*), Bash(gh auth status), Bash(gh repo view:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue list:*), Bash(gh issue view:*)
 ---
 
 # /workflow:status
@@ -151,17 +151,18 @@ PR마다 `gh pr view <N> -R <owner>/<repo> --json reviews,comments,commits`로 `
 
 - **자체 리뷰** = 본문이 `## Review Summary`로 시작하는 리뷰(`/pr-review`의 요약 형식. 그 리뷰의 인라인 코멘트에는 `dwk:reviewer` 표식이 붙는다). 그 본문의 `**Comments**:` 줄에서 등급별 지적 수를 읽는다.
 - **반영 내역** = 가장 최근 자체 리뷰 뒤에 남은 다음 중 하나.
-  - 첫 줄에 "반영"이 들어간 PR 일반 코멘트(pipeline 12단계의 반영 내역)
+  - 첫 줄이 `## 리뷰 반영 내역`으로 시작하는 PR 일반 코멘트(pipeline 12단계가 남기는 형식)
   - 본문이 빈 리뷰 중 `commit.oid`가 그 자체 리뷰의 `commit.oid`와 **다른** 것(반영 커밋을 push한 뒤 `/apply-review`가 리뷰 스레드에 단 답글). 같은 커밋의 본문 빈 리뷰는 `/pr-review`가 diff 밖 지적을 파일 단위 코멘트로 단 것일 수 있어 반영으로 치지 않는다
 
-  리뷰 뒤 커밋만 있고 반영 내역이 없으면 아직 반영 중으로 본다.
+  리뷰 뒤 커밋만 있고 반영 내역이 없으면 아직 반영 중으로 본다. 반영 커밋 없이 같은 커밋에 본인 답글만 있으면(지적을 모두 반박·질문으로 답한 경우) "반영 전(답글만 있음 — 확인 필요)"으로 적는다.
 
 아래 표를 **위에서부터 보고 처음 맞는 행**을 쓴다.
 
 | 상태 | 판정 근거 | 이어 갈 단계 |
 |---|---|---|
 | 리뷰 전 | 자체 리뷰가 없음 | 11 (`/pr-review`) |
-| 반영할 지적 없음 | 가장 최근 자체 리뷰의 `**Comments**:`가 CRITICAL·WARNING·SUGGESTION·QUESTION 모두 0 (NITPICK만 있거나 없음) | 다음 행부터 계속 판정 |
+| 리뷰 뒤 새 커밋 | 가장 최근 자체 리뷰의 지적이 모두 0(아래 행 조건)인데 그 리뷰의 `commit.oid`가 PR 마지막 커밋과 다름 | 11 (증분 리뷰) |
+| 반영할 지적 없음 | 가장 최근 자체 리뷰의 `**Comments**:`가 CRITICAL·WARNING·SUGGESTION·QUESTION 모두 0(NITPICK만 있거나 없음)이고 그 리뷰의 `commit.oid`가 PR 마지막 커밋과 같음 | 바로 아래 "반영 전" 행은 건너뛰고 "Ready 전"부터 판정 |
 | 반영 전 | 가장 최근 자체 리뷰 뒤에 반영 내역이 없음 (SUGGESTION만 있어도 pipeline 12단계가 미반영 사유를 남기므로 여기에 든다) | 12 (`/apply-review`) |
 | Ready 전 | 반영 끝(또는 반영할 지적 없음), `isDraft: true` | 13 |
 | CI 실패 | `statusCheckRollup`에 실패 | 13 (실패한 체크 이름) |
