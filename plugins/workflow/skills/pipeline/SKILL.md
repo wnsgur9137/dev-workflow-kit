@@ -114,7 +114,7 @@ CI가 Draft를 건너뛰는 설정이면, Ready 전환 후의 모든 push가 CI�
 | 개발·커밋 완료 | 워킹트리 clean **그리고** `<base>..HEAD`에 커밋 존재 |
 | PR 생성됨 | `gh pr list -R <owner>/<repo> --head <현재 브랜치> --state open --json number,url,isDraft` |
 | 리뷰 완료 | 그 PR에 자체 리뷰 결과 코멘트 존재 (Codex 실행·생략 여부는 그 Summary의 "Codex 교차 리뷰" 섹션) |
-| 반영 완료 | 리뷰 코멘트 이후 반영 내역 코멘트 존재 |
+| 반영 완료 | 리뷰 코멘트 이후 `## 리뷰 반영 내역` 코멘트 존재 |
 | Ready 상태 | PR의 `isDraft` 필드 (`gh pr view <N> -R <owner>/<repo> --json isDraft`) |
 | CI 결과 | `gh run view <run-id> --json jobs`의 각 job `conclusion` (`gh pr checks <N>` 병행) |
 
