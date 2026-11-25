@@ -114,7 +114,7 @@ CI가 Draft를 건너뛰는 설정이면, Ready 전환 후의 모든 push가 CI�
 | 개발·커밋 완료 | 워킹트리 clean **그리고** `<base>..HEAD`에 커밋 존재 |
 | PR 생성됨 | `gh pr list -R <owner>/<repo> --head <현재 브랜치> --state open --json number,url,isDraft` |
 | 리뷰 완료 | 그 PR에 자체 리뷰 결과 코멘트 존재 (Codex 실행·생략 여부는 그 Summary의 "Codex 교차 리뷰" 섹션) |
-| 반영 완료 | 리뷰 코멘트 이후 반영 내역 코멘트 존재 |
+| 반영 완료 | 리뷰 코멘트 이후 `## 리뷰 반영 내역` 코멘트 존재 |
 | Ready 상태 | PR의 `isDraft` 필드 (`gh pr view <N> -R <owner>/<repo> --json isDraft`) |
 | CI 결과 | `gh run view <run-id> --json jobs`의 각 job `conclusion` (`gh pr checks <N>` 병행) |
 
@@ -382,7 +382,7 @@ git add <기획서 경로>
 - 11단계 코멘트는 작성자 본인 계정으로 달리지만, `dwk:reviewer` 표식이 있어 `/apply-review`가 반영 대상에 넣는다.
 - 반영 후 **게이트를 다시 통과**해야 한다(8단계와 동일한 검증 명령).
 - 반영분을 커밋하고 push한다. **이 시점까지 PR은 Draft다.**
-- 반영 내역을 PR 코멘트로 남긴다(`gh pr comment <N> -R <owner>/<repo> --body-file <파일>`, 본문은 `mktemp` 임시 파일에 써서 넘기고 끝나면 지운다). 무엇을 왜 안 고쳤는지도 함께.
+- 반영 내역을 PR 코멘트로 남긴다(`gh pr comment <N> -R <owner>/<repo> --body-file <파일>`, 본문은 `mktemp` 임시 파일에 써서 넘기고 끝나면 지운다). 무엇을 왜 안 고쳤는지도 함께. 첫 줄은 `## 리뷰 반영 내역`(재리뷰 반영이면 뒤에 `N차`·커밋 등을 덧붙여도 된다)으로 시작한다 — `/status`가 이 제목으로 반영 여부를 판정한다.
 
 리뷰에서 지적한 내용이 **잘못된 것으로 드러나면** 고치지 말고 정정을 공개한다. 자기 리뷰의 오진을 그대로 코드에 반영하면 더 나빠진다.
 

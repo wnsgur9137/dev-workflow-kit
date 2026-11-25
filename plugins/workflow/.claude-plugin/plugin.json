@@ -1,7 +1,7 @@
 {
   "name": "workflow",
-  "version": "2.1.0",
-  "description": "커밋 → Draft PR → 리뷰 → 반영 → 병합까지의 개발 워크플로 skill (commit, create-pr, pr-review, apply-review, pipeline, analyze-prd). Claude Code·Codex 지원, GitHub 작업은 gh CLI",
+  "version": "2.2.0",
+  "description": "커밋 → Draft PR → 리뷰 → 반영 → 병합까지의 개발 워크플로 skill (commit, create-pr, pr-review, apply-review, pipeline, analyze-prd, status). Claude Code·Codex 지원, GitHub 작업은 gh CLI",
   "author": {
     "name": "wnsgur9137"
   },

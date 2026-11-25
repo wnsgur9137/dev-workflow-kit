@@ -103,7 +103,7 @@ CI가 Draft PR을 건너뛰는 설정이면, Ready 전환 후의 모든 push가 
 | 기획서 병합됨 | base에 기획서 파일 존재 |
 | 개발·커밋 완료 | 워킹트리 clean **그리고** `<base>..HEAD`에 커밋 존재 |
 | PR 생성됨 | `list_pull_requests(head: 현재 브랜치, state: open)` |
-| 리뷰 완료 / 반영 완료 | 그 PR에 자체 리뷰 코멘트 / 이후 반영 내역 코멘트 존재 |
+| 리뷰 완료 / 반영 완료 | 그 PR에 자체 리뷰 코멘트 / 이후 `## 리뷰 반영 내역` 코멘트 존재 |
 | Ready 상태 | PR의 `draft` 필드 |
 | CI 결과 | `list_workflow_jobs(run_id)`의 `conclusion` |
 

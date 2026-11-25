@@ -17,6 +17,7 @@ tags: [moc]
 | `/workflow:apply-review` | [[apply-review]] |
 | `/workflow:pipeline` | [[pipeline]] |
 | `/workflow:analyze-prd` | [[analyze-prd]] |
+| `/workflow:status` | [[status]] |
 
 - 설정·의존성: [[설정]] · GitHub MCP에서 gh로: [[GitHub MCP]] · 리뷰 기준·출력 형식: [[커스터마이징]]
 
