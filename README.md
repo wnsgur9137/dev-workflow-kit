@@ -109,6 +109,7 @@ security는 처음 한 번 도구 이미지·규칙을 받아야 합니다(`upda
 | `apply-review <PR>` | 리뷰 코멘트를 코드에 반영하고 스레드마다 답글 | [apply-review](docs/workflow/apply-review.md) |
 | `pipeline [이슈번호]` | 작업 파악부터 병합까지 14단계 (`--no-issue`로 구현~병합만) | [pipeline](docs/workflow/pipeline.md) |
 | `analyze-prd <PDF>` | PDF 기획서를 읽어 개발 설계서 초안(기능 분해·태스크·확인할 질문) 작성 | [analyze-prd](docs/workflow/analyze-prd.md) |
+| `status` | 이전 작업 파악: 메모리의 결정·남은 일과 git·GitHub 실제 상태를 맞대어 어긋남과 다음 할 일을 정리 (조회만) | [status](docs/workflow/status.md) |
 
 > [!NOTE]
 > `pr-review`의 Codex 교차 리뷰는 **PR 코드·diff를 OpenAI로 보냅니다.** Codex CLI가 설치·로그인돼 있으면 기본으로 켜지고, 원치 않으면 `--no-codex`를 쓰세요. [자세히](docs/workflow/pr-review.md#codex-교차-리뷰)
