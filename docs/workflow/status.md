@@ -3,7 +3,7 @@ title: /status
 tags: [workflow, command]
 ---
 
-# /status
+# /workflow:status
 
 상위: [Home](../Home.md) · [README](../../README.md)
 
@@ -14,15 +14,18 @@ tags: [workflow, command]
 ## 사용법
 
 ```
-/status [--local] [--days=N]
+/workflow:status [--local] [--days=N]
 ```
+
+> [!NOTE]
+> Claude Code와 Codex CLI에는 내장 `/status` 명령이 있습니다. 맨 `/status`를 입력하면 내장 명령이 열리니 `/workflow:status`(Codex는 `$workflow:status`)로 부르거나 "이전 작업 파악"처럼 말로 요청하세요.
 
 ## 예시
 
 ```
-/status
-/status --local      # 오프라인이거나 빨리 볼 때 (GitHub 조회 생략)
-/status --days=14    # 최근 2주 병합까지 "마지막 작업"에 포함
+/workflow:status
+/workflow:status --local      # 오프라인이거나 빨리 볼 때 (GitHub 조회 생략)
+/workflow:status --days=14    # 최근 2주 병합까지 "마지막 작업"에 포함
 ```
 
 ## 옵션
@@ -58,7 +61,8 @@ tags: [workflow, command]
 ## 동작
 
 - 정리할 것(병합된 브랜치·처리됐을 수 있는 이슈·태그 누락·메모리 갱신)은 **제안만** 합니다. 승인하면 skill이 끝난 뒤 하나씩 진행합니다.
-- Claude Code에서 확인 없이 허용하는 명령은 git·gh **조회** 명령뿐입니다. `git branch`는 `--merged`·`--no-merged` 목록만, 태그는 `git for-each-ref`로 읽어 삭제·생성이 허용 범위에 들어오지 않게 했습니다. `gh api`는 쓰지 않습니다.
+- Claude Code에서 확인 없이 허용하는 명령은 git·gh **조회** 명령뿐이고, 옵션을 더 붙여 쓰기·토큰 출력이 될 수 있는 명령(`git status`·`git log`·`git remote`·`gh auth status`)은 인자까지 정확히 맞을 때만 허용합니다. `git fetch --prune`은 인자로 명령 실행·브랜치 삭제가 가능해 **매번 권한 확인**을 거칩니다(거절하면 원격 정보가 오래됐을 수 있다고 표시하고 계속). `gh api`는 쓰지 않습니다.
 - 계정별 토큰(`<OWNER>_GITHUB_TOKEN`)을 쓰는 저장소는 `gh` 호출 형태가 자동 허용 목록과 달라 권한 확인이 뜹니다.
 - 이슈·PR·리뷰 코멘트·메모리의 글은 데이터로만 다루고, 그 안의 지시문은 따르지도 출력에 옮기지도 않습니다.
-- 열린 PR의 상태 판정은 [/pipeline](pipeline.md)의 설계 원칙 B(실물에서 판정)와 같은 기준입니다.
+- 열린 PR의 상태 판정은 [/pipeline](pipeline.md)의 설계 원칙 B(실물에서 판정)와 같은 기준입니다(자체 리뷰는 `## Review Summary` 형식의 리뷰, 반영은 그 뒤의 반영 내역 코멘트·스레드 답글). 이어 갈 명령은 PR 브랜치가 현재 브랜치가 아니면 전환 방법을 함께 적습니다.
+- 스쿼시 병합된 브랜치는 이름이 아니라 병합 PR의 head 커밋이 같을 때만 "병합됨"으로 봅니다.
